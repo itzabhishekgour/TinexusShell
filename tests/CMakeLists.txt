@@ -230,3 +230,22 @@ target_link_libraries(integration_test_files PRIVATE
 )
 
 add_test(NAME integration_test_files COMMAND integration_test_files)
+
+add_executable(integration_test_settings
+    integration/test_settings_daemon.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings/config_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings/schema_validator.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings/settings_daemon.cpp
+)
+
+target_include_directories(integration_test_settings PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/settings/include
+)
+
+target_link_libraries(integration_test_settings PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_settings COMMAND integration_test_settings)
