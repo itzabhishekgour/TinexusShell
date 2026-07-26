@@ -190,3 +190,22 @@ target_link_libraries(integration_test_alpha_stress PRIVATE
 )
 
 add_test(NAME integration_test_alpha_stress COMMAND integration_test_alpha_stress)
+
+add_executable(integration_test_session
+    integration/test_session_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/env_bootstrap.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/autostart_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/session_manager.cpp
+)
+
+target_include_directories(integration_test_session PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/session/include
+)
+
+target_link_libraries(integration_test_session PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_session COMMAND integration_test_session)

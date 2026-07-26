@@ -15,5 +15,4 @@ add_subdirectory(clipboard)
 add_subdirectory(indexer)
 add_subdirectory(wallpaper)
 add_subdirectory(lock)
-add_subdirectory(sdk)
-
+add_subdirectory(session)
