@@ -12,12 +12,12 @@ constexpr uint16_t TINEXUS_IPC_VERSION_1 = 0x0100;
 #pragma pack(push, 1)
 struct Header {
     uint32_t magic;         // 0x544E5853 ("TNXS")
-    uint16_t version;       // Protocol version
+    uint16_t version;       // Protocol version (e.g. 0x0100)
     uint16_t msg_type;      // Message ID (see MessageType)
     uint16_t flags;         // Reserved flags
     uint32_t sequence_id;   // Monotonic request ID
-    uint32_t payload_len;   // Payload length in bytes (FlatBuffers TLV)
-    uint32_t checksum;      // CRC32 or xxHash of payload (optional)
+    uint32_t payload_len;   // Payload length in bytes
+    uint32_t checksum;      // CRC32 checksum of payload (optional)
 };
 #pragma pack(pop)
 
@@ -31,19 +31,21 @@ enum class MessageType : uint16_t {
     SYS_SUBSCRIBE_TOPIC     = 2,
     SYS_UNSUBSCRIBE_TOPIC   = 3,
     SYS_DISCOVER_SERVICE    = 4,
-    SYS_SERVICE_EVENT       = 5, // e.g. service went offline
+    SYS_SERVICE_EVENT       = 5,
     SYS_PING                = 10,
     SYS_PONG                = 11,
     SYS_SHUTDOWN            = 999,
 
-    // 1000-1999: Launcher
+    // 1000-1999: Launcher & Input Shortcuts
     LAUNCHER_OPEN           = 1000,
     LAUNCHER_CLOSE          = 1001,
     LAUNCHER_APP_LAUNCHED   = 1002,
     LAUNCHER_OPEN_FILE      = 1003,
     LAUNCHER_SHOW           = 1004,
+    SHORTCUT_ACTIVATED      = 1005,
+    ACTION_REQUEST          = 1006,
 
-    // 2000-2999: Search
+    // 2000-2999: Search Engine
     SEARCH_QUERY            = 2000,
     SEARCH_RESULT           = 2001,
     SEARCH_CLEAR            = 2002,
@@ -53,12 +55,12 @@ enum class MessageType : uint16_t {
     CLIPBOARD_GET_HISTORY   = 3001,
     CLIPBOARD_SET_ITEM      = 3002,
 
-    // 4000-4999: Plugin
+    // 4000-4999: Plugin System
     PLUGIN_INIT             = 4000,
     PLUGIN_DATA             = 4001,
     PLUGIN_STOP             = 4002,
 
-    // 5000+: Reserved for future (Config, Theme, AI, Voice, etc.)
+    // 5000+: Config & Themes
     CONFIG_CHANGED          = 5000,
     THEME_CHANGED           = 5001,
 };

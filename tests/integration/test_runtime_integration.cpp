@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cassert>
 #include "common/logger.hpp"
+#include "common/action_request.hpp"
 #include "serviced/launch_authority.hpp"
 #include "serviced/dep_graph.hpp"
 #include "serviced/event_journal.hpp"
@@ -23,10 +24,14 @@ void test_launch_authority_validation() {
     std::cout << "[PASS] test_launch_authority_validation\n";
 }
 
-void test_launch_app_execution() {
+void test_structured_action_request() {
     auto& authority = tinexus::serviced::LaunchAuthority::instance();
 
-    pid_t pid = authority.launch_app("test_app", "true");
+    tinexus::ActionRequest req;
+    req.type = tinexus::ActionType::RunCommand;
+    req.target = "true";
+
+    pid_t pid = authority.execute_action(req);
     assert(pid > 0);
 
     int status = 0;
@@ -34,7 +39,7 @@ void test_launch_app_execution() {
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
 
-    std::cout << "[PASS] test_launch_app_execution\n";
+    std::cout << "[PASS] test_structured_action_request\n";
 }
 
 void test_service_ping_pong() {
@@ -51,7 +56,7 @@ int main() {
     tinexus::log::info("Running integration test suite for Platform Runtime...");
 
     test_launch_authority_validation();
-    test_launch_app_execution();
+    test_structured_action_request();
     test_service_ping_pong();
 
     tinexus::log::info("All runtime integration tests passed successfully!");
