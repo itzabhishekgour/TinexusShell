@@ -1,0 +1,33 @@
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+
+ColumnLimit: 100
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+BraceWrapping:
+  AfterClass: true
+  AfterFunction: true
+  AfterNamespace: false
+  AfterEnum: false
+  AfterStruct: false
+
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<.*>'
+    Priority: 3
+  - Regex: '^<Q.*>'
+    Priority: 2
+  - Regex: '^".*"'
+    Priority: 1
+
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never

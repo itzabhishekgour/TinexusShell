@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="tinexus_global_shortcut_v1">
+  <copyright>
+    Copyright 2026 Tinexus Platform Team.
+    Licensed under Apache-2.0.
+  </copyright>
+
+  <interface name="tinexus_global_shortcut_manager_v1" version="1">
+    <description summary="global shortcut manager">
+      This interface allows a client to register global keyboard shortcuts with the compositor.
+      It supports priority levels and conflict detection to ensure critical system actions (like launcher)
+      are not overridden by lower-priority plugins.
+    </description>
+
+    <enum name="priority">
+      <entry name="low" value="0" summary="Fallback shortcuts (e.g. plugins)"/>
+      <entry name="normal" value="1" summary="Standard application shortcuts"/>
+      <entry name="high" value="2" summary="Core shell components (launcher, notification center)"/>
+      <entry name="critical" value="3" summary="Unoverrideable system shortcuts (lock, panic)"/>
+    </enum>
+
+    <enum name="error">
+      <entry name="conflict" value="0" summary="Shortcut is already registered by a higher or equal priority client"/>
+      <entry name="reserved" value="1" summary="Shortcut uses reserved system keys"/>
+      <entry name="invalid_keys" value="2" summary="Invalid key combination string"/>
+    </enum>
+
+    <request name="register_shortcut">
+      <description summary="register a new shortcut">
+        Requests to register a shortcut string (e.g. "ctrl+shift+space", "super+p").
+        If the shortcut is already bound with a higher or equal priority, a conflict error is raised via the shortcut object.
+      </description>
+      <arg name="id" type="new_id" interface="tinexus_global_shortcut_v1"/>
+      <arg name="key_combo" type="string" summary="String representation of the key combination"/>
+      <arg name="description" type="string" summary="Human readable description of the action"/>
+      <arg name="priority" type="uint" enum="priority" summary="Priority level of the shortcut"/>
+    </request>
+  </interface>
+
+  <interface name="tinexus_global_shortcut_v1" version="1">
+    <description summary="a registered global shortcut">
+      Represents a single registered global shortcut. Allows enabling, disabling, and receiving activation events.
+    </description>
+
+    <event name="registered">
+      <description summary="shortcut successfully registered">
+        Sent when the compositor confirms the shortcut has been registered without conflicts.
+      </description>
+    </event>
+
+    <event name="registration_failed">
+      <description summary="shortcut registration failed">
+        Sent if the registration fails due to conflict or reserved keys. The object becomes inert.
+      </description>
+      <arg name="error_code" type="uint" enum="tinexus_global_shortcut_manager_v1.error"/>
+    </event>
+
+    <event name="activated">
+      <description summary="shortcut was triggered">
+        Sent when the user presses the shortcut combination.
+      </description>
+      <arg name="tv_sec_hi" type="uint"/>
+      <arg name="tv_sec_lo" type="uint"/>
+      <arg name="tv_nsec" type="uint"/>
+    </event>
+
+    <request name="enable">
+      <description summary="enable the shortcut">
+        Enables the shortcut if it was previously disabled.
+      </description>
+    </request>
+
+    <request name="disable">
+      <description summary="disable the shortcut">
+        Temporarily disables the shortcut without unregistering it.
+      </description>
+    </request>
+
+    <request name="rebind">
+      <description summary="rebind to a new key combination">
+        Requests changing the key combination for this existing shortcut object.
+        May trigger a registration_failed event if the new combo conflicts.
+      </description>
+      <arg name="new_key_combo" type="string"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the shortcut object">
+        Unregisters the shortcut and destroys the object.
+      </description>
+    </request>
+  </interface>
+</protocol>

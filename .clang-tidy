@@ -1,0 +1,20 @@
+Checks: >
+  -*,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  performance-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-named-parameter,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters
+
+WarningsAsErrors: '*'
+
+CheckOptions:
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+  - key: modernize-use-default-member-init.UseAssignment
+    value: true

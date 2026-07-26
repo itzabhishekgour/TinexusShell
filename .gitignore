@@ -1,0 +1,48 @@
+# Build directories
+build/
+bin/
+lib/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Compiled binary & library artifacts
+*.o
+*.obj
+*.so
+*.so.*
+*.a
+*.lib
+*.dll
+*.dylib
+
+# Executables
+tinexus-serviced
+tinexus-comp
+tinexus-launcher
+tinexus-searchd
+tinexus-indexerd
+tinexus-ipcd
+tinexusctl
+tinexus-comp-inspector
+unit_test_*
+integration_test_*
+
+# IDE & Editor files
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Log & Temporary files
+*.log
+*.tmp
+.cache/

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="tinexus_shell_helper_v1">
+  <copyright>
+    Copyright 2026 Tinexus Platform Team.
+    Licensed under Apache-2.0.
+  </copyright>
+
+  <interface name="tinexus_shell_helper_v1" version="1">
+    <description summary="shell metadata and events">
+      Exposes detailed shell status metadata directly from the compositor to trusted shell clients
+      (like the launcher and panels). Provides deep integration beyond standard xdg-shell capabilities.
+    </description>
+
+    <!-- Workspace Events -->
+    <event name="workspace_changed">
+      <description summary="active workspace changed"/>
+      <arg name="active_workspace" type="uint"/>
+      <arg name="total_workspaces" type="uint"/>
+    </event>
+
+    <!-- Window Events -->
+    <event name="focused_window_changed">
+      <description summary="keyboard focus shifted to a different window"/>
+      <arg name="app_id" type="string" summary="xdg-shell app_id or class name"/>
+      <arg name="title" type="string" summary="window title"/>
+    </event>
+
+    <event name="window_created">
+      <description summary="a new toplevel window was mapped"/>
+      <arg name="window_id" type="uint"/>
+      <arg name="app_id" type="string"/>
+      <arg name="workspace" type="uint"/>
+    </event>
+
+    <event name="window_destroyed">
+      <description summary="a toplevel window was unmapped/destroyed"/>
+      <arg name="window_id" type="uint"/>
+    </event>
+
+    <event name="window_activated">
+      <description summary="a window requested activation (e.g. demanding attention)"/>
+      <arg name="window_id" type="uint"/>
+    </event>
+
+    <!-- Monitor Events -->
+    <event name="monitor_added">
+      <description summary="a new output monitor was connected"/>
+      <arg name="output_name" type="string" summary="e.g. eDP-1, DP-1"/>
+      <arg name="make" type="string"/>
+      <arg name="model" type="string"/>
+    </event>
+
+    <event name="monitor_removed">
+      <description summary="an output monitor was disconnected"/>
+      <arg name="output_name" type="string"/>
+    </event>
+
+    <event name="scale_changed">
+      <description summary="the scaling factor of a monitor changed"/>
+      <arg name="output_name" type="string"/>
+      <arg name="scale" type="fixed"/>
+    </event>
+
+    <!-- Requests -->
+    <request name="request_backdrop_snapshot">
+      <description summary="request a blurred snapshot of the current workspace behind the client"/>
+    </request>
+  </interface>
+</protocol>
