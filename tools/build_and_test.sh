@@ -2,9 +2,10 @@
 set -e
 
 echo "[+] Syncing code to ~/tinexus/..."
-rm -rf ~/tinexus/src ~/tinexus/tests ~/tinexus/tools ~/tinexus/CMakeLists.txt ~/tinexus/CMakePresets.json
+rm -rf ~/tinexus/src ~/tinexus/sdk ~/tinexus/tests ~/tinexus/tools ~/tinexus/CMakeLists.txt ~/tinexus/CMakePresets.json
 mkdir -p ~/tinexus
 cp -r "/mnt/e/Tinu's Technology/Tinexus Manager/src" ~/tinexus/
+cp -r "/mnt/e/Tinu's Technology/Tinexus Manager/sdk" ~/tinexus/
 cp -r "/mnt/e/Tinu's Technology/Tinexus Manager/tests" ~/tinexus/
 cp -r "/mnt/e/Tinu's Technology/Tinexus Manager/tools" ~/tinexus/
 cp "/mnt/e/Tinu's Technology/Tinexus Manager/CMakeLists.txt" ~/tinexus/

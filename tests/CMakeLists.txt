@@ -118,6 +118,19 @@ target_link_libraries(unit_test_launcher PRIVATE
 
 add_test(NAME unit_test_launcher COMMAND unit_test_launcher)
 
+add_executable(unit_test_sdk
+    unit/test_sdk.cpp
+)
+
+target_link_libraries(unit_test_sdk PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME unit_test_sdk COMMAND unit_test_sdk)
+
 add_executable(integration_test_runtime
     integration/test_runtime_integration.cpp
     ${CMAKE_SOURCE_DIR}/src/serviced/daemon_spec.cpp

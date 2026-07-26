@@ -63,6 +63,7 @@ endif()
 # Subdirectories according to monorepo structure in 04_FOLDER_STRUCTURE.md
 add_subdirectory(protocols)
 add_subdirectory(src)
+add_subdirectory(sdk)
 add_subdirectory(tools)
 
 if(BUILD_TESTING)
