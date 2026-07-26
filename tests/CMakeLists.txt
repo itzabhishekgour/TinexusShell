@@ -209,3 +209,24 @@ target_link_libraries(integration_test_session PRIVATE
 )
 
 add_test(NAME integration_test_session COMMAND integration_test_session)
+
+add_executable(integration_test_files
+    integration/test_tinexus_files.cpp
+    ${CMAKE_SOURCE_DIR}/src/files/file_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/files/column_view_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/files/trash_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/files/file_operations.cpp
+)
+
+target_include_directories(integration_test_files PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/files/include
+)
+
+target_link_libraries(integration_test_files PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_files COMMAND integration_test_files)
