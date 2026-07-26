@@ -9,6 +9,7 @@ add_executable(tinexus-comp
     render/frame_scheduler.cpp
     animation/animation.cpp
     input/shortcut_engine.cpp
+    surface/surface_manager.cpp
 )
 
 target_include_directories(tinexus-comp PRIVATE
@@ -21,6 +22,7 @@ target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/render/include
     ${CMAKE_CURRENT_SOURCE_DIR}/animation/include
     ${CMAKE_CURRENT_SOURCE_DIR}/input/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/surface/include
 )
 
 target_link_libraries(tinexus-comp PRIVATE

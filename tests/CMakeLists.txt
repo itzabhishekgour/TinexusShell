@@ -71,6 +71,7 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/render/frame_scheduler.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/input/shortcut_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_manager.cpp
 )
 
 target_include_directories(unit_test_comp PRIVATE
@@ -83,6 +84,7 @@ target_include_directories(unit_test_comp PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/render/include
     ${CMAKE_SOURCE_DIR}/src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/input/include
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
 )
 
 target_link_libraries(unit_test_comp PRIVATE
@@ -134,3 +136,20 @@ target_link_libraries(integration_test_runtime PRIVATE
 )
 
 add_test(NAME integration_test_runtime COMMAND integration_test_runtime)
+
+add_executable(integration_test_wayland
+    integration/test_wayland_server.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_manager.cpp
+)
+
+target_include_directories(integration_test_wayland PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_wayland PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_wayland COMMAND integration_test_wayland)

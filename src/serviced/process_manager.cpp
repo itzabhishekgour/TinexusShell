@@ -87,6 +87,8 @@ bool ProcessManager::start_service(const std::string& service_id) {
         // Child Process: Set parent death signal so child dies if supervisor dies
         prctl(PR_SET_PDEATHSIG, SIGTERM);
 
+        setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+
         const char* home = std::getenv("HOME");
         if (home) {
             std::string lib_path = std::string(home) + "/tinexus/build/debug/src/common";
