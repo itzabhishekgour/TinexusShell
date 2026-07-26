@@ -9,12 +9,26 @@
 #include <vector>
 #include <filesystem>
 #include <cstdlib>
+#include <csignal>
+#include <atomic>
 
 namespace fs = std::filesystem;
+
+namespace {
+std::atomic<bool> g_running{true};
+
+void signal_handler(int signal) {
+    tinexus::log::info("indexerd received signal {}, shutting down...", signal);
+    g_running = false;
+}
+} // namespace
 
 int main(int argc, char** argv) {
     tinexus::log::set_component_name("tinexus-indexerd");
     tinexus::log::info("Starting tinexus-indexerd v{} - Application & Desktop Entry Indexer Daemon", tinexus::VERSION_STRING);
+
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
     // XDG Cache directory setup
     const char* xdg_cache = std::getenv("XDG_CACHE_HOME");
@@ -35,9 +49,10 @@ int main(int argc, char** argv) {
     app_dirs.push_back("/usr/share/applications");
     const char* home = std::getenv("HOME");
     if (home) {
-        app_dirs.push_back(fs::path(home) / ".local" / "share" / "applications");
+        fs::path user_app_dir = fs::path(home) / ".local" / "share" / "applications";
+        fs::create_directories(user_app_dir);
+        app_dirs.push_back(user_app_dir);
     }
-    app_dirs.push_back("/var/lib/flatpak/exports/share/applications");
 
     // Perform initial scan
     std::vector<tinexus::indexer::DesktopEntry> initial_entries;
@@ -57,34 +72,12 @@ int main(int argc, char** argv) {
     db.save_all(initial_entries);
     tinexus::indexer::RamSnapshot::instance().set_all_entries(initial_entries);
 
-    // Setup filesystem watcher for incremental updates
-    tinexus::indexer::FsWatcher watcher;
-    for (const auto& dir : app_dirs) {
-        watcher.add_watch_directory(dir);
-    }
-
-    std::thread watcher_thread([&watcher, &db]() {
-        watcher.start_watching([&db](const fs::path& path, tinexus::indexer::FileChangeType change_type) {
-            std::string desktop_id = path.stem().string();
-            if (change_type == tinexus::indexer::FileChangeType::Deleted) {
-                tinexus::log::info("Incremental update: Removed {}", desktop_id);
-                db.remove_entry(desktop_id);
-                tinexus::indexer::RamSnapshot::instance().remove_entry(desktop_id);
-            } else {
-                auto parsed = tinexus::indexer::DesktopParser::parse_file(path);
-                if (parsed) {
-                    tinexus::log::info("Incremental update: Parsed/Updated {}", parsed->name);
-                    db.save_entry(*parsed);
-                    tinexus::indexer::RamSnapshot::instance().update_entry(std::move(*parsed));
-                }
-            }
-        });
-    });
-
     tinexus::log::info("Indexerd running. Monitoring desktop entries for changes...");
-    if (watcher_thread.joinable()) {
-        watcher_thread.join();
+
+    while (g_running) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
+    tinexus::log::info("tinexus-indexerd shutdown complete.");
     return 0;
 }

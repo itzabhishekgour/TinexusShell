@@ -4,6 +4,8 @@
 #include "comp/workspace/workspace_manager.hpp"
 #include "comp/render/frame_scheduler.hpp"
 #include "common/logger.hpp"
+#include <thread>
+#include <chrono>
 
 namespace tinexus::comp {
 
@@ -33,6 +35,9 @@ bool TinexusServer::initialize() {
 void TinexusServer::run() {
     m_running = true;
     log::info("TinexusServer event loop running. Waiting for Wayland clients...");
+    while (m_running) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
 }
 
 void TinexusServer::stop() {

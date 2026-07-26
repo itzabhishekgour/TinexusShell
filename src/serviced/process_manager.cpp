@@ -9,8 +9,32 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 namespace tinexus::serviced {
+
+namespace {
+std::string resolve_binary_path(const std::string& name) {
+    if (fs::exists(name)) return name;
+
+    const char* home = std::getenv("HOME");
+    if (home) {
+        fs::path debug_dir = fs::path(home) / "tinexus" / "build" / "debug";
+        std::vector<std::string> subdirs = {"src/ipcd", "src/indexer", "src/searchd", "src/comp", "src/launcher", "tools/tinexusctl", "tools/tinexus-comp-inspector"};
+        for (const auto& sub : subdirs) {
+            fs::path p = debug_dir / sub / name;
+            if (fs::exists(p)) return p.string();
+        }
+    }
+
+    fs::path usr_p = fs::path("/usr/bin") / name;
+    if (fs::exists(usr_p)) return usr_p.string();
+
+    return name;
+}
+} // namespace
 
 ProcessManager::ProcessManager(DependencyGraph graph)
     : m_graph(std::move(graph)) {
@@ -63,16 +87,25 @@ bool ProcessManager::start_service(const std::string& service_id) {
         // Child Process: Set parent death signal so child dies if supervisor dies
         prctl(PR_SET_PDEATHSIG, SIGTERM);
 
+        const char* home = std::getenv("HOME");
+        if (home) {
+            std::string lib_path = std::string(home) + "/tinexus/build/debug/src/common";
+            const char* old_ld = std::getenv("LD_LIBRARY_PATH");
+            std::string new_ld = old_ld ? lib_path + ":" + old_ld : lib_path;
+            setenv("LD_LIBRARY_PATH", new_ld.c_str(), 1);
+        }
+
+        std::string resolved_path = resolve_binary_path(state.spec.executable.string());
+
         // Prepare exec arguments
         std::vector<char*> args;
-        std::string exec_str = state.spec.executable.string();
-        args.push_back(const_cast<char*>(exec_str.c_str()));
+        args.push_back(const_cast<char*>(resolved_path.c_str()));
         for (const auto& arg : state.spec.arguments) {
             args.push_back(const_cast<char*>(arg.c_str()));
         }
         args.push_back(nullptr);
 
-        execvp(exec_str.c_str(), args.data());
+        execvp(resolved_path.c_str(), args.data());
         _exit(127);
     } else if (pid > 0) {
         state.pid = pid;
