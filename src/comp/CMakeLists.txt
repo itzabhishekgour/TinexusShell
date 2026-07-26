@@ -4,6 +4,8 @@ add_executable(tinexus-comp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_manager.cpp
+    window/window_rules.cpp
+    focus/focus_manager.cpp
     workspace/workspace_manager.cpp
     shell/shell_state.cpp
     render/frame_scheduler.cpp
@@ -17,6 +19,7 @@ target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/output/include
     ${CMAKE_CURRENT_SOURCE_DIR}/cursor/include
     ${CMAKE_CURRENT_SOURCE_DIR}/window/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/focus/include
     ${CMAKE_CURRENT_SOURCE_DIR}/workspace/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include
     ${CMAKE_CURRENT_SOURCE_DIR}/render/include

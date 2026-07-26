@@ -66,6 +66,8 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/workspace_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/shell/shell_state.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/render/frame_scheduler.cpp
@@ -79,6 +81,7 @@ target_include_directories(unit_test_comp PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/include
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/include
     ${CMAKE_SOURCE_DIR}/src/comp/shell/include
     ${CMAKE_SOURCE_DIR}/src/comp/render/include
@@ -153,3 +156,24 @@ target_link_libraries(integration_test_wayland PRIVATE
 )
 
 add_test(NAME integration_test_wayland COMMAND integration_test_wayland)
+
+add_executable(integration_test_alpha_stress
+    integration/test_alpha_stress.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_manager.cpp
+)
+
+target_include_directories(integration_test_alpha_stress PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/include
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_alpha_stress PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_alpha_stress COMMAND integration_test_alpha_stress)

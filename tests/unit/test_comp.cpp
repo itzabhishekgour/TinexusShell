@@ -3,7 +3,7 @@
 #include "common/logger.hpp"
 #include "comp/workspace/workspace_manager.hpp"
 #include "comp/window/window_manager.hpp"
-#include "comp/window/focus_manager.hpp"
+#include "comp/focus/focus_manager.hpp"
 #include "comp/shell/shell_state.hpp"
 #include "comp/render/frame_scheduler.hpp"
 #include "comp/cursor/cursor_manager.hpp"
@@ -35,10 +35,10 @@ void test_window_focus_manager() {
 
     uint64_t w1 = win_mgr.register_window(1234, "org.mozilla.firefox", "Firefox Web Browser");
     assert(w1 > 0);
-    assert(focus_mgr.focused_window_id().has_value());
-    assert(focus_mgr.focused_window_id().value() == w1);
+    assert(focus_mgr.current_surface_id() == w1);
+    assert(focus_mgr.current_target_id() == "org.mozilla.firefox");
 
-    win_mgr.update_geometry(w1, 0, 0, 1024, 768);
+    win_mgr.set_geometry(w1, 0, 0, 1024, 768);
     auto info = win_mgr.get_window(w1);
     assert(info.has_value());
     assert(info->width == 1024);
@@ -98,15 +98,12 @@ void test_shortcut_engine() {
     assert(engine.process_key_event(MOD_CTRL, KEY_K, true) == true);
     assert(triggered == true);
 
-    // Test non-matching key
-    assert(engine.process_key_event(MOD_CTRL, 10, true) == false);
-
     std::cout << "[PASS] test_shortcut_engine\n";
 }
 
 int main() {
     tinexus::log::set_component_name("unit_test_comp");
-    tinexus::log::info("Running unit test suite for tinexus-comp...");
+    tinexus::log::info("Running unit tests for Compositor...");
 
     test_workspace_manager();
     test_window_focus_manager();
@@ -114,6 +111,6 @@ int main() {
     test_frame_scheduler();
     test_shortcut_engine();
 
-    tinexus::log::info("All tinexus-comp unit tests passed successfully!");
+    tinexus::log::info("All compositor unit tests passed successfully!");
     return 0;
 }

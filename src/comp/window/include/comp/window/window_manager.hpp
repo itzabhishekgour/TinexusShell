@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include <optional>
+#include <cstdint>
 
 namespace tinexus::comp {
 
@@ -19,6 +20,7 @@ struct WindowInfo {
     int height{600};
     bool is_focused{false};
     bool is_fullscreen{false};
+    bool is_minimized{false};
     uint32_t workspace_id{1};
 };
 
@@ -30,10 +32,11 @@ public:
     ~WindowManager() = default;
 
     uint64_t register_window(uint32_t pid, const std::string& app_id, const std::string& title);
-    void unregister_window(uint64_t window_id);
+    bool unregister_window(uint64_t window_id);
 
-    void update_geometry(uint64_t window_id, int x, int y, int width, int height);
+    void set_geometry(uint64_t window_id, int x, int y, int width, int height);
     void set_fullscreen(uint64_t window_id, bool fullscreen);
+    void set_minimized(uint64_t window_id, bool minimized);
 
     [[nodiscard]] std::optional<WindowInfo> get_window(uint64_t window_id) const;
     [[nodiscard]] std::vector<WindowInfo> get_all_windows() const;
