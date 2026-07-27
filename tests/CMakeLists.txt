@@ -472,3 +472,27 @@ target_link_libraries(integration_test_liveusb PRIVATE
 )
 
 add_test(NAME integration_test_liveusb COMMAND integration_test_liveusb)
+
+add_executable(integration_test_release
+    integration/test_release.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/checksum_generator.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/signature_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/release_notes_gen.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/release_manifest.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/artifact_packager.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/git_release.cpp
+    ${CMAKE_SOURCE_DIR}/src/release/release_pipeline.cpp
+)
+
+target_include_directories(integration_test_release PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/release/include
+)
+
+target_link_libraries(integration_test_release PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_release COMMAND integration_test_release)
