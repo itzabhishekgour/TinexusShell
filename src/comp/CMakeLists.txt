@@ -7,6 +7,7 @@ add_executable(tinexus-comp
     server/global_registry.cpp
     server/surface_tree.cpp
     backend/backend.cpp
+    backend/drm_backend.cpp
     renderer/renderer.cpp
     renderer/render_surface.cpp
     renderer/pixman_renderer.cpp

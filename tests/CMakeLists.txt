@@ -1219,3 +1219,21 @@ target_link_libraries(smoke_output_persistence PRIVATE
 )
 
 add_test(NAME smoke_output_persistence COMMAND smoke_output_persistence)
+
+# Milestone v0.6A Native Graphics Smoke Test Suite
+add_executable(smoke_drm_kms
+    smoke/backend/test_smoke_drm_kms.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/backend/drm_backend.cpp
+)
+
+target_include_directories(smoke_drm_kms PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/backend/include
+)
+
+target_link_libraries(smoke_drm_kms PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_drm_kms COMMAND smoke_drm_kms)

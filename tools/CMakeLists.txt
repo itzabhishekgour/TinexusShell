@@ -24,3 +24,4 @@ target_link_libraries(tinexus-search-bench PRIVATE
 
 add_subdirectory(tinexusctl)
 add_subdirectory(tinexus-comp-inspector)
+add_subdirectory(tinexus-drm-info)

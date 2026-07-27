@@ -17,7 +17,7 @@ int main() {
     uint32_t top_anchor = static_cast<uint32_t>(LayerAnchor::Top) |
                           static_cast<uint32_t>(LayerAnchor::Left) |
                           static_cast<uint32_t>(LayerAnchor::Right);
-    LayerGeometry geom{0, 0, 1920, panel_h};
+    LayerGeometry geom{0, 0, 1920, static_cast<int32_t>(panel_h)};
     assert(geom.height == 48);
 
     UsableArea new_usable = ExclusiveZoneCalculator::apply_exclusive_zone(full_screen, top_anchor, panel_h, geom);
