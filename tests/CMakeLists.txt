@@ -1237,3 +1237,47 @@ target_link_libraries(smoke_drm_kms PRIVATE
 )
 
 add_test(NAME smoke_drm_kms COMMAND smoke_drm_kms)
+
+# Milestone v0.6B Hardware Acceleration Smoke Test Suites
+add_executable(smoke_render_target
+    smoke/render/test_smoke_render_target.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_target.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/gpu_resource_manager.cpp
+)
+
+target_include_directories(smoke_render_target PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+)
+
+target_link_libraries(smoke_render_target PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_render_target COMMAND smoke_render_target)
+
+add_executable(smoke_renderer_fallback
+    smoke/render/test_smoke_renderer_fallback.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer_factory.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_target.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/gpu_resource_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/vulkan_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/opengl_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
+)
+
+target_include_directories(smoke_renderer_fallback PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/render/include
+)
+
+target_link_libraries(smoke_renderer_fallback PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_renderer_fallback COMMAND smoke_renderer_fallback)

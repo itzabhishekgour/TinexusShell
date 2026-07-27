@@ -7,6 +7,8 @@
 
 namespace tinexus::comp {
 
+enum class RendererBackend;
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -17,6 +19,7 @@ public:
     virtual void damage_region(const DamageRegion& region) = 0;
     virtual void end_frame() = 0;
     virtual void present() = 0;
+    [[nodiscard]] virtual RendererBackend backend_type() const noexcept = 0;
 };
 
 } // namespace tinexus::comp

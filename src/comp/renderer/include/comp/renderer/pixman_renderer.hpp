@@ -2,6 +2,7 @@
 #define TINEXUS_COMP_PIXMAN_RENDERER_HPP
 
 #include "comp/renderer/renderer.hpp"
+#include "comp/renderer/renderer_factory.hpp"
 #include <vector>
 
 namespace tinexus::comp {
@@ -17,6 +18,7 @@ public:
     void damage_region(const DamageRegion& region) override;
     void end_frame() override;
     void present() override;
+    [[nodiscard]] RendererBackend backend_type() const noexcept override;
 
     [[nodiscard]] const std::vector<uint32_t>& canvas_buffer() const noexcept { return m_canvas; }
     [[nodiscard]] const DamageRegion& active_damage() const noexcept { return m_active_damage; }

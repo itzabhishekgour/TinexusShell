@@ -61,4 +61,8 @@ void PixmanRenderer::present() {
     log::info("PixmanRenderer: Presented composited frame to display output!");
 }
 
+RendererBackend PixmanRenderer::backend_type() const noexcept {
+    return RendererBackend::Pixman;
+}
+
 } // namespace tinexus::comp

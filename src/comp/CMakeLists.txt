@@ -42,6 +42,10 @@ add_executable(tinexus-comp
     render/damage_tracker.cpp
     output/output_layout.cpp
     renderer/renderer_factory.cpp
+    renderer/render_target.cpp
+    renderer/gpu_resource_manager.cpp
+    renderer/vulkan_renderer.cpp
+    renderer/opengl_renderer.cpp
 )
 
 target_include_directories(tinexus-comp PRIVATE

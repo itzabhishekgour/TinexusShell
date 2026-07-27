@@ -8,6 +8,7 @@
 namespace tinexus::comp {
 
 enum class RendererBackend {
+    Auto,
     Pixman,
     Vulkan,
     OpenGL,
@@ -17,7 +18,7 @@ enum class RendererBackend {
 
 class RendererFactory {
 public:
-    static std::unique_ptr<Renderer> create_renderer(RendererBackend backend = RendererBackend::Pixman);
+    static std::unique_ptr<Renderer> create_renderer(RendererBackend backend = RendererBackend::Auto, bool force_vulkan_fail = false, bool force_opengl_fail = false);
     static RendererBackend backend_from_string(const std::string& name) noexcept;
     static std::string backend_to_string(RendererBackend backend);
 };
