@@ -404,3 +404,25 @@ target_link_libraries(integration_test_displayd PRIVATE
 )
 
 add_test(NAME integration_test_displayd COMMAND integration_test_displayd)
+
+add_executable(integration_test_installer
+    integration/test_installer.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/disk_inspector.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/partition_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/squashfs_extractor.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/bootloader_config.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/install_controller.cpp
+)
+
+target_include_directories(integration_test_installer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/installer/include
+)
+
+target_link_libraries(integration_test_installer PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_installer COMMAND integration_test_installer)
