@@ -426,3 +426,25 @@ target_link_libraries(integration_test_installer PRIVATE
 )
 
 add_test(NAME integration_test_installer COMMAND integration_test_installer)
+
+add_executable(integration_test_iso
+    integration/test_iso.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/rootfs_stager.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/initramfs_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/squashfs_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/boot_config.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/iso_builder.cpp
+)
+
+target_include_directories(integration_test_iso PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/iso/include
+)
+
+target_link_libraries(integration_test_iso PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_iso COMMAND integration_test_iso)
