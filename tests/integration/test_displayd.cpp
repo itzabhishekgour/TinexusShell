@@ -9,11 +9,11 @@
 #include "displayd/display_daemon.hpp"
 
 void test_vt_allocation_and_switch() {
-    tinexus::displayd::VtManager vt;
+    tinexus::displayd::VTManager vt;
     assert(vt.allocate_vt(7));
-    assert(vt.active_vt() == 7);
-    assert(vt.switch_vt(1));
-    assert(vt.active_vt() == 1);
+    assert(vt.current_vt() == 7);
+    assert(vt.activate_vt(1));
+    assert(vt.current_vt() == 1);
     std::cout << "[PASS] test_vt_allocation_and_switch\n";
 }
 

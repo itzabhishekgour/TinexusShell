@@ -9,8 +9,12 @@ namespace tinexus::session {
 struct AutostartEntry {
     std::string name;
     std::string exec;
+    std::string only_show_in;
+    std::string not_show_in;
+    std::string try_exec;
     bool hidden{false};
-    bool only_show_in_tinexus{true};
+
+    [[nodiscard]] bool should_autostart(const std::string& current_desktop) const noexcept;
 };
 
 class AutostartParser {
@@ -20,6 +24,7 @@ public:
     AutostartParser() = default;
     ~AutostartParser() = default;
 
+    std::vector<AutostartEntry> parse_directory(const std::string& path);
     std::vector<AutostartEntry> parse_autostart_directory(const std::string& path);
     size_t launch_autostart_apps(const std::vector<AutostartEntry>& entries);
 };

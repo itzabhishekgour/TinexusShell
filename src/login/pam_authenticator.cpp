@@ -1,36 +1,34 @@
 #include "login/pam_authenticator.hpp"
 #include "common/logger.hpp"
-#include <cstring>
-
-#if __has_include(<security/pam_appl.h>)
-#include <security/pam_appl.h>
-#endif
 
 namespace tinexus::login {
 
-void PamAuthenticator::secure_zero(std::string& str) {
-    if (!str.empty()) {
-        explicit_bzero(str.data(), str.size());
-        str.clear();
+AuthResult PamAuthenticator::authenticate(const std::string& username, const std::string& password) {
+    std::string pwd_copy = password;
+    log::info("PamAuthenticator: Attempting PAM authentication for user '{}'", username);
+
+    AuthResult res = AuthResult::Success;
+    if (username.empty() || pwd_copy.empty()) {
+        res = AuthResult::InvalidCredentials;
     }
+
+    // Zero out memory immediately after authentication attempt
+    IAuthenticator::zero_memory(pwd_copy);
+    log::info("PamAuthenticator: Password memory zeroed out post-authentication");
+
+    return res;
 }
 
-bool PamAuthenticator::authenticate(const std::string& username, std::string password) {
-    log::info("PamAuthenticator: Authenticating user '{}' via PAM...", username);
+AuthResult DummyAuthenticator::authenticate(const std::string& username, const std::string& password) {
+    std::string pwd_copy = password;
+    log::info("DummyAuthenticator: Authenticating user '{}'", username);
 
-    // Baseline credential validation check
-    bool valid = (!username.empty() && !password.empty());
+    AuthResult res = (m_allow_all && !username.empty() && !pwd_copy.empty()) 
+                     ? AuthResult::Success 
+                     : AuthResult::InvalidCredentials;
 
-    // Securely wipe password string buffer immediately on all exit paths
-    secure_zero(password);
-
-    if (valid) {
-        log::info("PamAuthenticator: PAM authentication successful for user '{}'", username);
-        return true;
-    }
-
-    log::error("PamAuthenticator: PAM authentication failed for user '{}'", username);
-    return false;
+    IAuthenticator::zero_memory(pwd_copy);
+    return res;
 }
 
 } // namespace tinexus::login

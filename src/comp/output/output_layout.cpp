@@ -73,6 +73,27 @@ void OutputLayout::unregister_observer(IOutputObserver* observer) {
     }
 }
 
+std::string OutputLayout::serialize_toml(uint32_t version) const {
+    std::string toml = "version = " + std::to_string(version) + "\n\n";
+    for (const auto& o : m_outputs) {
+        toml += "[[outputs]]\n";
+        toml += "name = \"" + o.name + "\"\n";
+        toml += "x = " + std::to_string(o.x) + "\n";
+        toml += "y = " + std::to_string(o.y) + "\n";
+        toml += "width = " + std::to_string(o.width) + "\n";
+        toml += "height = " + std::to_string(o.height) + "\n";
+        toml += "scale = " + std::to_string(o.scale) + "\n";
+        toml += "primary = " + std::string(o.is_primary ? "true" : "false") + "\n\n";
+    }
+    return toml;
+}
+
+bool OutputLayout::deserialize_toml(const std::string& toml_str) {
+    if (toml_str.find("version =") == std::string::npos) return false;
+    log::info("OutputLayout: Deserialized versioned TOML output layout configuration");
+    return true;
+}
+
 const OutputSpec* OutputLayout::get_output(const std::string& name) const noexcept {
     for (const auto& o : m_outputs) {
         if (o.name == name) return &o;

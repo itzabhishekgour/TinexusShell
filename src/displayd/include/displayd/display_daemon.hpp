@@ -17,12 +17,12 @@ public:
     bool bootstrap();
     bool shutdown();
 
-    [[nodiscard]] VtManager& vt() noexcept { return m_vt; }
+    [[nodiscard]] VTManager& vt() noexcept { return m_vt; }
     [[nodiscard]] SeatManager& seat() noexcept { return m_seat; }
     [[nodiscard]] LoginMonitor& login() noexcept { return m_login; }
 
 private:
-    VtManager m_vt;
+    VTManager m_vt;
     SeatManager m_seat;
     LoginMonitor m_login;
 };

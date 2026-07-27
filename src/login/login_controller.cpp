@@ -8,7 +8,8 @@ bool LoginController::submit_credentials(const std::string& username, std::strin
     m_model.set_state(LoginState::Authenticating);
     m_view.render(m_model);
 
-    bool ok = m_authenticator.authenticate(username, std::move(password));
+    AuthResult res = m_authenticator.authenticate(username, std::move(password));
+    bool ok = (res == AuthResult::Success);
     if (!ok) {
         m_model.set_state(LoginState::Failed);
         m_model.set_error_message("PAM authentication failed");

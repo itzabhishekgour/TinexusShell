@@ -1,33 +1,29 @@
-#ifndef TINEXUS_SESSION_MANAGER_HPP
-#define TINEXUS_SESSION_MANAGER_HPP
+#ifndef TINEXUS_SESSION_SESSION_MANAGER_HPP
+#define TINEXUS_SESSION_SESSION_MANAGER_HPP
 
 #include <string>
+#include <vector>
+#include <map>
 #include <cstdint>
 
 namespace tinexus::session {
 
-enum class SessionState : uint8_t {
-    Booting = 0,
-    EnvironmentReady = 1,
-    ServicedStarted = 2,
-    DesktopReady = 3,
-    Running = 4,
-    Stopping = 5,
-    Stopped = 6
+enum class SessionState {
+    Stopped,
+    Starting,
+    Authenticating,
+    Launching,
+    Running,
+    Stopping,
+    Failed
 };
 
-inline const char* session_state_to_string(SessionState state) noexcept {
-    switch (state) {
-        case SessionState::Booting: return "Booting";
-        case SessionState::EnvironmentReady: return "EnvironmentReady";
-        case SessionState::ServicedStarted: return "ServicedStarted";
-        case SessionState::DesktopReady: return "DesktopReady";
-        case SessionState::Running: return "Running";
-        case SessionState::Stopping: return "Stopping";
-        case SessionState::Stopped: return "Stopped";
-        default: return "Unknown";
-    }
-}
+struct DaemonProc {
+    std::string name;
+    pid_t pid{0};
+    uint32_t restart_count{0};
+    bool active{true};
+};
 
 class SessionManager {
 public:
@@ -36,15 +32,20 @@ public:
     SessionManager() = default;
     ~SessionManager() = default;
 
+    [[nodiscard]] SessionState state() const noexcept { return m_state; }
+    void transition_state(SessionState new_state) noexcept;
     bool start_session(bool dry_run = false);
     bool stop_session();
 
-    SessionState state() const noexcept { return m_state; }
+    void register_daemon(const std::string& name, pid_t pid);
+    bool handle_daemon_crash(const std::string& name);
+    [[nodiscard]] const std::map<std::string, DaemonProc>& daemons() const noexcept { return m_daemons; }
 
 private:
-    SessionState m_state{SessionState::Booting};
+    SessionState m_state{SessionState::Stopped};
+    std::map<std::string, DaemonProc> m_daemons;
 };
 
 } // namespace tinexus::session
 
-#endif // TINEXUS_SESSION_MANAGER_HPP
+#endif // TINEXUS_SESSION_SESSION_MANAGER_HPP

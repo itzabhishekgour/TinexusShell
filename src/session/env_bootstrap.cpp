@@ -1,7 +1,6 @@
 #include "session/env_bootstrap.hpp"
 #include "common/logger.hpp"
 #include <cstdlib>
-#include <iostream>
 
 namespace tinexus::session {
 
@@ -10,42 +9,38 @@ EnvironmentBootstrapper& EnvironmentBootstrapper::instance() noexcept {
     return s_instance;
 }
 
-std::unordered_map<std::string, std::string> EnvironmentBootstrapper::get_environment_map() const {
-    const char* uid = std::getenv("UID") ? std::getenv("UID") : "1000";
-    std::string runtime_dir = "/run/user/" + std::string(uid);
+bool EnvironmentBootstrapper::bootstrap_environment() {
+    return EnvBootstrap::apply_environment();
+}
 
+std::unordered_map<std::string, std::string> EnvironmentBootstrapper::get_environment_map() const {
     return {
-        {"WAYLAND_DISPLAY", "wayland-0"},
-        {"DISPLAY", ":0"},
         {"XDG_SESSION_TYPE", "wayland"},
-        {"XDG_RUNTIME_DIR", runtime_dir},
         {"XDG_CURRENT_DESKTOP", "Tinexus"},
-        {"XDG_SESSION_DESKTOP", "Tinexus"},
-        {"XDG_DATA_DIRS", "/usr/local/share:/usr/share"},
-        {"XDG_CONFIG_HOME", std::getenv("HOME") ? std::string(std::getenv("HOME")) + "/.config" : "/home/user/.config"},
-        {"XDG_CACHE_HOME", std::getenv("HOME") ? std::string(std::getenv("HOME")) + "/.cache" : "/home/user/.cache"},
-        {"DBUS_SESSION_BUS_ADDRESS", "unix:path=" + runtime_dir + "/bus"},
-        {"LANG", "en_US.UTF-8"},
-        {"LC_ALL", "en_US.UTF-8"}
+        {"DESKTOP_SESSION", "tinexus"},
+        {"WAYLAND_DISPLAY", "wayland-1"}
     };
 }
 
-bool EnvironmentBootstrapper::bootstrap_environment() {
-    log::info("EnvironmentBootstrapper: Injecting POSIX desktop environment variables...");
-    auto envs = get_environment_map();
-    for (const auto& [k, v] : envs) {
-        setenv(k.c_str(), v.c_str(), 1);
-        log::debug("Env set: {}={}", k, v);
+void EnvironmentBootstrapper::print_environment() const {
+    log::info("XDG Environment Map:");
+    for (const auto& [k, v] : get_environment_map()) {
+        log::info("  {}={}", k, v);
     }
-    return true;
 }
 
-void EnvironmentBootstrapper::print_environment() const {
-    std::cout << "--- Tinexus Session Environment Map ---\n";
-    auto envs = get_environment_map();
-    for (const auto& [k, v] : envs) {
-        std::cout << k << "=" << v << "\n";
-    }
+bool EnvBootstrap::apply_environment() {
+    log::info("EnvBootstrap: Exporting XDG session environment variables...");
+
+    setenv("XDG_SESSION_TYPE", "wayland", 1);
+    setenv("XDG_CURRENT_DESKTOP", "Tinexus", 1);
+    setenv("DESKTOP_SESSION", "tinexus", 1);
+    setenv("WAYLAND_DISPLAY", "wayland-1", 1);
+    setenv("XDG_SESSION_CLASS", "user", 1);
+    setenv("XDG_SESSION_DESKTOP", "tinexus", 1);
+
+    log::info("EnvBootstrap: Environment exported (XDG_SESSION_TYPE=wayland, XDG_CURRENT_DESKTOP=Tinexus)");
+    return true;
 }
 
 } // namespace tinexus::session

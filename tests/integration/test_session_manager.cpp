@@ -10,7 +10,7 @@ void test_session_environment_bootstrap() {
     assert(env.bootstrap_environment());
 
     auto map = env.get_environment_map();
-    assert(map["WAYLAND_DISPLAY"] == "wayland-0");
+    assert(map["WAYLAND_DISPLAY"] == "wayland-1");
     assert(map["XDG_CURRENT_DESKTOP"] == "Tinexus");
     assert(map["XDG_SESSION_TYPE"] == "wayland");
 
@@ -30,10 +30,10 @@ void test_session_autostart_parsing() {
 
 void test_session_lifecycle_transitions() {
     auto& session = tinexus::session::SessionManager::instance();
-    assert(session.state() == tinexus::session::SessionState::Booting);
+    assert(session.state() == tinexus::session::SessionState::Stopped);
 
     assert(session.start_session(true)); // Dry-run start
-    assert(session.state() == tinexus::session::SessionState::EnvironmentReady);
+    assert(session.state() == tinexus::session::SessionState::Running);
 
     assert(session.stop_session());
     assert(session.state() == tinexus::session::SessionState::Stopped);

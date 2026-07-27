@@ -60,6 +60,9 @@ public:
     void register_observer(IOutputObserver* observer);
     void unregister_observer(IOutputObserver* observer);
 
+    [[nodiscard]] std::string serialize_toml(uint32_t version = 1) const;
+    bool deserialize_toml(const std::string& toml_str);
+
     [[nodiscard]] const OutputSpec* get_output(const std::string& name) const noexcept;
     [[nodiscard]] const OutputSpec* get_primary() const noexcept;
     [[nodiscard]] const OutputSpec* output_at_point(int32_t global_x, int32_t global_y) const noexcept;

@@ -9,9 +9,9 @@
 
 void test_pam_authenticator_valid_and_invalid() {
     tinexus::login::PamAuthenticator pam;
-    assert(pam.authenticate("user", "password") == true);
-    assert(pam.authenticate("user", "") == false);
-    assert(pam.authenticate("", "password") == false);
+    assert(pam.authenticate("user", "password") == tinexus::login::AuthResult::Success);
+    assert(pam.authenticate("user", "") == tinexus::login::AuthResult::InvalidCredentials);
+    assert(pam.authenticate("", "password") == tinexus::login::AuthResult::InvalidCredentials);
     std::cout << "[PASS] test_pam_authenticator_valid_and_invalid\n";
 }
 

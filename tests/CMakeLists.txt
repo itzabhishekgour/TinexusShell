@@ -1081,3 +1081,141 @@ target_link_libraries(smoke_notification_overlay PRIVATE
 )
 
 add_test(NAME smoke_notification_overlay COMMAND smoke_notification_overlay)
+
+# Milestone v0.5.0 Smoke Test Suites
+add_executable(smoke_pam_auth
+    smoke/security/test_smoke_pam_auth.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/pam_authenticator.cpp
+)
+
+target_include_directories(smoke_pam_auth PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/login/include
+)
+
+target_link_libraries(smoke_pam_auth PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_pam_auth COMMAND smoke_pam_auth)
+
+add_executable(smoke_failed_login
+    smoke/security/test_smoke_failed_login.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/pam_authenticator.cpp
+)
+
+target_include_directories(smoke_failed_login PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/login/include
+)
+
+target_link_libraries(smoke_failed_login PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_failed_login COMMAND smoke_failed_login)
+
+add_executable(smoke_display_vt
+    smoke/session/test_smoke_display_vt.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/vt_manager.cpp
+)
+
+target_include_directories(smoke_display_vt PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/displayd/include
+)
+
+target_link_libraries(smoke_display_vt PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_display_vt COMMAND smoke_display_vt)
+
+add_executable(smoke_session_bootstrap
+    smoke/session/test_smoke_session_bootstrap.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/session_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/env_bootstrap.cpp
+)
+
+target_include_directories(smoke_session_bootstrap PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/session/include
+)
+
+target_link_libraries(smoke_session_bootstrap PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_session_bootstrap COMMAND smoke_session_bootstrap)
+
+add_executable(smoke_multiple_sessions
+    smoke/session/test_smoke_multiple_sessions.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/session_manager.cpp
+)
+
+target_include_directories(smoke_multiple_sessions PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/session/include
+)
+
+target_link_libraries(smoke_multiple_sessions PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_multiple_sessions COMMAND smoke_multiple_sessions)
+
+add_executable(smoke_daemon_restart
+    smoke/session/test_smoke_daemon_restart.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/session_manager.cpp
+)
+
+target_include_directories(smoke_daemon_restart PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/session/include
+)
+
+target_link_libraries(smoke_daemon_restart PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_daemon_restart COMMAND smoke_daemon_restart)
+
+add_executable(smoke_autostart_order
+    smoke/session/test_smoke_autostart_order.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/autostart_parser.cpp
+)
+
+target_include_directories(smoke_autostart_order PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/session/include
+)
+
+target_link_libraries(smoke_autostart_order PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_autostart_order COMMAND smoke_autostart_order)
+
+add_executable(smoke_output_persistence
+    smoke/output/test_smoke_output_persistence.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/output/output_layout.cpp
+)
+
+target_include_directories(smoke_output_persistence PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/output/include
+)
+
+target_link_libraries(smoke_output_persistence PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_output_persistence COMMAND smoke_output_persistence)

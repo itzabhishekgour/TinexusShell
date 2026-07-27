@@ -2,20 +2,25 @@
 #define TINEXUS_DISPLAYD_VT_MANAGER_HPP
 
 #include <cstdint>
+#include <string>
 
 namespace tinexus::displayd {
 
-class VtManager {
+class VTManager {
 public:
-    VtManager() = default;
-    ~VtManager() = default;
+    static VTManager& instance() noexcept;
 
-    bool allocate_vt(uint32_t vt_num = 7);
-    bool switch_vt(uint32_t vt_num);
-    [[nodiscard]] uint32_t active_vt() const noexcept { return m_active_vt; }
+    VTManager() = default;
+    ~VTManager() = default;
+
+    [[nodiscard]] int32_t find_free_vt() noexcept;
+    [[nodiscard]] bool allocate_vt(int32_t vt_num) noexcept;
+    [[nodiscard]] bool activate_vt(int32_t vt_num) noexcept;
+    [[nodiscard]] bool release_vt(int32_t vt_num) noexcept;
+    [[nodiscard]] int32_t current_vt() const noexcept { return m_active_vt; }
 
 private:
-    uint32_t m_active_vt{7};
+    int32_t m_active_vt{7};
 };
 
 } // namespace tinexus::displayd
