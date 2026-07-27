@@ -76,6 +76,9 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
@@ -525,6 +528,9 @@ add_executable(integration_test_wayland_session
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
@@ -666,6 +672,9 @@ add_executable(integration_test_first_client
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
@@ -788,6 +797,9 @@ add_executable(integration_test_real_client
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
@@ -832,3 +844,87 @@ target_link_libraries(integration_test_real_client PRIVATE
 )
 
 add_test(NAME integration_test_real_client COMMAND integration_test_real_client)
+
+# Milestone v0.3.0 Input Subsystem & Live Window Interactivity Test Suites
+add_executable(integration_test_input_seat
+    integration/test_input_seat.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
+)
+
+target_include_directories(integration_test_input_seat PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/input/include
+)
+
+target_link_libraries(integration_test_input_seat PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_input_seat COMMAND integration_test_input_seat)
+
+add_executable(integration_test_keyboard_focus
+    integration/test_keyboard_focus.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
+)
+
+target_include_directories(integration_test_keyboard_focus PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/input/include
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/include
+)
+
+target_link_libraries(integration_test_keyboard_focus PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_keyboard_focus COMMAND integration_test_keyboard_focus)
+
+add_executable(integration_test_pointer_focus
+    integration/test_pointer_focus.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
+)
+
+target_include_directories(integration_test_pointer_focus PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/input/include
+)
+
+target_link_libraries(integration_test_pointer_focus PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_pointer_focus COMMAND integration_test_pointer_focus)
+
+add_executable(integration_test_interactive_window
+    integration/test_interactive_window.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+)
+
+target_include_directories(integration_test_interactive_window PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/input/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+)
+
+target_link_libraries(integration_test_interactive_window PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_interactive_window COMMAND integration_test_interactive_window)

@@ -21,6 +21,9 @@ add_executable(tinexus-comp
     window/xdg_toplevel_node.cpp
     window/scene_graph.cpp
     window/window_manager.cpp
+    input/keymap_engine.cpp
+    input/interaction_controller.cpp
+    input/seat_manager.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_rules.cpp
