@@ -8,6 +8,8 @@ add_executable(tinexus-comp
     server/surface_tree.cpp
     backend/backend.cpp
     renderer/renderer.cpp
+    renderer/render_surface.cpp
+    renderer/pixman_renderer.cpp
     surface/surface_state.cpp
     surface/configure_serial.cpp
     surface/buffer_manager.cpp

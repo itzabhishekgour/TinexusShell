@@ -69,6 +69,8 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/server/surface_tree.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/backend/backend.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
@@ -512,6 +514,8 @@ add_executable(integration_test_wayland_session
     ${CMAKE_SOURCE_DIR}/src/comp/server/surface_tree.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/backend/backend.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
@@ -647,6 +651,8 @@ add_executable(integration_test_first_client
     ${CMAKE_SOURCE_DIR}/src/comp/server/surface_tree.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/backend/backend.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
@@ -691,3 +697,22 @@ target_link_libraries(integration_test_first_client PRIVATE
 )
 
 add_test(NAME integration_test_first_client COMMAND integration_test_first_client)
+
+# Milestone v0.2.2 Software Rendering Pipeline Test Suite
+add_executable(integration_test_pixman_renderer
+    integration/test_pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+)
+
+target_include_directories(integration_test_pixman_renderer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+)
+
+target_link_libraries(integration_test_pixman_renderer PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_pixman_renderer COMMAND integration_test_pixman_renderer)

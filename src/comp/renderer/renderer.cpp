@@ -3,16 +3,19 @@
 
 namespace tinexus::comp {
 
-class SoftwareRenderer : public Renderer {
+class DefaultSoftwareRenderer : public Renderer {
 public:
-    bool initialize() override {
-        log::info("SoftwareRenderer: Initialized software compositing renderer.");
+    bool initialize(uint32_t width, uint32_t height) override {
+        (void)width; (void)height;
+        log::info("DefaultSoftwareRenderer: Initialized software compositing renderer.");
         return true;
     }
-    void begin_frame(uint32_t width, uint32_t height) override {
-        (void)width; (void)height;
+    void begin_frame() override {}
+    void compose_surface(RenderSurface& surface) override {
+        (void)surface;
     }
     void end_frame() override {}
+    void present() override {}
 };
 
 } // namespace tinexus::comp
