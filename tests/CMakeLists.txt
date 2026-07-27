@@ -358,3 +358,26 @@ target_link_libraries(integration_test_login PRIVATE
 )
 
 add_test(NAME integration_test_login COMMAND integration_test_login)
+
+add_executable(integration_test_pkg
+    integration/test_pkg.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/package_manifest.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/crypto_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/dependency_solver.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/package_database.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/transaction_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/package_manager.cpp
+)
+
+target_include_directories(integration_test_pkg PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/pkg/include
+)
+
+target_link_libraries(integration_test_pkg PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_pkg COMMAND integration_test_pkg)
