@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cassert>
+#include <unistd.h>
 #include "common/logger.hpp"
 #include "terminal/pty_process.hpp"
 #include "terminal/ansi_parser.hpp"
@@ -39,6 +40,29 @@ void test_pty_process_spawn_and_resize() {
     std::cout << "[PASS] test_pty_process_spawn_and_resize\n";
 }
 
+void test_interactive_bash_session() {
+    tinexus::terminal::PtyProcess pty;
+    assert(pty.spawn("/bin/bash", 80, 24));
+    usleep(50000); // 50ms startup pause
+
+    std::string cmd = "echo HELLO_TINEXUS_TERMINAL\nexit\n";
+    pty.write_bytes(cmd.c_str(), cmd.size());
+
+    char buf[1024];
+    std::string output;
+    for (int i = 0; i < 5; ++i) {
+        ssize_t bytes = pty.read_bytes(buf, sizeof(buf) - 1);
+        if (bytes > 0) {
+            buf[bytes] = '\0';
+            output += buf;
+        }
+        usleep(20000);
+    }
+
+    assert(output.find("HELLO_TINEXUS_TERMINAL") != std::string::npos);
+    std::cout << "[PASS] test_interactive_bash_session\n";
+}
+
 int main() {
     tinexus::log::set_component_name("integration_test_terminal");
     tinexus::log::info("Running Integration Test Suite for Tinexus Terminal...");
@@ -46,6 +70,7 @@ int main() {
     test_ansi_parser();
     test_terminal_buffer_scrollback();
     test_pty_process_spawn_and_resize();
+    test_interactive_bash_session();
 
     tinexus::log::info("All Tinexus Terminal integration tests passed 100%!");
     return 0;

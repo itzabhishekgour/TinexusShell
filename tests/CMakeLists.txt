@@ -311,3 +311,28 @@ target_link_libraries(integration_test_terminal PRIVATE
 )
 
 add_test(NAME integration_test_terminal COMMAND integration_test_terminal)
+
+add_executable(integration_test_monitor
+    integration/test_monitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/metrics_snapshot.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/cpu_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/memory_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/disk_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/network_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/process_tree.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/process_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/monitor/resource_monitor.cpp
+)
+
+target_include_directories(integration_test_monitor PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/monitor/include
+)
+
+target_link_libraries(integration_test_monitor PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_monitor COMMAND integration_test_monitor)
