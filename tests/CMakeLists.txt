@@ -270,3 +270,23 @@ target_link_libraries(integration_test_notifications PRIVATE
 )
 
 add_test(NAME integration_test_notifications COMMAND integration_test_notifications)
+
+add_executable(integration_test_clipboard
+    integration/test_clipboard.cpp
+    ${CMAKE_SOURCE_DIR}/src/clipboard/clipboard_item.cpp
+    ${CMAKE_SOURCE_DIR}/src/clipboard/privacy_filter.cpp
+    ${CMAKE_SOURCE_DIR}/src/clipboard/clipboard_manager.cpp
+)
+
+target_include_directories(integration_test_clipboard PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/clipboard/include
+)
+
+target_link_libraries(integration_test_clipboard PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_clipboard COMMAND integration_test_clipboard)
