@@ -10,13 +10,43 @@ SurfaceManager& SurfaceManager::instance() noexcept {
 
 uint32_t SurfaceManager::create_surface(pid_t pid, const std::string& app_id) {
     uint32_t id = m_next_id++;
-    SurfaceRecord record{id, pid, app_id, 1, "HDMI-A-1", SurfaceState::Created};
+    SurfaceRecord record{id, pid, app_id, 1, "HDMI-A-1", SurfaceState::Created, SurfaceRole::None, SurfaceLifecycle::Created};
     m_surfaces[id] = record;
 
-    log::info("PID={} APP={} SURFACE={} WORKSPACE={} OUTPUT={} STATE={}",
-              pid, app_id, id, record.workspace_id, record.output_name, surface_state_to_string(record.state));
+    log::info("PID={} APP={} SURFACE={} WORKSPACE={} OUTPUT={} STATE={} LIFECYCLE={}",
+              pid, app_id, id, record.workspace_id, record.output_name, surface_state_to_string(record.state), surface_lifecycle_to_string(record.lifecycle));
 
     return id;
+}
+
+bool SurfaceManager::assign_role(uint32_t surface_id, SurfaceRole role) {
+    auto it = m_surfaces.find(surface_id);
+    if (it == m_surfaces.end()) return false;
+
+    auto& record = it->second;
+    if (record.role != SurfaceRole::None && record.role != role) {
+        log::error("SURFACE={} cannot reassign role from {} to {}", surface_id, surface_role_to_string(record.role), surface_role_to_string(role));
+        return false;
+    }
+
+    record.role = role;
+    if (record.lifecycle == SurfaceLifecycle::Created) {
+        record.lifecycle = SurfaceLifecycle::RoleAssigned;
+    }
+
+    log::info("SURFACE={} ROLE={} LIFECYCLE={}", surface_id, surface_role_to_string(record.role), surface_lifecycle_to_string(record.lifecycle));
+    return true;
+}
+
+bool SurfaceManager::transition_lifecycle(uint32_t surface_id, SurfaceLifecycle new_lifecycle) {
+    auto it = m_surfaces.find(surface_id);
+    if (it == m_surfaces.end()) return false;
+
+    auto& record = it->second;
+    record.lifecycle = new_lifecycle;
+
+    log::info("SURFACE={} ROLE={} LIFECYCLE={}", surface_id, surface_role_to_string(record.role), surface_lifecycle_to_string(record.lifecycle));
+    return true;
 }
 
 bool SurfaceManager::transition_state(uint32_t surface_id, SurfaceState new_state) {

@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wlr_layer_shell_unstable_v1">
+  <copyright>
+    Copyright © 2017 Drew DeVault
+
+    Permission to use, copy, modify, and/or distribute this software for any
+    purpose with or without fee is hereby granted, provided that the above
+    copyright notice and this permission notice appear in all copies.
+
+    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+    ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+  </copyright>
+
+  <interface name="zwlr_layer_shell_v1" version="4">
+    <description summary="create surfaces that are layers of the desktop">
+      Clients can use this interface to assign the "layer_surface" role to
+      wl_surfaces. Such surfaces are assigned to a "layer" of the output and
+      rendered with a defined z-ordering.
+    </description>
+
+    <enum name="error">
+      <entry name="role" value="0" summary="wl_surface has another role"/>
+      <entry name="invalid_layer" value="1" summary="layer value is invalid"/>
+      <entry name="already_constructed" value="2" summary="wl_surface has already been assigned a layer_surface role"/>
+    </enum>
+
+    <enum name="layer">
+      <entry name="background" value="0"/>
+      <entry name="bottom" value="1"/>
+      <entry name="top" value="2"/>
+      <entry name="overlay" value="3"/>
+    </enum>
+
+    <request name="get_layer_surface">
+      <description summary="create a layer_surface from a Surface">
+        Create a layer surface for a given surface.
+      </description>
+      <arg name="id" type="new_id" interface="zwlr_layer_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="output" type="object" interface="wl_output" allow-null="true"/>
+      <arg name="layer" type="uint" enum="layer"/>
+      <arg name="namespace" type="string"/>
+    </request>
+
+    <request name="destroy" type="destructor" since="3">
+      <description summary="destroy the layer_shell object">
+        This request indicates that the client will not use the layer_shell
+        object any more. Objects created through this instance are not
+        affected.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="zwlr_layer_surface_v1" version="4">
+    <description summary="layer metadata interface">
+      An interface that may be implemented by a wl_surface, for surfaces that
+      are designed to be rendered as a layer of a Given output.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_surface_state" value="0" summary="provided surface state is invalid"/>
+      <entry name="invalid_size" value="1" summary="size is invalid"/>
+      <entry name="invalid_anchor" value="2" summary="anchor is invalid"/>
+    </enum>
+
+    <enum name="anchor" bitfield="true">
+      <entry name="top" value="1" summary="top edge"/>
+      <entry name="bottom" value="2" summary="bottom edge"/>
+      <entry name="left" value="4" summary="left edge"/>
+      <entry name="right" value="8" summary="right edge"/>
+    </enum>
+
+    <enum name="keyboard_interactivity">
+      <entry name="none" value="0" summary="no keyboard focus"/>
+      <entry name="exclusive" value="1" summary="request exclusive keyboard focus"/>
+      <entry name="on_demand" value="2" summary="request keyboard focus on demand" since="4"/>
+    </enum>
+
+    <request name="set_size">
+      <description summary="sets the size of the surface">
+        Sets the size of the surface in surface-local coordinates.
+      </description>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+    </request>
+
+    <request name="set_anchor">
+      <description summary="configures the anchor points of the surface">
+        Requests that the compositor anchor the surface to the specified edges.
+      </description>
+      <arg name="anchor" type="uint" enum="anchor"/>
+    </request>
+
+    <request name="set_exclusive_zone">
+      <description summary="configures the exclusive zone of the surface">
+        Requests that the compositor avoids occluding an area of the surface.
+      </description>
+      <arg name="zone" type="int"/>
+    </request>
+
+    <request name="set_margin">
+      <description summary="sets the margin of the surface">
+        Requests that the surface be placed some distance away from the anchor edge.
+      </description>
+      <arg name="top" type="int"/>
+      <arg name="right" type="int"/>
+      <arg name="bottom" type="int"/>
+      <arg name="left" type="int"/>
+    </request>
+
+    <request name="set_keyboard_interactivity">
+      <description summary="configures keyboard interactivity">
+        Set how keyboard focus is requested for this layer surface.
+      </description>
+      <arg name="keyboard_interactivity" type="uint" enum="keyboard_interactivity"/>
+    </request>
+
+    <request name="get_popup">
+      <description summary="assign this surface as a popup parent">
+        This request indicates that the child xdg_popup surface should be
+        parented to this layer surface.
+      </description>
+      <arg name="popup" type="object" interface="xdg_popup"/>
+    </request>
+
+    <request name="ack_configure">
+      <description summary="ack a configure event">
+        When a configure event is received, if a client would like to accept a
+        configure event, it must respond with this request.
+      </description>
+      <arg name="serial" type="uint"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the layer_surface">
+        This request destroys the layer surface.
+      </description>
+    </request>
+
+    <event name="configure">
+      <description summary="suggest a surface change">
+        The configure event asks the client to resize its surface.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+    </event>
+
+    <event name="closed">
+      <description summary="surface should be closed">
+        The closed event is sent by the compositor when the surface will no
+        longer be shown.
+      </description>
+    </event>
+  </interface>
+</protocol>

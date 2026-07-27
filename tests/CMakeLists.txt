@@ -928,3 +928,49 @@ target_link_libraries(integration_test_interactive_window PRIVATE
 )
 
 add_test(NAME integration_test_interactive_window COMMAND integration_test_interactive_window)
+
+# Milestone v0.4.0 Phase A Smoke Test Suites
+add_executable(smoke_protocol_dispatch
+    smoke/protocol/test_smoke_protocol_dispatch.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/server/protocol_dispatcher.cpp
+)
+
+target_include_directories(smoke_protocol_dispatch PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/server/include
+    ${WAYLAND_SERVER_INCLUDE_DIRS}
+)
+
+target_link_libraries(smoke_protocol_dispatch PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+    ${WAYLAND_SERVER_LIBRARIES}
+)
+
+add_test(NAME smoke_protocol_dispatch COMMAND smoke_protocol_dispatch)
+
+add_executable(smoke_surface_lifecycle
+    smoke/lifecycle/test_smoke_surface_lifecycle.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/layer_shell_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/exclusive_zone_calculator.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/layer_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+)
+
+target_include_directories(smoke_surface_lifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+)
+
+target_link_libraries(smoke_surface_lifecycle PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_surface_lifecycle COMMAND smoke_surface_lifecycle)

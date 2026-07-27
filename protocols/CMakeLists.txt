@@ -6,6 +6,7 @@ find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
 set(PROTOCOL_XMLS
     tinexus-global-shortcut-v1.xml
     tinexus-shell-helper-v1.xml
+    wlr-layer-shell-unstable-v1.xml
 )
 
 foreach(xml ${PROTOCOL_XMLS})
