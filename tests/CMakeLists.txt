@@ -290,3 +290,24 @@ target_link_libraries(integration_test_clipboard PRIVATE
 )
 
 add_test(NAME integration_test_clipboard COMMAND integration_test_clipboard)
+
+add_executable(integration_test_terminal
+    integration/test_terminal.cpp
+    ${CMAKE_SOURCE_DIR}/src/terminal/pty_process.cpp
+    ${CMAKE_SOURCE_DIR}/src/terminal/ansi_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/terminal/terminal_buffer.cpp
+    ${CMAKE_SOURCE_DIR}/src/terminal/terminal_renderer.cpp
+)
+
+target_include_directories(integration_test_terminal PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/terminal/include
+)
+
+target_link_libraries(integration_test_terminal PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_terminal COMMAND integration_test_terminal)
