@@ -49,7 +49,32 @@ int main() {
     rec1 = surface_mgr.get_record(s1);
     assert(rec1.lifecycle == SurfaceLifecycle::Configured);
 
-    // 4. Exclusive Zone Layout Calculation
+    // 4. Exercise Full Lifecycle Transitions: Configured -> Mapped -> Visible -> Hidden -> Visible -> Unmapped
+    assert(surface_mgr.transition_lifecycle(s1, SurfaceLifecycle::Mapped) == true);
+    rec1 = surface_mgr.get_record(s1);
+    assert(rec1.lifecycle == SurfaceLifecycle::Mapped);
+
+    assert(surface_mgr.transition_lifecycle(s1, SurfaceLifecycle::Visible) == true);
+    rec1 = surface_mgr.get_record(s1);
+    assert(rec1.lifecycle == SurfaceLifecycle::Visible);
+
+    assert(surface_mgr.transition_lifecycle(s1, SurfaceLifecycle::Hidden) == true);
+    rec1 = surface_mgr.get_record(s1);
+    assert(rec1.lifecycle == SurfaceLifecycle::Hidden);
+
+    assert(surface_mgr.transition_lifecycle(s1, SurfaceLifecycle::Visible) == true);
+    rec1 = surface_mgr.get_record(s1);
+    assert(rec1.lifecycle == SurfaceLifecycle::Visible);
+
+    assert(surface_mgr.transition_lifecycle(s1, SurfaceLifecycle::Unmapped) == true);
+    rec1 = surface_mgr.get_record(s1);
+    assert(rec1.lifecycle == SurfaceLifecycle::Unmapped);
+
+    // Invalid transition test (Created -> Visible without RoleAssigned should fail)
+    uint32_t s_invalid = surface_mgr.create_surface(9999, "invalid-app");
+    assert(surface_mgr.transition_lifecycle(s_invalid, SurfaceLifecycle::Visible) == false);
+
+    // 5. Exclusive Zone Layout Calculation
     OutputBounds bounds{1920, 1080};
     assert(bounds.width == 1920);
     UsableArea full_area{0, 0, 1920, 1080};
@@ -57,7 +82,7 @@ int main() {
     assert(new_area.y == 48);
     assert(new_area.height == 1032);
 
-    // 5. LayerManager Ordering Verification (Background < Bottom < Normal < Top < Overlay)
+    // 6. LayerManager Ordering Verification (Background < Bottom < Normal < Top < Overlay)
     WindowNode node_bg(1, "wallpaper");
     WindowNode node_normal(2, "app");
     WindowNode node_top(3, "panel");
@@ -77,7 +102,7 @@ int main() {
     assert(ordered[1] == &node_normal);
     assert(ordered[2] == &node_top);
 
-    // 6. Surface Destruction
+    // 7. Surface Destruction
     assert(layer_shell.destroy_layer_surface(ls1) == true);
     rec1 = surface_mgr.get_record(s1);
     assert(rec1.lifecycle == SurfaceLifecycle::Destroyed);

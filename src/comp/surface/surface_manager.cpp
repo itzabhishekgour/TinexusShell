@@ -43,6 +43,12 @@ bool SurfaceManager::transition_lifecycle(uint32_t surface_id, SurfaceLifecycle 
     if (it == m_surfaces.end()) return false;
 
     auto& record = it->second;
+    // Cannot transition beyond Created without an assigned role unless being destroyed
+    if (record.role == SurfaceRole::None && new_lifecycle != SurfaceLifecycle::Destroyed && new_lifecycle != SurfaceLifecycle::Created) {
+        log::error("SURFACE={} cannot transition to {} without assigned role", surface_id, surface_lifecycle_to_string(new_lifecycle));
+        return false;
+    }
+
     record.lifecycle = new_lifecycle;
 
     log::info("SURFACE={} ROLE={} LIFECYCLE={}", surface_id, surface_role_to_string(record.role), surface_lifecycle_to_string(record.lifecycle));
