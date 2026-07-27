@@ -551,3 +551,91 @@ target_link_libraries(integration_test_wayland_session PRIVATE
 )
 
 add_test(NAME integration_test_wayland_session COMMAND integration_test_wayland_session)
+
+# Milestone v0.2.1 Surface Protocol Validation Test Suites
+add_executable(integration_test_surface_lifecycle
+    integration/test_surface_lifecycle.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
+)
+
+target_include_directories(integration_test_surface_lifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_surface_lifecycle PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_surface_lifecycle COMMAND integration_test_surface_lifecycle)
+
+add_executable(integration_test_configure_serial
+    integration/test_configure_serial.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
+)
+
+target_include_directories(integration_test_configure_serial PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_configure_serial PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_configure_serial COMMAND integration_test_configure_serial)
+
+add_executable(integration_test_buffer_commit
+    integration/test_buffer_commit.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
+)
+
+target_include_directories(integration_test_buffer_commit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_buffer_commit PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_buffer_commit COMMAND integration_test_buffer_commit)
+
+add_executable(integration_test_frame_callback
+    integration/test_frame_callback.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/frame_callback.cpp
+)
+
+target_include_directories(integration_test_frame_callback PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_frame_callback PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_frame_callback COMMAND integration_test_frame_callback)
+
+add_executable(integration_test_resource_cleanup
+    integration/test_resource_cleanup.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/resource_cleanup.cpp
+)
+
+target_include_directories(integration_test_resource_cleanup PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_resource_cleanup PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_resource_cleanup COMMAND integration_test_resource_cleanup)

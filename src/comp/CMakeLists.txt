@@ -8,6 +8,11 @@ add_executable(tinexus-comp
     server/surface_tree.cpp
     backend/backend.cpp
     renderer/renderer.cpp
+    surface/surface_state.cpp
+    surface/configure_serial.cpp
+    surface/buffer_manager.cpp
+    surface/frame_callback.cpp
+    surface/resource_cleanup.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_manager.cpp
