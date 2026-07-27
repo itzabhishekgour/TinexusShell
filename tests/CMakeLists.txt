@@ -381,3 +381,26 @@ target_link_libraries(integration_test_pkg PRIVATE
 )
 
 add_test(NAME integration_test_pkg COMMAND integration_test_pkg)
+
+add_executable(integration_test_displayd
+    integration/test_displayd.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/vt_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/seat_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/login_monitor.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/session_launcher.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/systemd_interface.cpp
+    ${CMAKE_SOURCE_DIR}/src/displayd/display_daemon.cpp
+)
+
+target_include_directories(integration_test_displayd PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/displayd/include
+)
+
+target_link_libraries(integration_test_displayd PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_displayd COMMAND integration_test_displayd)
