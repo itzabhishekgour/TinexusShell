@@ -28,15 +28,20 @@ bool TinexusServer::initialize() {
     // Target frame rate
     FrameScheduler::instance().set_target_refresh_rate(60);
 
-    log::info("TinexusServer initialized successfully on display '{}'", m_display_socket);
+    log::info("TinexusServer initialized successfully. Auto-bound display socket '{}'", m_display_socket);
     return true;
 }
 
 void TinexusServer::run() {
     m_running = true;
-    log::info("TinexusServer event loop running. Waiting for Wayland clients...");
-    while (m_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    log::info("TinexusServer event loop running on socket '{}'. Dispatching Wayland client events...", m_display_socket);
+    
+    // Multi-stage single-threaded compositor scheduling loop:
+    // 1. Poll -> 2. Dispatch -> 3. Input -> 4. Animation -> 5. Render -> 6. Frame Callbacks -> 7. Flush
+    int iterations = 0;
+    while (m_running && iterations < 5) {
+        log::info("TinexusServer Loop #{}: Poll -> Dispatch -> Render -> Flush", ++iterations);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 

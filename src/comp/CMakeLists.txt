@@ -1,6 +1,10 @@
 add_executable(tinexus-comp
     main.cpp
     server/server.cpp
+    server/global_registry.cpp
+    server/surface_tree.cpp
+    backend/backend.cpp
+    renderer/renderer.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_manager.cpp
@@ -16,6 +20,8 @@ add_executable(tinexus-comp
 
 target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/server/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/backend/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/output/include
     ${CMAKE_CURRENT_SOURCE_DIR}/cursor/include
     ${CMAKE_CURRENT_SOURCE_DIR}/window/include
