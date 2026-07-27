@@ -249,3 +249,24 @@ target_link_libraries(integration_test_settings PRIVATE
 )
 
 add_test(NAME integration_test_settings COMMAND integration_test_settings)
+
+add_executable(integration_test_notifications
+    integration/test_notifications.cpp
+    ${CMAKE_SOURCE_DIR}/src/notifications/notification_item.cpp
+    ${CMAKE_SOURCE_DIR}/src/notifications/dnd_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/notifications/notification_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/notifications/notification_server.cpp
+)
+
+target_include_directories(integration_test_notifications PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/notifications/include
+)
+
+target_link_libraries(integration_test_notifications PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_notifications COMMAND integration_test_notifications)
