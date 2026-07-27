@@ -448,3 +448,27 @@ target_link_libraries(integration_test_iso PRIVATE
 )
 
 add_test(NAME integration_test_iso COMMAND integration_test_iso)
+
+add_executable(integration_test_liveusb
+    integration/test_liveusb.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/device_detector.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/iso_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/raw_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/verification.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/progress_tracker.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/persistence_mgr.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/liveusb_controller.cpp
+)
+
+target_include_directories(integration_test_liveusb PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/liveusb/include
+)
+
+target_link_libraries(integration_test_liveusb PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_liveusb COMMAND integration_test_liveusb)
