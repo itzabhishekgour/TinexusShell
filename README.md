@@ -9,6 +9,41 @@
 
 ---
 
+## 🚦 Component Implementation Status Matrix
+
+Tinexus Platform tracks component maturity transparently across three tiers:
+
+| Subsystem Component | Implementation Tier | Verified Technical Highlights |
+|---|---|---|
+| **Terminal Emulator (`tinexus-terminal`)** | 🟢 **REAL SYSTEM APIs** | POSIX `posix_openpt()`, `grantpt()`, `unlockpt()`, `ptsname()`, `fork()`, `execvp()`, `dup2()`, `ioctl(TIOCSWINSZ)` PTY master/slave engine. |
+| **System Monitor (`tinexus-monitor`)** | 🟢 **REAL SYSTEM APIs** | Direct Linux `/proc/stat` reader, per-core delta usage parser, `/proc/meminfo`, `/proc/diskstats`, `/proc/net/dev`, `/proc/[pid]/stat`. |
+| **Platform Supervisor (`tinexus-serviced`)** | 🟢 **REAL SYSTEM APIs** | POSIX `fork()`, `execvp()`, `kill()`, `waitpid()`, supervision watchdog, Unix sockets (`/tmp/tinexus-serviced.sock`). |
+| **IPC Broker (`tinexus-ipcd`) & SDK** | 🟢 **REAL SYSTEM APIs** | Real Unix domain socket broker, IPC packet framing, payload serialization, `libtinexus-sdk.so` client library. |
+| **Settings Daemon (`tinexus-settings`)** | 🟢 **REAL SYSTEM APIs** | TOML config parser, schema validator, atomic file sync (`.tmp` ➔ `fsync` ➔ `rename`). |
+| **Wayland Compositor (`tinexus-comp`)** | 🟡 **PARTIAL / FRAMEWORK** | Window rules engine, workspace manager, surface manager, frame scheduler; event loop currently runs sleep loop. |
+| **Display Manager (`tinexus-displayd`)** | 🟡 **PARTIAL / FRAMEWORK** | VT allocation/switching architecture, seat0 acquisition, login supervisor, systemd `READY=1`/`STOPPING=1` socket signals. |
+| **Package Manager (`tinexus-pkg`)** | 🟡 **PARTIAL / FRAMEWORK** | `.tinexus` manifest parser, SHA256 checksums, Ed25519 signatures, topological DAG solver, package DB, staging state machine. |
+| **PAM Login (`tinexus-login`)** | 🟡 **PARTIAL / FRAMEWORK** | Memory zeroing (`explicit_bzero`), POSIX privilege drop sequence (`initgroups()` ➔ `setgid()` ➔ `setuid()`), baseline auth rules. |
+| **Graphical Installer (`tinexus-installer`)** | 🔴 **DRY-RUN / MOCKED** | 10-stage wizard state machine, `/dev/disk/by-id/` discovery, live media safety protection; disk formatting (`mkfs.ext4`) mocked for host safety. |
+| **ISO Builder (`tinexus-iso`)** | 🔴 **DRY-RUN / MOCKED** | RootFS stager tree, initramfs generator, squashfs builder, GRUB EFI config; binary calls (`xorriso`, `mksquashfs`) mocked in dry-run mode. |
+| **Live USB Engine (`tinexus-liveusb`)** | 🔴 **DRY-RUN / MOCKED** | Removable USB detector, pre-flight ISO verifier, read-back SHA256 verifier; raw block writes (`/dev/sdX`) mocked in dry-run mode. |
+| **Release Pipeline (`tinexus-release`)** | 🔴 **DRY-RUN / MOCKED** | SHA256 generator, GPG signature engine, release notes generator, `release.json` manifest, GitHub artifact packager. |
+
+---
+
+## 🎯 Stabilization Roadmap
+
+```
+v0.1.0-alpha ✅ Architecture Freeze & Component Framework (23/23 Test Suites Passed)
+v0.2.0       ⏳ Real Wayland Session & C-API Display Event Loop (`tinexus-comp`)  ◄ CURRENT FOCUS
+v0.3.0       ⏳ Real Display Manager Boot Sequence (`tinexus-displayd` ➔ `tinexus-login` ➔ `tinexus-session`)
+v0.4.0       ⏳ Real Package Manager Subprocess Engine (`tinexus-pkg`)
+v0.5.0       ⏳ Real Hardware Installer, ISO Builder & Live USB Writes
+v1.0.0       ⏳ General Availability (GA) Production Release
+```
+
+---
+
 ## Documentation Index (Architecture Freeze v1.1)
 
 | # | Document | Description | Status |
@@ -38,25 +73,6 @@
 
 ---
 
-## What is Tinexus Platform?
-
-Tinexus is a Wayland-native Linux Desktop Platform designed around one radical idea:
-
-**The desktop should get out of the way.**
-
-No taskbar. No dock. No desktop icons. No widgets.  
-When you open your computer, you see your wallpaper. Nothing else.
-
-Everything is accessible through **Ctrl+K** — a single, beautiful launcher powered by `tinexus-searchd` and inspired by Raycast, VSCode's command palette, and macOS Spotlight.
-
-```
-Ctrl+K → type anything → press Enter
-```
-
-That's Tinexus.
-
----
-
 ## Core Platform Decisions
 
 | Decision | Choice | Reason |
@@ -75,60 +91,6 @@ That's Tinexus.
 
 ---
 
-## Architecture Overview
-
-```
-                          ┌─────────────────────┐
-                          │  systemd-logind     │
-                          └──────────┬──────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │  tinexus-serviced   │ (Platform Supervisor)
-                          └──────────┬──────────┘
-                                     │
-           ┌─────────────────────────┼─────────────────────────┐
-           │                         │                         │
-  ┌────────▼────────┐       ┌────────▼────────┐       ┌────────▼────────┐
-  │  tinexus-comp   │       │   tinexus-ipcd  │       │ tinexus-searchd │
-  │  (Compositor)   │       │  (IPC Router)   │       │ (Search Engine) │
-  └────────┬────────┘       └────────┬────────┘       └────────┬────────┘
-           │                         │                         │
- ┌─────────┴─────────┐       ┌───────┴─────────┐       ┌───────┴─────────┐
- │ tinexus-wallpaper │       │ tinexus-notif   │       │ tinexus-clip    │
- │ tinexus-lock      │       │ tinexus-settings│       │ tinexus-indexer │
- └─────────┬─────────┘       └─────────────────┘       └─────────────────┘
-           │
- ┌─────────▼─────────┐
- │ tinexus-launcher  │ (Qt6/QML UI over IPC)
- └───────────────────┘
-```
-
----
-
-## Monorepo Layout
-
-```
-Tinexus/
-├── compositor/     # Wayland compositor (wlroots + Vulkan)
-├── launcher/       # Command palette UI (Qt6/QML)
-├── searchd/        # Search engine & ranking daemon
-├── serviced/       # Platform service supervisor
-├── ipcd/           # Central IPC router & broker
-├── clipboard/      # Clipboard history daemon
-├── wallpaper/      # Layer-shell wallpaper renderer
-├── settings/       # Config daemon & schema engine
-├── notifications/  # Notification daemon
-├── lockscreen/     # PAM lock screen surface
-├── sdk/            # Plugin SDK & capability headers
-├── protocols/      # Custom Wayland XML protocols
-├── shared/         # Common C++ libraries & memory pools
-├── docs/           # Engineering documentation (00–21)
-├── tests/          # Test suites (unit, integration, perf, fuzz)
-└── tools/          # Diagnostics CLI (tinexus-diag) & build scripts
-```
-
----
-
 ## License
 
 Tinexus Platform is dual-licensed:
@@ -136,15 +98,3 @@ Tinexus Platform is dual-licensed:
 - SDKs, protocols, and shared libraries: **Apache-2.0**
 
 See [LICENSE](LICENSE) for details.
-
----
-
-## Status
-
-> **📋 ARCHITECTURE FREEZE v1.1 COMPLETE**  
-> All 22 documentation files (README + docs 00–21) are frozen.  
-> Phase 2: Implementation begins with the monorepo skeleton & `shared/` library.
-
----
-
-*"We are building it."*
