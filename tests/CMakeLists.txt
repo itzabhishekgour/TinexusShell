@@ -336,3 +336,25 @@ target_link_libraries(integration_test_monitor PRIVATE
 )
 
 add_test(NAME integration_test_monitor COMMAND integration_test_monitor)
+
+add_executable(integration_test_login
+    integration/test_login.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/pam_authenticator.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/session_launcher.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/login_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/login_view.cpp
+    ${CMAKE_SOURCE_DIR}/src/login/login_controller.cpp
+)
+
+target_include_directories(integration_test_login PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/login/include
+)
+
+target_link_libraries(integration_test_login PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_login COMMAND integration_test_login)
