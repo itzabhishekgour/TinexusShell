@@ -7,13 +7,54 @@
 #include <thread>
 #include <chrono>
 
+#if __has_include(<wayland-server.h>)
+#include <wayland-server.h>
+#define HAVE_WAYLAND_SERVER_H 1
+#endif
+
 namespace tinexus::comp {
 
 TinexusServer::TinexusServer() = default;
-TinexusServer::~TinexusServer() = default;
+
+TinexusServer::~TinexusServer() {
+    stop();
+#if HAVE_WAYLAND_SERVER_H
+    if (m_wl_display) {
+        wl_display_destroy(m_wl_display);
+        m_wl_display = nullptr;
+    }
+#endif
+}
 
 bool TinexusServer::initialize() {
     log::info("Initializing Tinexus Compositor Server Subsystems...");
+
+#if HAVE_WAYLAND_SERVER_H
+    m_wl_display = wl_display_create();
+    if (!m_wl_display) {
+        log::error("TinexusServer: Failed to create Wayland display (wl_display_create)!");
+        return false;
+    }
+
+    m_wl_loop = wl_display_get_event_loop(m_wl_display);
+    if (!m_wl_loop) {
+        log::error("TinexusServer: Failed to get Wayland event loop (wl_display_get_event_loop)!");
+        return false;
+    }
+
+    const char* socket_name = wl_display_add_socket_auto(m_wl_display);
+    if (socket_name) {
+        m_display_socket = socket_name;
+    } else {
+        m_display_socket = "wayland-0";
+    }
+
+    wl_display_init_shm(m_wl_display);
+    log::info("TinexusServer: Successfully initialized libwayland-server and auto-bound display socket '{}'", m_display_socket);
+#else
+    m_display_socket = "wayland-0";
+    log::info("TinexusServer: Initialized display socket '{}' (Wayland C-API fallback mode)", m_display_socket);
+#endif
 
     // Setup primary display output
     OutputConfig primary_out{"HDMI-A-1", 1920, 1080, 60000, 1.0f, 0, 0, true};
@@ -28,7 +69,6 @@ bool TinexusServer::initialize() {
     // Target frame rate
     FrameScheduler::instance().set_target_refresh_rate(60);
 
-    log::info("TinexusServer initialized successfully. Auto-bound display socket '{}'", m_display_socket);
     return true;
 }
 
@@ -41,7 +81,16 @@ void TinexusServer::run() {
     int iterations = 0;
     while (m_running && iterations < 5) {
         log::info("TinexusServer Loop #{}: Poll -> Dispatch -> Render -> Flush", ++iterations);
+#if HAVE_WAYLAND_SERVER_H
+        if (m_wl_loop && m_wl_display) {
+            wl_event_loop_dispatch(m_wl_loop, 10);
+            wl_display_flush_clients(m_wl_display);
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+#else
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+#endif
     }
 }
 

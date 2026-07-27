@@ -1,3 +1,6 @@
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(WAYLAND_SERVER wayland-server)
+
 add_executable(tinexus-comp
     main.cpp
     server/server.cpp
@@ -32,12 +35,14 @@ target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/animation/include
     ${CMAKE_CURRENT_SOURCE_DIR}/input/include
     ${CMAKE_CURRENT_SOURCE_DIR}/surface/include
+    ${WAYLAND_SERVER_INCLUDE_DIRS}
 )
 
 target_link_libraries(tinexus-comp PRIVATE
     tinexus_common
     tinexus_warnings
     tinexus_sanitizers
+    ${WAYLAND_SERVER_LIBRARIES}
 )
 
 install(TARGETS tinexus-comp RUNTIME DESTINATION bin)

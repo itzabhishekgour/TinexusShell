@@ -34,7 +34,7 @@ void test_surface_tree_and_window_ids() {
 void test_wayland_compositor_server_session() {
     tinexus::comp::TinexusServer server;
     assert(server.initialize());
-    assert(server.wayland_display() == "wayland-0");
+    assert(!server.wayland_display().empty());
 
     server.run();
     server.stop();

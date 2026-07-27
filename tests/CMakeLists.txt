@@ -1,4 +1,6 @@
 find_package(SQLite3 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(WAYLAND_SERVER wayland-server)
 
 add_executable(unit_test_common
     unit/test_common.cpp
@@ -537,6 +539,7 @@ target_include_directories(integration_test_wayland_session PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/input/include
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+    ${WAYLAND_SERVER_INCLUDE_DIRS}
 )
 
 target_link_libraries(integration_test_wayland_session PRIVATE
@@ -544,6 +547,7 @@ target_link_libraries(integration_test_wayland_session PRIVATE
     tinexus_common
     tinexus_warnings
     tinexus_sanitizers
+    ${WAYLAND_SERVER_LIBRARIES}
 )
 
 add_test(NAME integration_test_wayland_session COMMAND integration_test_wayland_session)
