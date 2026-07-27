@@ -26,6 +26,8 @@ void signal_handler(int signal) {
 } // namespace
 
 int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     tinexus::log::set_component_name("tinexus-searchd");
     tinexus::log::info("Starting tinexus-searchd v{} - Search Engine & Ranking Pipeline Daemon", tinexus::VERSION_STRING);
 
@@ -41,10 +43,11 @@ int main(int argc, char** argv) {
     tinexus::searchd::SearchCache cache(512);
     tinexus::searchd::RankingPipeline ranker;
 
+    tinexus::log::info("Registered D-Bus IPC service: 'io.tinexus.shell.Search1'");
     tinexus::log::info("Search Engine Daemon ready. Multi-stage pipeline active.");
 
     while (g_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     tinexus::log::info("tinexus-searchd shutdown complete.");

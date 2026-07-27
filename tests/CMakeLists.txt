@@ -1017,3 +1017,67 @@ target_link_libraries(smoke_output_layout PRIVATE
 )
 
 add_test(NAME smoke_output_layout COMMAND smoke_output_layout)
+
+# Milestone v0.4.0 Phase C/D Smoke Test Suites
+add_executable(smoke_multi_output
+    smoke/output/test_smoke_multi_output.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/output/output_layout.cpp
+    ${CMAKE_SOURCE_DIR}/src/wallpaper/wallpaper_provider.cpp
+    ${CMAKE_SOURCE_DIR}/src/panel/panel_bar.cpp
+)
+
+target_include_directories(smoke_multi_output PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/output/include
+    ${CMAKE_SOURCE_DIR}/src/wallpaper/include
+    ${CMAKE_SOURCE_DIR}/src/panel/include
+)
+
+target_link_libraries(smoke_multi_output PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_multi_output COMMAND smoke_multi_output)
+
+add_executable(smoke_panel_exclusive
+    smoke/surface/test_smoke_panel_exclusive.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/exclusive_zone_calculator.cpp
+    ${CMAKE_SOURCE_DIR}/src/panel/panel_bar.cpp
+)
+
+target_include_directories(smoke_panel_exclusive PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+    ${CMAKE_SOURCE_DIR}/src/panel/include
+)
+
+target_link_libraries(smoke_panel_exclusive PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_panel_exclusive COMMAND smoke_panel_exclusive)
+
+add_executable(smoke_notification_overlay
+    smoke/lifecycle/test_smoke_notification_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/layer_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+)
+
+target_include_directories(smoke_notification_overlay PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/render/include
+)
+
+target_link_libraries(smoke_notification_overlay PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_notification_overlay COMMAND smoke_notification_overlay)
