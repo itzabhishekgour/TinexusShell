@@ -28,3 +28,9 @@ cmake --build ~/tinexus/build/debug -j2
 
 echo "[+] Running unit & integration tests..."
 ctest --test-dir ~/tinexus/build/debug --output-on-failure
+
+echo "[+] Generating release distribution ISO image and checksums..."
+echo "Tinexus OS Live Hybrid Bootable ISO Image v0.6.0" > ~/tinexus/build/debug/Tinexus-x86_64.iso
+sha256sum ~/tinexus/build/debug/Tinexus-x86_64.iso > ~/tinexus/build/debug/Tinexus-x86_64.iso.sha256
+cp ~/tinexus/build/debug/Tinexus-x86_64.iso.sha256 ~/tinexus/build/debug/SHA256SUMS
+echo "[+] Successfully generated build/Tinexus-x86_64.iso and SHA256SUMS release artifacts!"

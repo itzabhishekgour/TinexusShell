@@ -25,6 +25,7 @@ add_executable(tinexus-comp
     input/keymap_engine.cpp
     input/interaction_controller.cpp
     input/seat_manager.cpp
+    input/udev_monitor.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_rules.cpp

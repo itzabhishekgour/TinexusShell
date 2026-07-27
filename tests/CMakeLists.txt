@@ -1281,3 +1281,63 @@ target_link_libraries(smoke_renderer_fallback PRIVATE
 )
 
 add_test(NAME smoke_renderer_fallback COMMAND smoke_renderer_fallback)
+
+# Milestone v0.6CD Hardware Discovery & Distribution Stack Smoke Test Suites
+add_executable(smoke_udev_hotplug
+    smoke/input/test_smoke_udev_hotplug.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/udev_monitor.cpp
+)
+target_include_directories(smoke_udev_hotplug PRIVATE ${CMAKE_SOURCE_DIR}/src/comp/input/include)
+target_link_libraries(smoke_udev_hotplug PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
+add_test(NAME smoke_udev_hotplug COMMAND smoke_udev_hotplug)
+
+add_executable(smoke_pkg_manager
+    smoke/pkg/test_smoke_pkg_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/package_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/package_database.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/transaction_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/dependency_solver.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/crypto_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/pkg/package_manifest.cpp
+)
+target_include_directories(smoke_pkg_manager PRIVATE ${CMAKE_SOURCE_DIR}/src/pkg/include)
+target_link_libraries(smoke_pkg_manager PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
+add_test(NAME smoke_pkg_manager COMMAND smoke_pkg_manager)
+
+add_executable(smoke_installer_partition
+    smoke/installer/test_smoke_installer_partition.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/install_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/disk_inspector.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/partition_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/squashfs_extractor.cpp
+    ${CMAKE_SOURCE_DIR}/src/installer/bootloader_config.cpp
+)
+target_include_directories(smoke_installer_partition PRIVATE ${CMAKE_SOURCE_DIR}/src/installer/include)
+target_link_libraries(smoke_installer_partition PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
+add_test(NAME smoke_installer_partition COMMAND smoke_installer_partition)
+
+add_executable(smoke_iso_builder
+    smoke/iso/test_smoke_iso_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/iso_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/rootfs_stager.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/initramfs_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/squashfs_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/iso/boot_config.cpp
+)
+target_include_directories(smoke_iso_builder PRIVATE ${CMAKE_SOURCE_DIR}/src/iso/include)
+target_link_libraries(smoke_iso_builder PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
+add_test(NAME smoke_iso_builder COMMAND smoke_iso_builder)
+
+add_executable(smoke_liveusb_writer
+    smoke/liveusb/test_smoke_liveusb_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/liveusb_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/device_detector.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/iso_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/raw_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/verification.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/progress_tracker.cpp
+    ${CMAKE_SOURCE_DIR}/src/liveusb/persistence_mgr.cpp
+)
+target_include_directories(smoke_liveusb_writer PRIVATE ${CMAKE_SOURCE_DIR}/src/liveusb/include)
+target_link_libraries(smoke_liveusb_writer PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
+add_test(NAME smoke_liveusb_writer COMMAND smoke_liveusb_writer)
