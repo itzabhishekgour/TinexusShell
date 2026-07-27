@@ -33,4 +33,8 @@ echo "[+] Generating release distribution ISO image and checksums..."
 echo "Tinexus OS Live Hybrid Bootable ISO Image v0.6.0" > ~/tinexus/build/debug/Tinexus-x86_64.iso
 sha256sum ~/tinexus/build/debug/Tinexus-x86_64.iso > ~/tinexus/build/debug/Tinexus-x86_64.iso.sha256
 cp ~/tinexus/build/debug/Tinexus-x86_64.iso.sha256 ~/tinexus/build/debug/SHA256SUMS
-echo "[+] Successfully generated build/Tinexus-x86_64.iso and SHA256SUMS release artifacts!"
+
+mkdir -p "/mnt/e/Tinu's Technology/Tinexus Manager/build"
+cp ~/tinexus/build/debug/Tinexus-x86_64.iso "/mnt/e/Tinu's Technology/Tinexus Manager/build/"
+cp ~/tinexus/build/debug/SHA256SUMS "/mnt/e/Tinu's Technology/Tinexus Manager/build/"
+echo "[+] Successfully generated build/Tinexus-x86_64.iso and SHA256SUMS release artifacts in project workspace!"
