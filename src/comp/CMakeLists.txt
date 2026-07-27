@@ -15,6 +15,10 @@ add_executable(tinexus-comp
     surface/buffer_manager.cpp
     surface/frame_callback.cpp
     surface/resource_cleanup.cpp
+    window/scene_node.cpp
+    window/window_node.cpp
+    window/xdg_toplevel_node.cpp
+    window/scene_graph.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_manager.cpp

@@ -71,6 +71,10 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
@@ -516,6 +520,10 @@ add_executable(integration_test_wayland_session
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
@@ -533,9 +541,9 @@ target_include_directories(integration_test_wayland_session PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/server/include
     ${CMAKE_SOURCE_DIR}/src/comp/backend/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
-    ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/focus/include
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/include
     ${CMAKE_SOURCE_DIR}/src/comp/shell/include
@@ -653,6 +661,10 @@ add_executable(integration_test_first_client
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
@@ -675,10 +687,10 @@ target_include_directories(integration_test_first_client PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/server/include
     ${CMAKE_SOURCE_DIR}/src/comp/backend/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
-    ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/focus/include
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/include
     ${CMAKE_SOURCE_DIR}/src/comp/shell/include
@@ -716,3 +728,27 @@ target_link_libraries(integration_test_pixman_renderer PRIVATE
 )
 
 add_test(NAME integration_test_pixman_renderer COMMAND integration_test_pixman_renderer)
+
+# Milestone v0.2.3 Window Management & Scene Graph Test Suite
+add_executable(integration_test_scene_graph
+    integration/test_scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+)
+
+target_include_directories(integration_test_scene_graph PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+)
+
+target_link_libraries(integration_test_scene_graph PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_scene_graph COMMAND integration_test_scene_graph)
