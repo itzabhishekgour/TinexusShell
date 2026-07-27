@@ -75,9 +75,9 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/workspace_manager.cpp
@@ -524,9 +524,9 @@ add_executable(integration_test_wayland_session
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/workspace_manager.cpp
@@ -665,14 +665,15 @@ add_executable(integration_test_first_client
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/frame_callback.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/surface/resource_cleanup.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/xdg_shell_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/workspace_manager.cpp
@@ -752,3 +753,82 @@ target_link_libraries(integration_test_scene_graph PRIVATE
 )
 
 add_test(NAME integration_test_scene_graph COMMAND integration_test_scene_graph)
+
+# Milestone v0.2.4 First Real Wayland Application Test Suites
+add_executable(integration_test_xdg_shell
+    integration/test_xdg_shell.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/xdg_shell_manager.cpp
+)
+
+target_include_directories(integration_test_xdg_shell PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+)
+
+target_link_libraries(integration_test_xdg_shell PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME integration_test_xdg_shell COMMAND integration_test_xdg_shell)
+
+add_executable(integration_test_real_client
+    integration/test_real_client.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/server/server.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/server/global_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/server/surface_tree.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/backend/backend.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/frame_callback.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/resource_cleanup.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/xdg_shell_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/workspace/workspace_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/shell/shell_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/frame_scheduler.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/input/shortcut_engine.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_manager.cpp
+)
+
+target_include_directories(integration_test_real_client PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/server/include
+    ${CMAKE_SOURCE_DIR}/src/comp/backend/include
+    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
+    ${CMAKE_SOURCE_DIR}/src/comp/output/include
+    ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
+    ${CMAKE_SOURCE_DIR}/src/comp/focus/include
+    ${CMAKE_SOURCE_DIR}/src/comp/workspace/include
+    ${CMAKE_SOURCE_DIR}/src/comp/shell/include
+    ${CMAKE_SOURCE_DIR}/src/comp/render/include
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/include
+    ${CMAKE_SOURCE_DIR}/src/comp/input/include
+    ${WAYLAND_SERVER_INCLUDE_DIRS}
+)
+
+target_link_libraries(integration_test_real_client PRIVATE
+    tinexus-sdk
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+    ${WAYLAND_SERVER_LIBRARIES}
+)
+
+add_test(NAME integration_test_real_client COMMAND integration_test_real_client)

@@ -1,87 +1,81 @@
 #include "comp/window/window_manager.hpp"
 #include "comp/focus/focus_manager.hpp"
-#include "comp/workspace/workspace_manager.hpp"
 #include "common/logger.hpp"
-#include <algorithm>
 
 namespace tinexus::comp {
 
-WindowManager& WindowManager::instance() noexcept {
+WindowManager& WindowManager::instance() {
     static WindowManager s_instance;
     return s_instance;
 }
 
-uint64_t WindowManager::register_window(uint32_t pid, const std::string& app_id, const std::string& title) {
-    uint64_t id = m_next_id++;
-    uint32_t active_ws = WorkspaceManager::instance().active_workspace_id();
-
-    WindowInfo info{id, pid, app_id, title, 100, 100, 800, 600, false, false, false, active_ws};
-    m_windows.push_back(info);
-
-    WorkspaceManager::instance().add_window_to_workspace(active_ws, id);
-    log::info("Registered window ID: {}, app_id: '{}', title: '{}', workspace: {}", id, app_id, title, active_ws);
-
-    FocusManager::instance().set_focus(FocusTargetType::Window, id, app_id);
-    return id;
+std::shared_ptr<WindowNode> WindowManager::create_window(uint64_t surface_id, const std::string& app_id) {
+    auto win = std::make_shared<WindowNode>(surface_id, app_id);
+    m_windows[surface_id] = win;
+    log::info("WindowManager: Created managed window for Surface #{} ({})", surface_id, app_id);
+    return win;
 }
 
-bool WindowManager::unregister_window(uint64_t window_id) {
-    auto it = std::find_if(m_windows.begin(), m_windows.end(), [window_id](const WindowInfo& w) {
-        return w.window_id == window_id;
-    });
+bool WindowManager::map_window(uint64_t surface_id, SceneGraph& scene_graph) {
+    auto win = find_window(surface_id);
+    if (!win) return false;
 
-    if (it != m_windows.end()) {
-        WorkspaceManager::instance().remove_window_from_workspace(window_id);
-        log::info("Unregistered window ID: {}", window_id);
-        m_windows.erase(it);
-        return true;
-    }
-
-    return false;
+    win->visible = true;
+    scene_graph.add_node(win);
+    log::info("WindowManager: Mapped window #{} into SceneGraph", surface_id);
+    return true;
 }
 
-std::optional<WindowInfo> WindowManager::get_window(uint64_t window_id) const {
-    for (const auto& w : m_windows) {
-        if (w.window_id == window_id) return w;
-    }
-    return std::nullopt;
+bool WindowManager::unmap_window(uint64_t surface_id, SceneGraph& scene_graph) {
+    auto win = find_window(surface_id);
+    if (!win) return false;
+
+    win->visible = false;
+    scene_graph.remove_node(surface_id);
+    m_windows.erase(surface_id);
+    log::info("WindowManager: Unmapped and removed window #{} from SceneGraph", surface_id);
+    return true;
 }
 
-std::vector<WindowInfo> WindowManager::get_all_windows() const {
-    return m_windows;
+std::shared_ptr<WindowNode> WindowManager::find_window(uint64_t surface_id) const {
+    auto it = m_windows.find(surface_id);
+    return (it != m_windows.end()) ? it->second : nullptr;
 }
 
-void WindowManager::set_geometry(uint64_t window_id, int x, int y, int width, int height) {
-    for (auto& w : m_windows) {
-        if (w.window_id == window_id) {
-            w.x = x;
-            w.y = y;
-            w.width = width;
-            w.height = height;
-            log::debug("Window ID: {} geometry updated: {}x{} @ ({},{})", window_id, width, height, x, y);
-            break;
-        }
-    }
+uint64_t WindowManager::register_window(uint64_t surface_id, const std::string& app_id, const std::string& title) {
+    auto win = create_window(surface_id, app_id);
+    win->toplevel.set_title(title);
+    FocusManager::instance().set_focus(FocusTargetType::Window, surface_id, app_id);
+    return surface_id;
 }
 
-void WindowManager::set_fullscreen(uint64_t window_id, bool fullscreen) {
-    for (auto& w : m_windows) {
-        if (w.window_id == window_id) {
-            w.is_fullscreen = fullscreen;
-            log::info("Window ID: {} fullscreen set to {}", window_id, fullscreen);
-            break;
-        }
+void WindowManager::unregister_window(uint64_t surface_id) {
+    m_windows.erase(surface_id);
+}
+
+void WindowManager::set_geometry(uint64_t surface_id, int32_t x, int32_t y, uint32_t width, uint32_t height) {
+    auto win = find_window(surface_id);
+    if (win) {
+        win->x = x;
+        win->y = y;
+        win->width = static_cast<int32_t>(width);
+        win->height = static_cast<int32_t>(height);
     }
 }
 
-void WindowManager::set_minimized(uint64_t window_id, bool minimized) {
-    for (auto& w : m_windows) {
-        if (w.window_id == window_id) {
-            w.is_minimized = minimized;
-            log::info("Window ID: {} minimized set to {}", window_id, minimized);
-            break;
-        }
-    }
+std::optional<WindowInfo> WindowManager::get_window(uint64_t surface_id) const {
+    auto win = find_window(surface_id);
+    if (!win) return std::nullopt;
+
+    WindowInfo info;
+    info.surface_id = surface_id;
+    info.app_id = win->toplevel.app_id();
+    info.title = win->toplevel.title();
+    info.x = win->x;
+    info.y = win->y;
+    info.width = static_cast<uint32_t>(win->width);
+    info.height = static_cast<uint32_t>(win->height);
+    return info;
 }
 
 } // namespace tinexus::comp

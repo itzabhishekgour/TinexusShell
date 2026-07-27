@@ -29,12 +29,13 @@ struct BufferState {
 
 class SurfaceState {
 public:
+    SurfaceState() = default;
     SurfaceState(WindowID id, const std::string& app_id = "default");
     ~SurfaceState() = default;
 
     WindowID id{0};
-    std::string app_id;
-    std::string title;
+    std::string app_id{"default"};
+    std::string title{"Untitled"};
 
     struct wl_resource* wl_surface{nullptr};
     struct wl_resource* xdg_surface{nullptr};
