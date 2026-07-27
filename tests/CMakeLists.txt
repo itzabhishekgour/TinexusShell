@@ -71,6 +71,7 @@ add_executable(unit_test_comp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
@@ -523,6 +524,7 @@ add_executable(integration_test_wayland_session
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
@@ -667,6 +669,7 @@ add_executable(integration_test_first_client
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
@@ -725,10 +728,12 @@ add_executable(integration_test_pixman_renderer
     integration/test_pixman_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
 )
 
 target_include_directories(integration_test_pixman_renderer PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/render/include
 )
 
 target_link_libraries(integration_test_pixman_renderer PRIVATE
@@ -748,11 +753,13 @@ add_executable(integration_test_scene_graph
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
 )
 
 target_include_directories(integration_test_scene_graph PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/render/include
 )
 
 target_link_libraries(integration_test_scene_graph PRIVATE
@@ -792,6 +799,7 @@ add_executable(integration_test_real_client
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
     ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
@@ -974,3 +982,38 @@ target_link_libraries(smoke_surface_lifecycle PRIVATE
 )
 
 add_test(NAME smoke_surface_lifecycle COMMAND smoke_surface_lifecycle)
+
+# Milestone v0.4.0 Phase B Smoke Test Suites
+add_executable(smoke_damage_tracker
+    smoke/render/test_smoke_damage_tracker.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
+)
+
+target_include_directories(smoke_damage_tracker PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/render/include
+)
+
+target_link_libraries(smoke_damage_tracker PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_damage_tracker COMMAND smoke_damage_tracker)
+
+add_executable(smoke_output_layout
+    smoke/output/test_smoke_output_layout.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/output/output_layout.cpp
+)
+
+target_include_directories(smoke_output_layout PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/output/include
+)
+
+target_link_libraries(smoke_output_layout PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME smoke_output_layout COMMAND smoke_output_layout)

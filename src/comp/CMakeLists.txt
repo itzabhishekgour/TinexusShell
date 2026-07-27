@@ -38,6 +38,9 @@ add_executable(tinexus-comp
     surface/exclusive_zone_calculator.cpp
     server/protocol_dispatcher.cpp
     window/layer_manager.cpp
+    render/damage_tracker.cpp
+    output/output_layout.cpp
+    renderer/renderer_factory.cpp
 )
 
 target_include_directories(tinexus-comp PRIVATE

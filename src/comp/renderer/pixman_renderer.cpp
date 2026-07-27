@@ -17,7 +17,13 @@ bool PixmanRenderer::initialize(uint32_t width, uint32_t height) {
 
 void PixmanRenderer::begin_frame() {
     m_in_frame = true;
+    m_active_damage.clear();
     std::fill(m_canvas.begin(), m_canvas.end(), 0xFF000000); // Clear background
+}
+
+void PixmanRenderer::damage_region(const DamageRegion& region) {
+    m_active_damage = region;
+    log::info("PixmanRenderer: Target damage region updated ({} damage boxes)", region.boxes().size());
 }
 
 void PixmanRenderer::compose_surface(RenderSurface& surface) {
