@@ -9,6 +9,13 @@
 
 namespace tinexus::comp {
 
+enum class GpuVendor {
+    Intel,
+    Amd,
+    Nvidia,
+    Unknown
+};
+
 struct DrmConnectorInfo {
     uint32_t connector_id{0};
     std::string name;
@@ -38,6 +45,7 @@ public:
 
     [[nodiscard]] std::string type_name() const noexcept { return "DrmBackend"; }
     [[nodiscard]] bool is_atomic_supported() const noexcept { return m_atomic_supported; }
+    [[nodiscard]] GpuVendor gpu_vendor() const noexcept { return m_gpu_vendor; }
     [[nodiscard]] const std::vector<DrmConnectorInfo>& connectors() const noexcept { return m_connectors; }
 
     [[nodiscard]] GbmBuffer allocate_gbm_buffer(uint32_t width, uint32_t height);
@@ -48,6 +56,7 @@ private:
     int m_fd{-1};
     bool m_atomic_supported{true};
     bool m_initialized{false};
+    GpuVendor m_gpu_vendor{GpuVendor::Intel};
     std::vector<DrmConnectorInfo> m_connectors;
 };
 

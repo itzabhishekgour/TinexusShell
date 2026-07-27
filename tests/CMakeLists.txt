@@ -1341,3 +1341,16 @@ add_executable(smoke_liveusb_writer
 target_include_directories(smoke_liveusb_writer PRIVATE ${CMAKE_SOURCE_DIR}/src/liveusb/include)
 target_link_libraries(smoke_liveusb_writer PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
 add_test(NAME smoke_liveusb_writer COMMAND smoke_liveusb_writer)
+
+# Milestone v1.0-RC Release Candidate Smoke Test Suite
+add_executable(smoke_release_candidate
+    smoke/release/test_smoke_release_candidate.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/backend/drm_backend.cpp
+    ${CMAKE_SOURCE_DIR}/src/session/session_manager.cpp
+)
+target_include_directories(smoke_release_candidate PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/backend/include
+    ${CMAKE_SOURCE_DIR}/src/session/include
+)
+target_link_libraries(smoke_release_candidate PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
+add_test(NAME smoke_release_candidate COMMAND smoke_release_candidate)

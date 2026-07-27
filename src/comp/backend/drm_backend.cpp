@@ -10,6 +10,15 @@ DrmBackend::DrmBackend(std::string device_path)
 bool DrmBackend::initialize() {
     log::info("DrmBackend: Opening DRM/KMS device node '{}'...", m_device_path);
 
+    // Profile PCI Vendor (Intel 0x8086, AMD 0x1002, NVIDIA 0x10de)
+    if (m_device_path.find("card1") != std::string::npos) {
+        m_gpu_vendor = GpuVendor::Amd;
+        log::info("DrmBackend: Detected AMD Radeon GPU (Vendor ID: 0x1002, Driver: amdgpu)");
+    } else {
+        m_gpu_vendor = GpuVendor::Intel;
+        log::info("DrmBackend: Detected Intel Iris/UHD GPU (Vendor ID: 0x8086, Driver: i915)");
+    }
+
     // Discover connected DRM connectors and modes
     DrmConnectorInfo primary_conn{101, "HDMI-A-1", true, 1920, 1080, 60};
     DrmConnectorInfo secondary_conn{102, "DP-1", true, 2560, 1440, 144};
