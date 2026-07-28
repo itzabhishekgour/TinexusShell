@@ -11,6 +11,7 @@ add_executable(tinexus-indexerd
 target_include_directories(tinexus-indexerd PRIVATE
     include
 )
+set_target_properties(tinexus-indexerd PROPERTIES NO_SYSTEM_FROM_IMPORTED ON)
 
 target_link_libraries(tinexus-indexerd PRIVATE
     tinexus_common

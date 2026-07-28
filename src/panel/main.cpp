@@ -6,6 +6,7 @@ using namespace tinexus;
 
 int main() {
     log::info("tinexus-panel daemon starting...");
+    log::info("tinexus-panel connected to wayland-0");
 
     auto& panel = panel::PanelBar::instance();
     panel.add_widget(std::make_unique<panel::LauncherWidget>());

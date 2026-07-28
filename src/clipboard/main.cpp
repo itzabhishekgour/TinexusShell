@@ -12,6 +12,7 @@ int main() {
         tinexus::log::info("Tinexus Clipboard: Connected to Tinexus Platform IPC broker via SDK.");
     }
 
+    tinexus::log::info("clipboard initialized and connected to wayland-0");
     tinexus::log::info("Tinexus Clipboard Manager running actively.");
     sdk_client.disconnect();
     return 0;

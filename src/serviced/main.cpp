@@ -7,7 +7,10 @@
 #include "serviced/heartbeat_watchdog.hpp"
 #include <iostream>
 #include <csignal>
+#include <cstdlib>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <filesystem>
 
 namespace {
 tinexus::serviced::RuntimeControlSocket* g_socket{nullptr};
@@ -38,6 +41,19 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGCHLD, signal_handler);
+
+    // Basic Environment Setup for PID 1 Session
+    setenv("HOME", "/root", 1);
+    setenv("USER", "root", 1);
+    setenv("LOGNAME", "root", 1);
+    setenv("SHELL", "/bin/sh", 1);
+    setenv("PATH", "/usr/bin:/usr/sbin:/bin:/sbin", 1);
+    setenv("XDG_RUNTIME_DIR", "/run/user/0", 1);
+    setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/bus", 1);
+
+    // Ensure XDG_RUNTIME_DIR exists with correct permissions (0700)
+    std::filesystem::create_directories("/run/user/0");
+    chmod("/run/user/0", 0700);
 
     // Default Platform Supervision Graph
     tinexus::serviced::DependencyGraph graph;
@@ -79,6 +95,27 @@ int main(int argc, char** argv) {
     launcher.hard_dependencies = {"comp", "searchd"};
     launcher.critical = false;
     graph.add_service(launcher);
+
+    tinexus::serviced::DaemonSpec panel;
+    panel.id = "panel";
+    panel.executable = "tinexus-panel";
+    panel.hard_dependencies = {"comp", "searchd"};
+    panel.critical = false;
+    graph.add_service(panel);
+
+    tinexus::serviced::DaemonSpec notif;
+    notif.id = "notifications";
+    notif.executable = "tinexus-notifications";
+    notif.hard_dependencies = {"ipcd"};
+    notif.critical = false;
+    graph.add_service(notif);
+
+    tinexus::serviced::DaemonSpec clip;
+    clip.id = "clipboard";
+    clip.executable = "tinexus-clipboard";
+    clip.hard_dependencies = {"ipcd"};
+    clip.critical = false;
+    graph.add_service(clip);
 
     if (graph.has_cycle()) {
         tinexus::log::error("FATAL: Circular dependency detected in supervision tree!");

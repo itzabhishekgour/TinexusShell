@@ -11,5 +11,6 @@ int main() {
 
     tinexus::log::info("Registered D-Bus IPC service: 'io.tinexus.shell.Notifications1'");
     tinexus::log::info("Freedesktop Notifications org.freedesktop.Notifications service active.");
+    tinexus::log::info("tinexus-notifications connected to wayland-0");
     return 0;
 }

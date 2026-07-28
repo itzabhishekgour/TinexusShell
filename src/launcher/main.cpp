@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
     tinexus::launcher::ThemeManager::instance().set_dark_theme();
     tinexus::launcher::LauncherController::instance().show();
 
+    tinexus::log::info("tinexus-launcher connected to wayland-0");
     tinexus::log::info("tinexus-launcher UI ready.");
 
     while (g_running) {

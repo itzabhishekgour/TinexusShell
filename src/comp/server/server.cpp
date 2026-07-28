@@ -78,9 +78,7 @@ void TinexusServer::run() {
     
     // Multi-stage single-threaded compositor scheduling loop:
     // 1. Poll -> 2. Dispatch -> 3. Input -> 4. Animation -> 5. Render -> 6. Frame Callbacks -> 7. Flush
-    int iterations = 0;
-    while (m_running && iterations < 5) {
-        log::info("TinexusServer Loop #{}: Poll -> Dispatch -> Render -> Flush", ++iterations);
+    while (m_running) {
 #if HAVE_WAYLAND_SERVER_H
         if (m_wl_loop && m_wl_display) {
             wl_event_loop_dispatch(m_wl_loop, 10);
