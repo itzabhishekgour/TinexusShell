@@ -10,8 +10,13 @@ namespace tinexus::comp {
 
 class SeatManager {
 public:
-    SeatManager() = default;
-    ~SeatManager() = default;
+    static SeatManager& instance() {
+        static SeatManager inst;
+        return inst;
+    }
+
+    SeatManager(const SeatManager&) = delete;
+    SeatManager& operator=(const SeatManager&) = delete;
 
     bool bind_seat(const std::string& seat_name = "seat0");
 
@@ -30,6 +35,9 @@ public:
     [[nodiscard]] bool seat_bound() const noexcept { return m_seat_bound; }
 
 private:
+    SeatManager() = default;
+    ~SeatManager() = default;
+
     std::string m_seat_name{"seat0"};
     bool m_seat_bound{false};
     uint64_t m_focused_surface_id{0};

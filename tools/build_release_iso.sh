@@ -67,7 +67,7 @@ verify_env() {
 build_rootfs() {
     info "Building Tinexus root filesystem..."
     rm -rf "$ROOTFS_DIR" "$ISO_TREE" "$WORK_DIR"
-    mkdir -p "$ROOTFS_DIR"/{bin,sbin,lib,lib64,usr/{bin,sbin,lib},etc,var/{log,run},run,dev,proc,sys,tmp,mnt,newroot,live,root}
+    mkdir -p "$ROOTFS_DIR"/{bin,sbin,lib,lib64,usr/{bin,sbin,lib},etc,var/{log,run},run,dev,proc,sys,tmp,mnt,newroot,live,root,home}
     chmod 1777 "$ROOTFS_DIR/tmp"
 
     cat > "$ROOTFS_DIR/etc/os-release" << 'EOF'
@@ -104,6 +104,24 @@ EOF
     fi
     success "Staged $staged Tinexus ELF binaries and dependencies."
 
+    # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
+    mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin"
+    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
+    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
+
+    # Stage kmod and its dependencies so we can load kernel modules manually
+    info "Staging kmod for kernel module loading..."
+    if [ -f "/usr/bin/kmod" ]; then
+        cp -L "/usr/bin/kmod" "$ROOTFS_DIR/usr/bin/"
+        ln -sf kmod "$ROOTFS_DIR/usr/bin/modprobe"
+        ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+        done
+        ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+        done
+    fi
+
     if [ -f "$ROOTFS_DIR/usr/bin/tinexus-serviced" ]; then
         ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
     else
@@ -125,48 +143,89 @@ build_initramfs() {
     local supplied_initrd="$KERNEL_DIR/initramfs.img"
     export INITRAMFS_OUT="$ISO_TREE/boot/initramfs.img"
 
-    if [ -f "$supplied_initrd" ]; then
-        if ! file -b "$supplied_initrd" | grep -qiE "cpio|gzip|compress|Zstandard|XZ|LZ4"; then
-            fatal "$supplied_initrd is not a valid archive."
-        fi
-        cp "$supplied_initrd" "$INITRAMFS_OUT"
-    else
-        info "Building minimal cpio initramfs..."
-        local init_staging="$WORK_DIR/initramfs_staging"
-        mkdir -p "$init_staging"/{bin,sbin,dev,proc,sys,mnt,newroot,live}
+    info "Building minimal Tinexus cpio initramfs..."
+    local init_staging="$WORK_DIR/initramfs_staging"
+    mkdir -p "$init_staging"/{bin,sbin,dev,proc,sys,mnt,newroot,live}
 
-        if command -v busybox &>/dev/null; then
-            cp "$(command -v busybox)" "$init_staging/bin/busybox"
-            for cmd in sh cat ls mkdir mount umount mdev switch_root sleep; do ln -sf busybox "$init_staging/bin/$cmd" || true; done
-        else
-            cp "$(command -v sh || echo /bin/sh)" "$init_staging/bin/sh" || true
-        fi
+    local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
+    cp -L "$bb_bin" "$init_staging/bin/busybox"
+    for cmd in sh cat ls mkdir mount umount mdev switch_root sleep; do ln -sf busybox "$init_staging/bin/$cmd" || true; done
 
-        cat > "$init_staging/init" << 'EOINIT'
+    (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+        [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
+    done
+    (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+        [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
+    done
+
+    mkdir -p "$init_staging/lib/modules"
+    local kver="7.0.0-28-generic"
+    if [ -d "/lib/modules/$kver" ]; then
+        find "/lib/modules/$kver" -type f \( -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \) | while read -r mod; do
+            cp -L "$mod" "$init_staging/lib/modules/"
+        done
+        for compressed in "$init_staging/lib/modules"/*.zst; do
+            [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
+        done
+    fi
+
+    cat > "$init_staging/init" << 'EOINIT'
 #!/bin/sh
 /bin/mount -t proc proc /proc 2>/dev/null
 /bin/mount -t sysfs sysfs /sys 2>/dev/null
 /bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null || /bin/mdev -s 2>/dev/null
 
-echo "Tinexus: Searching for live rootfs..."
-for attempt in 1 2 3 4 5; do
-    for dev in /dev/sr0 /dev/sda /dev/sdb /dev/vda; do
-        [ -b "$dev" ] && /bin/mount -o ro "$dev" /mnt 2>/dev/null && break 2
+[ -c /dev/ttyS0 ] && exec >/dev/ttyS0 2>&1
+
+echo "Tinexus OS: Loading storage and graphics kernel modules..."
+[ -f /lib/modules/libahci.ko ] && insmod /lib/modules/libahci.ko || true
+[ -f /lib/modules/ahci.ko ] && insmod /lib/modules/ahci.ko || true
+[ -f /lib/modules/isofs.ko ] && insmod /lib/modules/isofs.ko || true
+[ -f /lib/modules/virtio_dma_buf.ko ] && insmod /lib/modules/virtio_dma_buf.ko || true
+[ -f /lib/modules/virtio-gpu.ko ] && insmod /lib/modules/virtio-gpu.ko || true
+[ -f /lib/modules/bochs.ko ] && insmod /lib/modules/bochs.ko || true
+for mod in /lib/modules/*.ko; do
+    [ -f "$mod" ] && insmod "$mod" 2>/dev/null
+done
+/bin/mdev -s 2>/dev/null
+
+echo "Tinexus OS: Searching for Live CD rootfs..."
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    /bin/mdev -s 2>/dev/null
+    for dev in /dev/sr0 /dev/sr1 /dev/sda /dev/sdb /dev/vda /dev/vdb /dev/sg0; do
+        if [ -b "$dev" ]; then
+            /bin/mount -o ro "$dev" /mnt 2>/dev/null
+            if [ -f /mnt/live/rootfs.squashfs ]; then
+                echo "Tinexus OS: Found rootfs on $dev!"
+                break 2
+            else
+                /bin/umount /mnt 2>/dev/null
+            fi
+        fi
     done
     sleep 1
 done
 
 if [ -f /mnt/live/rootfs.squashfs ]; then
+    echo "Tinexus OS: Mounting SquashFS rootfs..."
     /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
-    exec switch_root /newroot /sbin/init
+    /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
+    /bin/mount -t proc proc /newroot/proc 2>/dev/null || true
+    /bin/mount -t sysfs sysfs /newroot/sys 2>/dev/null || true
+    /bin/mount -t tmpfs tmpfs /newroot/run 2>/dev/null || true
+    /bin/mount -t tmpfs tmpfs /newroot/tmp 2>/dev/null || true
+    /bin/mount -t tmpfs tmpfs /newroot/var 2>/dev/null || true
+    /bin/mount -t tmpfs tmpfs /newroot/root 2>/dev/null || true
+    /bin/mount -t tmpfs tmpfs /newroot/home 2>/dev/null || true
+    echo "Tinexus OS: Switching to Tinexus Serviced Init..."
+    exec switch_root /newroot /usr/bin/tinexus-serviced
 else
-    echo "Tinexus: FATAL — rootfs.squashfs not found. Dropping to emergency shell."
+    echo "Tinexus OS: FATAL — rootfs.squashfs not found. Dropping to emergency shell."
     exec /bin/sh
 fi
 EOINIT
-        chmod 0755 "$init_staging/init"
-        (cd "$init_staging" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRAMFS_OUT")
-    fi
+    chmod 0755 "$init_staging/init"
+    (cd "$init_staging" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRAMFS_OUT")
     success "Initramfs ready: $(du -sh "$INITRAMFS_OUT" | cut -f1)"
 
     cp "$VMLINUZ" "$ISO_TREE/boot/vmlinuz"
@@ -185,7 +244,7 @@ insmod iso9660
 terminal_output gfxterm
 
 menuentry "Tinexus OS Live (Wayland Desktop)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs console=tty0 console=ttyS0,115200n8
     initrd  /boot/initramfs.img
 }
 

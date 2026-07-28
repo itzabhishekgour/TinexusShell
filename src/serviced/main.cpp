@@ -51,9 +51,22 @@ int main(int argc, char** argv) {
     setenv("XDG_RUNTIME_DIR", "/run/user/0", 1);
     setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/bus", 1);
 
+    // Wlroots compositor environment
+    // WLR_DRM_NO_ATOMIC: Disable DRM atomic commits — virtio-gpu (QEMU) does not
+    // support non-blocking atomic commits reliably, causing "Device or resource busy" errors.
+    // Legacy commit path (setcrtc/setplane) is stable in QEMU.
+    setenv("WLR_DRM_NO_ATOMIC", "1", 1);
+    setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
+    setenv("WLR_RENDERER", "pixman", 1);
+    setenv("LIBSEAT_BACKEND", "noop", 1);
+
     // Ensure XDG_RUNTIME_DIR exists with correct permissions (0700)
-    std::filesystem::create_directories("/run/user/0");
-    chmod("/run/user/0", 0700);
+    try {
+        std::filesystem::create_directories("/run/user/0");
+        chmod("/run/user/0", 0700);
+    } catch (const std::exception& e) {
+        tinexus::log::error("Failed to create /run/user/0: {}", e.what());
+    }
 
     // Default Platform Supervision Graph
     tinexus::serviced::DependencyGraph graph;
@@ -89,33 +102,12 @@ int main(int argc, char** argv) {
     graph.add_service(comp);
 
     // Level 4: UI Surfaces
-    tinexus::serviced::DaemonSpec launcher;
-    launcher.id = "launcher";
-    launcher.executable = "tinexus-launcher";
-    launcher.hard_dependencies = {"comp", "searchd"};
-    launcher.critical = false;
-    graph.add_service(launcher);
-
-    tinexus::serviced::DaemonSpec panel;
-    panel.id = "panel";
-    panel.executable = "tinexus-panel";
-    panel.hard_dependencies = {"comp", "searchd"};
-    panel.critical = false;
-    graph.add_service(panel);
-
-    tinexus::serviced::DaemonSpec notif;
-    notif.id = "notifications";
-    notif.executable = "tinexus-notifications";
-    notif.hard_dependencies = {"ipcd"};
-    notif.critical = false;
-    graph.add_service(notif);
-
-    tinexus::serviced::DaemonSpec clip;
-    clip.id = "clipboard";
-    clip.executable = "tinexus-clipboard";
-    clip.hard_dependencies = {"ipcd"};
-    clip.critical = false;
-    graph.add_service(clip);
+    tinexus::serviced::DaemonSpec shell;
+    shell.id = "shell";
+    shell.executable = "tinexus-shell";
+    shell.hard_dependencies = {"comp", "searchd"};
+    shell.critical = false;
+    graph.add_service(shell);
 
     if (graph.has_cycle()) {
         tinexus::log::error("FATAL: Circular dependency detected in supervision tree!");

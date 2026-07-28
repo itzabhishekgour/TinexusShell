@@ -32,8 +32,12 @@ int main(int argc, char** argv) {
 
     // XDG Cache directory setup
     const char* xdg_cache = std::getenv("XDG_CACHE_HOME");
-    fs::path db_dir = xdg_cache ? fs::path(xdg_cache) / "tinexus" : fs::path(std::getenv("HOME")) / ".cache" / "tinexus";
-    fs::create_directories(db_dir);
+    fs::path db_dir = xdg_cache ? fs::path(xdg_cache) / "tinexus" : fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") / ".cache" / "tinexus";
+    try {
+        fs::create_directories(db_dir);
+    } catch (const std::exception& e) {
+        tinexus::log::warn("Failed to create db dir {}: {}", db_dir.string(), e.what());
+    }
     fs::path db_path = db_dir / "index.db";
 
     tinexus::indexer::IndexDatabase db(db_path.string());
@@ -50,7 +54,11 @@ int main(int argc, char** argv) {
     const char* home = std::getenv("HOME");
     if (home) {
         fs::path user_app_dir = fs::path(home) / ".local" / "share" / "applications";
-        fs::create_directories(user_app_dir);
+        try {
+            fs::create_directories(user_app_dir);
+        } catch (const std::exception& e) {
+            tinexus::log::warn("Failed to create user app dir {}: {}", user_app_dir.string(), e.what());
+        }
         app_dirs.push_back(user_app_dir);
     }
 

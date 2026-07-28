@@ -18,7 +18,11 @@ RuntimeControlSocket::RuntimeControlSocket(ProcessManager& pm)
     : m_pm(pm) {
     uid_t uid = getuid();
     std::string dir = "/run/user/" + std::to_string(uid) + "/tinexus";
-    std::filesystem::create_directories(dir);
+    try {
+        std::filesystem::create_directories(dir);
+    } catch (const std::exception& e) {
+        log::error("Failed to create socket dir {}: {}", dir, e.what());
+    }
     m_socket_path = dir + "/runtime.sock";
 }
 

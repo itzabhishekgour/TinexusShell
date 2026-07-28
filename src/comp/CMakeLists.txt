@@ -1,12 +1,19 @@
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(WAYLAND_SERVER wayland-server)
+pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)
+pkg_check_modules(WLROOTS REQUIRED IMPORTED_TARGET wlroots-0.19)
+pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
+pkg_check_modules(VULKAN REQUIRED IMPORTED_TARGET vulkan)
+pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
+pkg_check_modules(PIXMAN REQUIRED IMPORTED_TARGET pixman-1)
 
 add_executable(tinexus-comp
     main.cpp
     server/server.cpp
     server/global_registry.cpp
     server/surface_tree.cpp
-    backend/backend.cpp
+    backend/headless_backend.cpp
+    backend/wlroots_backend.cpp
     backend/drm_backend.cpp
     renderer/renderer.cpp
     renderer/render_surface.cpp
@@ -26,6 +33,7 @@ add_executable(tinexus-comp
     input/interaction_controller.cpp
     input/seat_manager.cpp
     input/udev_monitor.cpp
+    output/output.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
     window/window_rules.cpp
@@ -63,14 +71,21 @@ target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/animation/include
     ${CMAKE_CURRENT_SOURCE_DIR}/input/include
     ${CMAKE_CURRENT_SOURCE_DIR}/surface/include
-    ${WAYLAND_SERVER_INCLUDE_DIRS}
 )
+
+add_compile_definitions(WLR_USE_UNSTABLE=1)
 
 target_link_libraries(tinexus-comp PRIVATE
     tinexus_common
     tinexus_warnings
     tinexus_sanitizers
-    ${WAYLAND_SERVER_LIBRARIES}
+    tinexus_protocols
+    PkgConfig::WAYLAND_SERVER
+    PkgConfig::WLROOTS
+    PkgConfig::DRM
+    PkgConfig::VULKAN
+    PkgConfig::XKBCOMMON
+    PkgConfig::PIXMAN
 )
 
 install(TARGETS tinexus-comp RUNTIME DESTINATION bin)

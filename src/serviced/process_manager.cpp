@@ -87,7 +87,17 @@ bool ProcessManager::start_service(const std::string& service_id) {
         // Child Process: Set parent death signal so child dies if supervisor dies
         prctl(PR_SET_PDEATHSIG, SIGTERM);
 
-        setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+        // Compositor needs a clean environment to start its own backend
+        if (service_id == "comp") {
+            unsetenv("WAYLAND_DISPLAY");
+            setenv("LIBSEAT_BACKEND", "noop", 1);
+            setenv("WLR_LIBSEAT_BACKEND", "noop", 1);
+            setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
+            setenv("WLR_BACKENDS", "drm,headless", 1);
+            setenv("WLR_RENDERER", "pixman", 1);
+        } else {
+            setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+        }
 
         const char* home = std::getenv("HOME");
         if (home) {

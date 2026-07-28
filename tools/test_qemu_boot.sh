@@ -15,9 +15,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
-ISO_PATH="${1:-$BUILD_DIR/Tinexus-x86_64.iso}"
+ISO_PATH="$BUILD_DIR/Tinexus-x86_64.iso"
 ARTIFACTS_DIR="$PROJECT_DIR/artifacts"
-BOOT_TIMEOUT="${2:-60}"   # seconds to wait for boot before declaring timeout
+BOOT_TIMEOUT=60
+GUI_MODE=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --gui) GUI_MODE=1 ;;
+        --headless) GUI_MODE=0 ;;
+        --timeout=*) BOOT_TIMEOUT="${arg#*=}" ;;
+        *.iso) ISO_PATH="$arg" ;;
+    esac
+done
 
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -97,19 +107,40 @@ VARS_SRC="$(dirname $OVMF_CODE)/OVMF_VARS_4M.fd"
 [ -f "$VARS_SRC" ] && cp "$VARS_SRC" "$OVMF_VARS" || cp "$OVMF_CODE" "$OVMF_VARS"
 
 # Boot ISO in UEFI mode (our ISO has UEFI El Torito + BOOTX64.EFI in ESP)
-timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
-    -m 1G \
-    -smp 2 \
-    -machine q35,accel=tcg \
-    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-    -drive if=pflash,format=raw,file="$OVMF_VARS" \
-    -cdrom "$ISO_PATH" \
-    -boot d \
-    -display none \
-    -monitor null \
-    -serial file:"$SERIAL_LOG" \
-    -no-reboot \
-    2>"$QEMU_LOG" || QEMU_EXIT=$?
+if [ "$GUI_MODE" -eq 1 ]; then
+    echo "Running in GUI Mode..."
+    timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
+        -m 1G \
+        -smp 2 \
+        -machine q35,accel=tcg \
+        -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+        -drive if=pflash,format=raw,file="$OVMF_VARS" \
+        -cdrom "$ISO_PATH" \
+        -boot d \
+        -vga virtio \
+        -display gtk \
+        -device usb-ehci,id=ehci \
+        -device usb-tablet,bus=ehci.0 \
+        -device usb-kbd,bus=ehci.0 \
+        -serial file:"$SERIAL_LOG" \
+        -no-reboot \
+        2>"$QEMU_LOG" || QEMU_EXIT=$?
+else
+    echo "Running in Headless Mode..."
+    timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
+        -m 1G \
+        -smp 2 \
+        -machine q35,accel=tcg \
+        -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+        -drive if=pflash,format=raw,file="$OVMF_VARS" \
+        -cdrom "$ISO_PATH" \
+        -boot d \
+        -display none \
+        -monitor null \
+        -serial file:"$SERIAL_LOG" \
+        -no-reboot \
+        2>"$QEMU_LOG" || QEMU_EXIT=$?
+fi
 
 QEMU_EXIT="${QEMU_EXIT:-0}"
 echo "[+] QEMU exited with code: $QEMU_EXIT (124 = timeout = boot ran for ${BOOT_TIMEOUT}s)"

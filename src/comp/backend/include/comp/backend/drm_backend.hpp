@@ -33,15 +33,14 @@ struct GbmBuffer {
     std::vector<uint32_t> pixels; // ARGB8888
 };
 
-class DrmBackend : public Backend {
+class DrmBackend {
 public:
     explicit DrmBackend(std::string device_path = "/dev/dri/card0");
-    ~DrmBackend() override = default;
+    ~DrmBackend() = default;
 
-    bool initialize() override;
-    void poll_events() override;
-    void swap_buffers() override;
-    [[nodiscard]] BackendType type() const noexcept override { return BackendType::Drm; }
+    bool initialize();
+    void poll_events();
+    void swap_buffers();
 
     [[nodiscard]] std::string type_name() const noexcept { return "DrmBackend"; }
     [[nodiscard]] bool is_atomic_supported() const noexcept { return m_atomic_supported; }
