@@ -122,6 +122,56 @@ EOF
         done
     fi
 
+    info "Staging udevd and udevadm for input device detection (libinput requirement)..."
+    if [ -f "/usr/bin/udevadm" ]; then
+        cp -L "/usr/bin/udevadm" "$ROOTFS_DIR/usr/bin/"
+        mkdir -p "$ROOTFS_DIR/lib/systemd" "$ROOTFS_DIR/lib/udev" "$ROOTFS_DIR/usr/lib/udev" "$ROOTFS_DIR/usr/lib/systemd" "$ROOTFS_DIR/etc/udev"
+        cp -L "/lib/systemd/systemd-udevd" "$ROOTFS_DIR/lib/systemd/" 2>/dev/null || true
+        cp -L "/lib/systemd/systemd-udevd" "$ROOTFS_DIR/usr/lib/systemd/" 2>/dev/null || true
+        cp -r /lib/udev/* "$ROOTFS_DIR/lib/udev/" 2>/dev/null || true
+        cp -r /lib/udev/* "$ROOTFS_DIR/usr/lib/udev/" 2>/dev/null || true
+        cp -r /etc/udev/* "$ROOTFS_DIR/etc/udev/" 2>/dev/null || true
+        mkdir -p "$ROOTFS_DIR/usr/share/libinput" "$ROOTFS_DIR/usr/share/X11/xkb" "$ROOTFS_DIR/etc/libinput"
+        cp -r /usr/share/libinput/* "$ROOTFS_DIR/usr/share/libinput/" 2>/dev/null || true
+        cp -r /usr/share/X11/xkb/* "$ROOTFS_DIR/usr/share/X11/xkb/" 2>/dev/null || true
+        cp -r /etc/libinput/* "$ROOTFS_DIR/etc/libinput/" 2>/dev/null || true
+        mkdir -p "$ROOTFS_DIR/etc/udev/rules.d" "$ROOTFS_DIR/lib/udev/rules.d" "$ROOTFS_DIR/usr/lib/udev/rules.d"
+        cat << 'EOF_UDEV_SEAT' > "$ROOTFS_DIR/etc/udev/rules.d/99-tinexus-seat.rules"
+SUBSYSTEM=="input", ENV{ID_INPUT}=="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="master-of-seat", TAG+="uaccess"
+EOF_UDEV_SEAT
+        cp -L "$ROOTFS_DIR/etc/udev/rules.d/99-tinexus-seat.rules" "$ROOTFS_DIR/lib/udev/rules.d/"
+        cp -L "$ROOTFS_DIR/etc/udev/rules.d/99-tinexus-seat.rules" "$ROOTFS_DIR/usr/lib/udev/rules.d/"
+        for bin in "/usr/bin/udevadm" "/lib/systemd/systemd-udevd"; do
+            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+            done
+        done
+    fi
+
+    info "Staging minimal kernel modules into rootfs for runtime hardware support..."
+    mkdir -p "$ROOTFS_DIR/lib/modules"
+    if [ -d "/lib/modules/7.0.0-28-generic" ]; then
+        find "/lib/modules/7.0.0-28-generic" -type f \( \
+            -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
+            -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
+            -o -name "virtio_input.ko*" \
+            -o -name "evdev.ko*" \
+            -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
+        \) | while read -r mod; do
+            cp -L "$mod" "$ROOTFS_DIR/lib/modules/"
+        done
+        for compressed in "$ROOTFS_DIR/lib/modules"/*.zst; do
+            [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
+        done
+        if [ -f "/usr/sbin/depmod" ]; then
+            /usr/sbin/depmod -b "$ROOTFS_DIR" 7.0.0-28-generic 2>/dev/null || true
+        fi
+    fi
+
     if [ -f "$ROOTFS_DIR/usr/bin/tinexus-serviced" ]; then
         ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
     else
@@ -161,7 +211,13 @@ build_initramfs() {
     mkdir -p "$init_staging/lib/modules"
     local kver="7.0.0-28-generic"
     if [ -d "/lib/modules/$kver" ]; then
-        find "/lib/modules/$kver" -type f \( -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \) | while read -r mod; do
+        find "/lib/modules/$kver" -type f \( \
+            -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
+            -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
+            -o -name "virtio_input.ko*" \
+            -o -name "evdev.ko*" \
+            -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
+        \) | while read -r mod; do
             cp -L "$mod" "$init_staging/lib/modules/"
         done
         for compressed in "$init_staging/lib/modules"/*.zst; do
@@ -183,6 +239,11 @@ echo "Tinexus OS: Loading storage and graphics kernel modules..."
 [ -f /lib/modules/isofs.ko ] && insmod /lib/modules/isofs.ko || true
 [ -f /lib/modules/virtio_dma_buf.ko ] && insmod /lib/modules/virtio_dma_buf.ko || true
 [ -f /lib/modules/virtio-gpu.ko ] && insmod /lib/modules/virtio-gpu.ko || true
+[ -f /lib/modules/virtio_input.ko ] && insmod /lib/modules/virtio_input.ko || true
+[ -f /lib/modules/evdev.ko ] && insmod /lib/modules/evdev.ko || true
+[ -f /lib/modules/hid.ko ] && insmod /lib/modules/hid.ko || true
+[ -f /lib/modules/hid-generic.ko ] && insmod /lib/modules/hid-generic.ko || true
+[ -f /lib/modules/usbhid.ko ] && insmod /lib/modules/usbhid.ko || true
 [ -f /lib/modules/bochs.ko ] && insmod /lib/modules/bochs.ko || true
 for mod in /lib/modules/*.ko; do
     [ -f "$mod" ] && insmod "$mod" 2>/dev/null

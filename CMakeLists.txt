@@ -65,6 +65,8 @@ add_subdirectory(protocols)
 add_subdirectory(src)
 add_subdirectory(sdk)
 add_subdirectory(tools)
+add_subdirectory(examples)
+add_subdirectory(benchmarks)
 
 if(BUILD_TESTING)
     enable_testing()

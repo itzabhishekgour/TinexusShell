@@ -10,11 +10,68 @@
 #include <cstdlib>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
 #include <filesystem>
 
 namespace {
 tinexus::serviced::RuntimeControlSocket* g_socket{nullptr};
 tinexus::serviced::ProcessManager* g_pm{nullptr};
+
+void run_udev_setup() {
+    auto run_cmd = [](const char* path, std::vector<char*> args) {
+        if (!std::filesystem::exists(path)) return;
+        pid_t pid = fork();
+        if (pid == 0) {
+            execv(path, args.data());
+            _exit(127);
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+        }
+    };
+
+    tinexus::log::info("Starting udev daemon for Wayland input device discovery...");
+    run_cmd("/lib/systemd/systemd-udevd", {
+        const_cast<char*>("/lib/systemd/systemd-udevd"),
+        const_cast<char*>("--daemon"),
+        nullptr
+    });
+    sleep(1); // Give udevd time to bind netlink and control sockets
+
+    tinexus::log::info("Triggering udev device enumeration...");
+    run_cmd("/usr/bin/udevadm", {
+        const_cast<char*>("/usr/bin/udevadm"),
+        const_cast<char*>("trigger"),
+        const_cast<char*>("--action=add"),
+        nullptr
+    });
+
+    run_cmd("/usr/bin/udevadm", {
+        const_cast<char*>("/usr/bin/udevadm"),
+        const_cast<char*>("settle"),
+        const_cast<char*>("--timeout=5"),
+        nullptr
+    });
+    sleep(1); // Ensure udev database is flushed to /run/udev/data/ before libinput starts
+
+    tinexus::log::info("--- CHECKING /dev/input NODES ---");
+    if (std::filesystem::exists("/dev/input")) {
+        for (const auto& entry : std::filesystem::directory_iterator("/dev/input")) {
+            tinexus::log::info("Found input node: {}", entry.path().string());
+            run_cmd("/usr/bin/udevadm", {
+                const_cast<char*>("/usr/bin/udevadm"),
+                const_cast<char*>("info"),
+                const_cast<char*>("--query=property"),
+                const_cast<char*>("--name"),
+                const_cast<char*>(entry.path().string().c_str()),
+                nullptr
+            });
+        }
+    } else {
+        tinexus::log::error("/dev/input directory does NOT exist!");
+    }
+}
 
 void signal_handler(int signal) {
     if (signal == SIGCHLD) {
@@ -58,7 +115,9 @@ int main(int argc, char** argv) {
     setenv("WLR_DRM_NO_ATOMIC", "1", 1);
     setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
     setenv("WLR_RENDERER", "pixman", 1);
-    setenv("LIBSEAT_BACKEND", "noop", 1);
+    // Use 'builtin' standalone libseat backend for root compositors (opens physical DRM & input devices)
+    setenv("LIBSEAT_BACKEND", "builtin", 1);
+    setenv("WLR_LOG_LEVEL", "DEBUG", 1);
 
     // Ensure XDG_RUNTIME_DIR exists with correct permissions (0700)
     try {
@@ -126,6 +185,7 @@ int main(int argc, char** argv) {
     }
 
     tinexus::log::info("Platform Runtime Manager ready. Auto-spawning supervision tree...");
+    run_udev_setup();
     pm.start_all_services();
 
     socket.run_accept_loop();

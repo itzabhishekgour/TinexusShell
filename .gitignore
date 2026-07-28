@@ -45,4 +45,7 @@ integration_test_*
 # Log & Temporary files
 *.log
 *.tmp
+*.png
+boot_logs.txt
+artifacts/
 .cache/

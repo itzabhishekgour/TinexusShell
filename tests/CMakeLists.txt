@@ -1354,3 +1354,32 @@ target_include_directories(smoke_release_candidate PRIVATE
 )
 target_link_libraries(smoke_release_candidate PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
 add_test(NAME smoke_release_candidate COMMAND smoke_release_candidate)
+
+# Phase 4.1 Step 3 libtxui Core & Math Unit Tests
+add_executable(unit_test_txui_core unit/test_txui_core.cpp)
+target_link_libraries(unit_test_txui_core PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_core COMMAND unit_test_txui_core)
+
+add_executable(unit_test_txui_math unit/test_txui_math.cpp)
+target_link_libraries(unit_test_txui_math PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_math COMMAND unit_test_txui_math)
+
+add_executable(unit_test_txui_render unit/test_txui_render.cpp)
+target_link_libraries(unit_test_txui_render PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_render COMMAND unit_test_txui_render)
+
+add_executable(unit_test_txui_gate0 unit/test_txui_gate0.cpp)
+target_link_libraries(unit_test_txui_gate0 PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate0 COMMAND unit_test_txui_gate0)
+
+add_executable(unit_test_txui_golden_png unit/test_txui_golden_png.cpp)
+target_link_libraries(unit_test_txui_golden_png PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_golden_png COMMAND unit_test_txui_golden_png)
+
+add_executable(unit_test_txui_render_rounded unit/test_txui_render_rounded.cpp)
+target_link_libraries(unit_test_txui_render_rounded PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_render_rounded COMMAND unit_test_txui_render_rounded)
+
+add_executable(unit_test_txui_wayland unit/test_txui_wayland.cpp)
+target_link_libraries(unit_test_txui_wayland PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_wayland COMMAND unit_test_txui_wayland)

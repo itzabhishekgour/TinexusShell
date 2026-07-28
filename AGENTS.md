@@ -45,7 +45,7 @@ If a user asks you to do something that violates the documented design, you expl
 
 ---
 
-## 2. The Documentation System (21 Documents)
+## 2. The Documentation System (22 Documents)
 
 **All decisions are documented. Read the docs before acting.**
 
@@ -75,6 +75,7 @@ Documentation lives in `docs/`. Every document has a status: `FROZEN` means it i
 | `docs/19_ABI_POLICY.md` | C++ ABI stability, Pimpl idiom, symbol visibility | Before writing exported SDK headers |
 | `docs/20_THREAD_MODEL.md` | Per-process thread inventories, affinity, lock-free queues | Before multi-threading work |
 | `docs/21_SEARCH_RANKING.md` | Search ranking engine scoring heuristics & pipeline | Before touching search logic |
+| `docs/22_LIBTXUI_SPECIFICATION.md` | C++20 UI framework specification, command buffer, ADRs | Before touching any UI/widget code |
 
 ### 2.1 Rule: Documentation First
 
@@ -101,6 +102,11 @@ These are non-negotiable. Violating them is a blocking error.
 ❌ NEVER write to config files directly (use atomic write: write to .tmp, fsync, rename)
 ❌ NEVER put UI logic in the compositor (tinexus-comp)
 ❌ NEVER use D-Bus names with spaces or illegal characters (use io.tinexus.shell.*)
+❌ NEVER write placeholder, dummy, or fake implementations (Rule #1: No placeholders, no fake success paths)
+❌ NEVER expose a public API without complete implementation, example, unit test, benchmark, and docs
+❌ NEVER implement horizontally with empty headers (Rule #2: Implement vertically, one end-to-end slice at a time)
+❌ NEVER write separate 'demo' or 'test' UI classes (Rule #3: Production API exclusivity — examples use WaylandWindow)
+❌ NEVER advance to a new slice without passing engineering gates (Rule #4: Every slice removes risk, not just adds features)
 ```
 
 ### 3.2 Architecture Rules

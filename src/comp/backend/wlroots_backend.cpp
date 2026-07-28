@@ -30,6 +30,7 @@ extern "C" {
 
 #include "comp/input/seat_manager.hpp"
 #include "comp/cursor/cursor_manager.hpp"
+#include "comp/focus/focus_manager.hpp"
 
 namespace tinexus::comp {
 
@@ -93,13 +94,17 @@ public:
         wlr_scene_attach_output_layout(m_scene, m_output_layout);
 
         m_scene_tree_background = wlr_scene_tree_create(&m_scene->tree);
-        m_scene_tree_bottom = wlr_scene_tree_create(&m_scene->tree);
-        m_scene_tree_normal = wlr_scene_tree_create(&m_scene->tree);
-        m_scene_tree_top = wlr_scene_tree_create(&m_scene->tree);
-        m_scene_tree_overlay = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_bottom     = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_normal     = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_top        = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_overlay    = wlr_scene_tree_create(&m_scene->tree);
+
+        // Bind FocusManager — scene + seat must both exist before this call.
+        // (seat is created just below; bind_focus() call placed after seat init)
+        // Actual bind happens after m_seat is assigned (see below).
 
         m_seat = wlr_seat_create(m_display, "seat0");
-        SeatManager::instance().bind_seat("seat0");
+        SeatManager::instance().bind_seat(m_seat, "seat0");
 
         m_cursor = wlr_cursor_create();
         wlr_cursor_attach_output_layout(m_cursor, m_output_layout);
@@ -107,7 +112,11 @@ public:
         wlr_xcursor_manager_load(m_cursor_mgr, 1.0f);
         wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, "default");
 
+        // Bind FocusManager — both m_seat and m_scene are now ready.
+        FocusManager::instance().bind(m_seat, m_scene);
+
         m_layer_shell = wlr_layer_shell_v1_create(m_display, 4);
+
         m_new_layer_surface_listener.notify = handle_new_layer_surface;
         wl_signal_add(&m_layer_shell->events.new_surface, &m_new_layer_surface_listener);
 
@@ -337,6 +346,8 @@ private:
         WlrootsBackend* self = wl_container_of(listener, self, m_new_input_listener);
         auto* device = static_cast<struct wlr_input_device*>(data);
 
+        log::info("[Input] New input device detected: '{}' (type={})", device->name, static_cast<int>(device->type));
+
         switch (device->type) {
             case WLR_INPUT_DEVICE_KEYBOARD:
                 log::info("[Input] Detected Keyboard: {}", device->name);
@@ -346,7 +357,23 @@ private:
                 log::info("[Input] Detected Pointer: {}", device->name);
                 wlr_cursor_attach_input_device(self->m_cursor, device);
                 break;
+            case WLR_INPUT_DEVICE_TABLET:
+                log::info("[Input] Detected Tablet (Pointer): {}", device->name);
+                wlr_cursor_attach_input_device(self->m_cursor, device);
+                break;
+            case WLR_INPUT_DEVICE_TOUCH:
+                log::info("[Input] Detected Touchscreen: {}", device->name);
+                wlr_cursor_attach_input_device(self->m_cursor, device);
+                break;
+            case WLR_INPUT_DEVICE_TABLET_PAD:
+                log::info("[Input] Detected Tablet Pad: {}", device->name);
+                break;
+            case WLR_INPUT_DEVICE_SWITCH:
+                log::info("[Input] Detected Switch: {}", device->name);
+                break;
             default:
+                log::info("[Input] Detected Unknown Device: {}", device->name);
+                wlr_cursor_attach_input_device(self->m_cursor, device);
                 break;
         }
 
@@ -386,24 +413,28 @@ private:
 
     static void handle_keyboard_modifiers(struct wl_listener* listener, void* data) {
         KeyboardWrapper* wrapper = wl_container_of(listener, wrapper, modifiers);
-        wlr_seat_set_keyboard(wrapper->backend->m_seat, wrapper->keyboard);
-        wlr_seat_keyboard_notify_modifiers(wrapper->backend->m_seat, &wrapper->keyboard->modifiers);
+        SeatManager::instance().notify_keyboard_modifiers(wrapper->keyboard);
     }
 
     static void handle_keyboard_key(struct wl_listener* listener, void* data) {
         KeyboardWrapper* wrapper = wl_container_of(listener, wrapper, key);
         auto* event = static_cast<struct wlr_keyboard_key_event*>(data);
-        
+
+        // Debug: log key symbol for diagnostics
         uint32_t keycode = event->keycode + 8;
         const xkb_keysym_t* syms;
-        int nsyms = xkb_state_key_get_syms(wrapper->keyboard->xkb_state, keycode, &syms);
-
+        int nsyms = xkb_state_key_get_syms(
+            wrapper->keyboard->xkb_state, keycode, &syms);
         if (nsyms > 0) {
-            log::info("[Keyboard] Key {} state {}", syms[0], static_cast<uint32_t>(event->state));
+            log::info("[Keyboard] Key sym={} state={}",
+                      syms[0], static_cast<uint32_t>(event->state));
         }
 
-        wlr_seat_set_keyboard(wrapper->backend->m_seat, wrapper->keyboard);
-        wlr_seat_keyboard_notify_key(wrapper->backend->m_seat, event->time_msec, event->keycode, event->state);
+        SeatManager::instance().notify_keyboard_key(
+            wrapper->keyboard,
+            event->time_msec,
+            event->keycode,
+            static_cast<uint32_t>(event->state));
     }
 
     static void handle_keyboard_destroy(struct wl_listener* listener, void* data) {
@@ -429,31 +460,42 @@ private:
     }
 
     void process_cursor_motion(uint32_t time) {
-        // Set cursor image so it renders on screen
+        // [3D.1] Debug: confirm motion events reach us
+        log::info("[Cursor] motion x={:.1f} y={:.1f}", m_cursor->x, m_cursor->y);
+
+        // [3D.2] Cursor image — keep hardware cursor visible
         wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, "default");
-        
-        int32_t cx = static_cast<int32_t>(std::round(m_cursor->x));
-        int32_t cy = static_cast<int32_t>(std::round(m_cursor->y));
-        SeatManager::instance().send_pointer_motion(cx, cy);
-        CursorManager::instance().update_position(cx, cy);
+
+        // [3D.3] Scene-graph hit-test → FocusManager handles everything:
+        //        wlr_scene_node_at  →  notify_enter / notify_motion / clear_focus
+        const PickResult pick = FocusManager::instance().pick_surface(
+            m_cursor->x, m_cursor->y);
+        FocusManager::instance().update_pointer_focus(pick, time);
+
+        // [3D.4] Update internal position tracker (lightweight)
+        CursorManager::instance().update_position(m_cursor->x, m_cursor->y);
     }
 
     static void handle_cursor_button(struct wl_listener* listener, void* data) {
-        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_button_listener);
         auto* event = static_cast<struct wlr_pointer_button_event*>(data);
-        SeatManager::instance().send_button_click(event->button, event->state);
-        wlr_seat_pointer_notify_button(self->m_seat, event->time_msec, event->button, event->state);
+        SeatManager::instance().notify_button(
+            event->time_msec, event->button,
+            static_cast<uint32_t>(event->state));
     }
 
     static void handle_cursor_axis(struct wl_listener* listener, void* data) {
-        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_axis_listener);
         auto* event = static_cast<struct wlr_pointer_axis_event*>(data);
-        wlr_seat_pointer_notify_axis(self->m_seat, event->time_msec, event->orientation, event->delta, event->delta_discrete, event->source, event->relative_direction);
+        SeatManager::instance().notify_axis(
+            event->time_msec,
+            static_cast<uint32_t>(event->orientation),
+            event->delta,
+            event->delta_discrete,
+            static_cast<uint32_t>(event->source),
+            static_cast<uint32_t>(event->relative_direction));
     }
 
     static void handle_cursor_frame(struct wl_listener* listener, void* data) {
-        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_frame_listener);
-        wlr_seat_pointer_notify_frame(self->m_seat);
+        SeatManager::instance().notify_frame();
     }
 };
 

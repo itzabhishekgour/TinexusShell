@@ -4,6 +4,7 @@ add_subdirectory(common)
 add_subdirectory(serviced)
 add_subdirectory(ipcd)
 add_subdirectory(searchd)
+add_subdirectory(txui)
 
 # Future step subdirectories
 add_subdirectory(comp)
