@@ -1,49 +1,53 @@
-#include "session/session_manager.hpp"
-#include "session/env_bootstrap.hpp"
 #include "common/logger.hpp"
 #include <iostream>
-#include <cstring>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <vector>
+#include <csignal>
+#include <filesystem>
 
-void print_usage() {
-    std::cout << "Usage: tinexus-session [OPTIONS]\n"
-              << "Options:\n"
-              << "  --dry-run       Validate environment bootstrap without launching services\n"
-              << "  --print-env     Print complete POSIX environment map\n"
-              << "  --validate      Validate session dependencies and permissions\n"
-              << "  --version       Display session manager version\n"
-              << "  --help          Display this help message\n";
+using namespace tinexus;
+
+void launch_component(const std::string& name) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Look for the binary in standard locations or debug build
+        std::vector<std::string> search_paths = {
+            std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/tinexus/build/debug/src/" + name + "/tinexus-" + name,
+            "/usr/bin/tinexus-" + name
+        };
+        
+        for (const auto& path : search_paths) {
+            if (std::filesystem::exists(path)) {
+                execl(path.c_str(), ("tinexus-" + name).c_str(), nullptr);
+            }
+        }
+        
+        // Fallback to PATH
+        execlp(("tinexus-" + name).c_str(), ("tinexus-" + name).c_str(), nullptr);
+        _exit(127);
+    }
 }
 
 int main(int argc, char* argv[]) {
-    tinexus::log::set_component_name("session");
+    log::set_component_name("session");
+    log::info("Phase A: Tinexus Desktop Session starting...");
 
-    bool dry_run = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--dry-run") == 0) {
-            dry_run = true;
-        } else if (std::strcmp(argv[i], "--print-env") == 0) {
-            tinexus::session::EnvironmentBootstrapper::instance().print_environment();
-            return 0;
-        } else if (std::strcmp(argv[i], "--version") == 0) {
-            std::cout << "tinexus-session v1.0.0 (ABI v1.0 Locked)\n";
-            return 0;
-        } else if (std::strcmp(argv[i], "--help") == 0) {
-            print_usage();
-            return 0;
+    // Milestone 1: Start wallpaper (Blue background)
+    // Actually handled by compositor's static wlr_scene_rect for now.
+    
+    // Milestone 2 & 3: We will uncomment these as we hit the milestones
+    launch_component("panel");
+    launch_component("launcher");
+
+    // Wait forever and reap zombies
+    while (true) {
+        int status;
+        pid_t p = waitpid(-1, &status, 0);
+        if (p > 0) {
+            log::warn("A shell component exited.");
         }
     }
 
-    tinexus::log::info("Starting Tinexus Session Manager (tinexus-session)...");
-    if (!tinexus::session::SessionManager::instance().start_session(dry_run)) {
-        tinexus::log::error("Failed to start Tinexus session!");
-        return 1;
-    }
-
-    if (dry_run) {
-        tinexus::log::info("Dry run completed successfully!");
-        return 0;
-    }
-
-    tinexus::log::info("Tinexus Desktop Session running actively.");
     return 0;
 }

@@ -1,41 +1,47 @@
-#include "panel/panel_bar.hpp"
-#include "common/logger.hpp"
-#include <iostream>
-#include <atomic>
-#include <csignal>
-#include <chrono>
-#include <thread>
+#include "layer_shell_window.hpp"
+#include <txui/layout/FlexLayout.hpp>
+#include <txui/widgets/SolidColorWidget.hpp>
+#include <txui/widgets/SizedBox.hpp>
+#include <txui/graphics/Color.hpp>
+#include <common/logger.hpp>
 
-namespace {
-std::atomic<bool> g_running{true};
-void signal_handler(int) {
-    g_running = false;
-}
-} // namespace
 using namespace tinexus;
 
 int main() {
-    std::signal(SIGTERM, signal_handler);
-    std::signal(SIGINT, signal_handler);
+    log::info("Phase A: tinexus-panel (Milestone 2) starting...");
 
-    log::info("tinexus-panel daemon starting...");
-    log::info("tinexus-panel connected to wayland-0");
+    panel::LayerShellWindow window(48); // Height = 48px
 
-    auto& panel = panel::PanelBar::instance();
-    panel.add_widget(std::make_unique<panel::LauncherWidget>());
-    panel.add_widget(std::make_unique<panel::WorkspaceWidget>(1));
-    panel.add_widget(std::make_unique<panel::ClockWidget>());
-    panel.add_widget(std::make_unique<panel::CpuWidget>(8.4f));
-    panel.add_widget(std::make_unique<panel::MemoryWidget>(3.8f));
+    // Create the root layout (horizontal flex)
+    auto root_layout = txui::make_ref<txui::FlexLayout>();
+    root_layout->set_direction(txui::FlexDirection::Row);
+    root_layout->set_cross_axis_alignment(txui::CrossAxisAlignment::Center);
+    root_layout->set_main_axis_alignment(txui::MainAxisAlignment::SpaceBetween);
 
-    std::string content = panel.render_bar_content();
-    log::info("tinexus-panel: Bound layer-shell Top surface (height=48px, exclusive_zone=48px)");
-    log::info("tinexus-panel bar content: {}", content);
+    // Left Block (Start button placeholder)
+    auto left_color = txui::make_ref<txui::SolidColorWidget>(txui::Color(51, 153, 255, 255));
+    auto left_box = txui::make_ref<txui::SizedBox>(60, 32);
+    left_box->add_child(left_color);
+    root_layout->add_child(left_box);
 
-    while (g_running) {
-        // Future daemon work: IPC, events, state updates
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
+    // Middle Block (Taskbar placeholder)
+    auto middle_color = txui::make_ref<txui::SolidColorWidget>(txui::Color(204, 51, 153, 255));
+    auto middle_box = txui::make_ref<txui::SizedBox>(300, 32);
+    middle_box->add_child(middle_color);
+    root_layout->add_child(middle_box);
 
-    return 0;
+    // Right Block (Tray placeholder)
+    auto right_color = txui::make_ref<txui::SolidColorWidget>(txui::Color(51, 204, 102, 255));
+    auto right_box = txui::make_ref<txui::SizedBox>(150, 32);
+    right_box->add_child(right_color);
+    root_layout->add_child(right_box);
+
+    // Set root layout
+    window.set_root_widget(root_layout);
+    
+    window.show();
+    log::info("tinexus-panel layer shell successfully initialized!");
+
+    // Enter Wayland event loop
+    return window.exec();
 }

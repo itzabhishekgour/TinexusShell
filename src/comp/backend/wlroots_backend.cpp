@@ -121,8 +121,8 @@ public:
         wl_signal_add(&m_layer_shell->events.new_surface, &m_new_layer_surface_listener);
 
         m_xdg_shell = wlr_xdg_shell_create(m_display, 3);
-        m_new_xdg_surface_listener.notify = handle_new_xdg_surface;
-        wl_signal_add(&m_xdg_shell->events.new_surface, &m_new_xdg_surface_listener);
+        m_new_xdg_surface_listener.notify = handle_new_xdg_toplevel;
+        wl_signal_add(&m_xdg_shell->events.new_toplevel, &m_new_xdg_surface_listener);
 
         m_new_output_listener.notify = handle_new_output;
         wl_signal_add(&m_wlr_backend->events.new_output, &m_new_output_listener);
@@ -308,14 +308,12 @@ private:
         wl_signal_add(&layer_surface->surface->events.commit, &wrapper->commit);
     }
 
-    static void handle_new_xdg_surface(struct wl_listener* listener, void* data) {
+    static void handle_new_xdg_toplevel(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_xdg_surface_listener);
-        auto* xdg_surface = static_cast<struct wlr_xdg_surface*>(data);
+        auto* xdg_toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
 
-        if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-            log::info("[XDGShell] New XDG toplevel surface created");
-            wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_surface);
-        }
+        log::info("[XDGShell] New XDG toplevel surface created");
+        wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
     }
 
     static void handle_new_output(struct wl_listener* listener, void* data) {
@@ -327,14 +325,17 @@ private:
             wlr_output_layout_add_auto(self->m_output_layout, wlr_out);
 
             // CRITICAL: Register this output with the scene graph.
-            // Without this, wlr_scene_get_scene_output() returns NULL in frame()
-            // and nothing ever gets rendered to screen.
             struct wlr_scene_output* scene_out = wlr_scene_output_create(self->m_scene, wlr_out);
             if (!scene_out) {
                 log::error("[Backend] Failed to create scene output for '{}'", wlr_out->name);
             } else {
                 log::info("[Backend] Scene output registered for '{}'", wlr_out->name);
             }
+
+            // Milestone 1: Draw a static blue background #0F172A
+            float color[4] = {0.059f, 0.09f, 0.165f, 1.0f}; // roughly #0F172A
+            struct wlr_scene_rect* bg_rect = wlr_scene_rect_create(self->m_scene_tree_background, 10000, 10000, color);
+            wlr_scene_node_set_position(&bg_rect->node, 0, 0);
 
             self->m_outputs.push_back(std::move(output));
         } else {
@@ -422,12 +423,16 @@ private:
 
         // Debug: log key symbol for diagnostics
         uint32_t keycode = event->keycode + 8;
-        const xkb_keysym_t* syms;
-        int nsyms = xkb_state_key_get_syms(
-            wrapper->keyboard->xkb_state, keycode, &syms);
-        if (nsyms > 0) {
-            log::info("[Keyboard] Key sym={} state={}",
-                      syms[0], static_cast<uint32_t>(event->state));
+        if (wrapper->keyboard->xkb_state) {
+            const xkb_keysym_t* syms;
+            int nsyms = xkb_state_key_get_syms(
+                wrapper->keyboard->xkb_state, keycode, &syms);
+            if (nsyms > 0) {
+                log::info("[Keyboard] Key sym={} state={}",
+                          syms[0], static_cast<uint32_t>(event->state));
+            }
+        } else {
+            log::warn("[Keyboard] xkb_state is NULL! Cannot resolve keycode {}", keycode);
         }
 
         SeatManager::instance().notify_keyboard_key(

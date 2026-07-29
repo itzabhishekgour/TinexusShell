@@ -130,43 +130,19 @@ int main(int argc, char** argv) {
     // Default Platform Supervision Graph
     tinexus::serviced::DependencyGraph graph;
 
-    // Level 1: Central IPC Broker
-    tinexus::serviced::DaemonSpec ipcd;
-    ipcd.id = "ipcd";
-    ipcd.executable = "tinexus-ipcd";
-    ipcd.critical = true;
-    graph.add_service(ipcd);
-
-    // Level 2: Core Platform Services
-    tinexus::serviced::DaemonSpec indexerd;
-    indexerd.id = "indexerd";
-    indexerd.executable = "tinexus-indexerd";
-    indexerd.hard_dependencies = {"ipcd"};
-    indexerd.critical = true;
-    graph.add_service(indexerd);
-
-    tinexus::serviced::DaemonSpec searchd;
-    searchd.id = "searchd";
-    searchd.executable = "tinexus-searchd";
-    searchd.hard_dependencies = {"ipcd"};
-    searchd.critical = true;
-    graph.add_service(searchd);
-
-    // Level 3: Wayland Compositor
+    // Phase A: Simplified Desktop Bring-up graph
     tinexus::serviced::DaemonSpec comp;
     comp.id = "comp";
     comp.executable = "tinexus-comp";
-    comp.hard_dependencies = {"ipcd"};
     comp.critical = true;
     graph.add_service(comp);
 
-    // Level 4: UI Surfaces
-    tinexus::serviced::DaemonSpec shell;
-    shell.id = "shell";
-    shell.executable = "tinexus-shell";
-    shell.hard_dependencies = {"comp", "searchd"};
-    shell.critical = false;
-    graph.add_service(shell);
+    tinexus::serviced::DaemonSpec session;
+    session.id = "session";
+    session.executable = "tinexus-session";
+    session.hard_dependencies = {"comp"};
+    session.critical = true;
+    graph.add_service(session);
 
     if (graph.has_cycle()) {
         tinexus::log::error("FATAL: Circular dependency detected in supervision tree!");

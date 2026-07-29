@@ -1383,3 +1383,35 @@ add_test(NAME unit_test_txui_render_rounded COMMAND unit_test_txui_render_rounde
 add_executable(unit_test_txui_wayland unit/test_txui_wayland.cpp)
 target_link_libraries(unit_test_txui_wayland PRIVATE txui tinexus_warnings)
 add_test(NAME unit_test_txui_wayland COMMAND unit_test_txui_wayland)
+
+add_executable(unit_test_txui_window_event unit/test_txui_window_event.cpp)
+target_link_libraries(unit_test_txui_window_event PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_window_event COMMAND unit_test_txui_window_event)
+
+add_executable(unit_test_txui_layout unit/test_txui_layout.cpp)
+target_link_libraries(unit_test_txui_layout PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_layout COMMAND unit_test_txui_layout)
+
+add_executable(unit_test_txui_gate1_tree unit/test_txui_gate1_tree.cpp)
+target_link_libraries(unit_test_txui_gate1_tree PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate1_tree COMMAND unit_test_txui_gate1_tree)
+
+add_executable(unit_test_txui_gate1_layout unit/test_txui_gate1_layout.cpp)
+target_link_libraries(unit_test_txui_gate1_layout PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate1_layout COMMAND unit_test_txui_gate1_layout)
+
+add_executable(unit_test_txui_gate1_paint unit/test_txui_gate1_paint.cpp)
+target_link_libraries(unit_test_txui_gate1_paint PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate1_paint COMMAND unit_test_txui_gate1_paint)
+
+add_executable(unit_test_txui_gate1_events unit/test_txui_gate1_events.cpp)
+target_link_libraries(unit_test_txui_gate1_events PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate1_events COMMAND unit_test_txui_gate1_events)
+
+add_executable(unit_test_txui_gate1_resize unit/test_txui_gate1_resize.cpp)
+target_link_libraries(unit_test_txui_gate1_resize PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate1_resize COMMAND unit_test_txui_gate1_resize)
+
+add_executable(unit_test_txui_gate1_memory unit/test_txui_gate1_memory.cpp)
+target_link_libraries(unit_test_txui_gate1_memory PRIVATE txui tinexus_warnings)
+add_test(NAME unit_test_txui_gate1_memory COMMAND unit_test_txui_gate1_memory)

@@ -89,4 +89,22 @@ void WaylandRenderTarget::present(const Rect& damage) noexcept {
     m_back_index = 1 - m_back_index;
 }
 
+bool WaylandRenderTarget::resize(uint32 width, uint32 height) noexcept {
+    if (width == this->width() && height == this->height()) {
+        return true;
+    }
+    if (m_connection == nullptr || width == 0 || height == 0) {
+        return false;
+    }
+    auto buf0 = wayland::WaylandBuffer::create(m_connection->shm(), width, height);
+    auto buf1 = wayland::WaylandBuffer::create(m_connection->shm(), width, height);
+    if (!buf0.has_value() || !buf1.has_value()) {
+        return false;
+    }
+    m_buffers[0] = std::move(*buf0);
+    m_buffers[1] = std::move(*buf1);
+    m_back_index = 0;
+    return true;
+}
+
 } // namespace txui

@@ -59,6 +59,9 @@ public:
     // Attaches the back buffer to the surface, sets damage, commits to Wayland, and swaps front/back buffer.
     void present(const Rect& damage = Rect()) noexcept;
 
+    // Resizes front and back SHM buffers dynamically.
+    bool resize(uint32 width, uint32 height) noexcept;
+
     [[nodiscard]] std::size_t back_index() const noexcept { return m_back_index; }
     [[nodiscard]] std::size_t front_index() const noexcept { return 1 - m_back_index; }
     [[nodiscard]] wayland::WaylandBuffer& buffer(std::size_t idx) noexcept { return m_buffers[idx]; }

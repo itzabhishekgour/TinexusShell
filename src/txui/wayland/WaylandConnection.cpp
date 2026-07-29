@@ -1,5 +1,6 @@
 #include <txui/wayland/WaylandConnection.hpp>
 #include <wayland-client.h>
+#include <xdg-shell-client-protocol.h>
 #include <cstring>
 #include <utility>
 
@@ -13,6 +14,10 @@ void handle_global(void* data, struct wl_registry* registry, uint32_t name, cons
         conn->bind_compositor(registry, name, version);
     } else if (std::strcmp(interface, "wl_shm") == 0) {
         conn->bind_shm(registry, name, version);
+    } else if (std::strcmp(interface, "xdg_wm_base") == 0) {
+        conn->bind_wm_base(registry, name, version);
+    } else if (std::strcmp(interface, "wl_seat") == 0) {
+        conn->bind_seat(registry, name, version);
     }
 }
 
@@ -41,10 +46,14 @@ WaylandConnection::WaylandConnection(WaylandConnection&& other) noexcept
     : m_display(std::exchange(other.m_display, nullptr)),
       m_registry(std::exchange(other.m_registry, nullptr)),
       m_compositor(std::exchange(other.m_compositor, nullptr)),
-      m_shm(std::exchange(other.m_shm, nullptr)) {}
+      m_shm(std::exchange(other.m_shm, nullptr)),
+      m_wm_base(std::exchange(other.m_wm_base, nullptr)),
+      m_seat(std::exchange(other.m_seat, nullptr)) {}
 
 WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexcept {
     if (this != &other) {
+        if (m_wm_base != nullptr) xdg_wm_base_destroy(m_wm_base);
+        if (m_seat != nullptr) wl_seat_destroy(m_seat);
         if (m_compositor != nullptr) wl_compositor_destroy(m_compositor);
         if (m_shm != nullptr) wl_shm_destroy(m_shm);
         if (m_registry != nullptr) wl_registry_destroy(m_registry);
@@ -54,11 +63,15 @@ WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexc
         m_registry = std::exchange(other.m_registry, nullptr);
         m_compositor = std::exchange(other.m_compositor, nullptr);
         m_shm = std::exchange(other.m_shm, nullptr);
+        m_wm_base = std::exchange(other.m_wm_base, nullptr);
+        m_seat = std::exchange(other.m_seat, nullptr);
     }
     return *this;
 }
 
 WaylandConnection::~WaylandConnection() noexcept {
+    if (m_wm_base != nullptr) xdg_wm_base_destroy(m_wm_base);
+    if (m_seat != nullptr) wl_seat_destroy(m_seat);
     if (m_compositor != nullptr) wl_compositor_destroy(m_compositor);
     if (m_shm != nullptr) wl_shm_destroy(m_shm);
     if (m_registry != nullptr) wl_registry_destroy(m_registry);
@@ -100,6 +113,20 @@ void WaylandConnection::bind_shm(wl_registry* registry, uint32 name, uint32 vers
     uint32 bind_ver = (version < 1U) ? version : 1U;
     m_shm = static_cast<wl_shm*>(
         wl_registry_bind(registry, name, &wl_shm_interface, bind_ver)
+    );
+}
+
+void WaylandConnection::bind_wm_base(wl_registry* registry, uint32 name, uint32 version) noexcept {
+    uint32 bind_ver = (version < 3U) ? version : 3U;
+    m_wm_base = static_cast<xdg_wm_base*>(
+        wl_registry_bind(registry, name, &xdg_wm_base_interface, bind_ver)
+    );
+}
+
+void WaylandConnection::bind_seat(wl_registry* registry, uint32 name, uint32 version) noexcept {
+    uint32 bind_ver = (version < 7U) ? version : 7U;
+    m_seat = static_cast<wl_seat*>(
+        wl_registry_bind(registry, name, &wl_seat_interface, bind_ver)
     );
 }
 

@@ -81,7 +81,7 @@ EOF
     echo "tmpfs   /tmp    tmpfs   defaults,nosuid,nodev   0 0" > "$ROOTFS_DIR/etc/fstab"
 
     local staged=0
-    local tinexus_build="$BUILD_DIR/debug"
+    local tinexus_build="$BUILD_DIR/txui_verify"
     if [ -d "$tinexus_build" ]; then
         while IFS= read -r -d '' candidate; do
             if file "$candidate" | grep -q "ELF.*executable\|ELF.*shared object"; then
@@ -108,6 +108,21 @@ EOF
     mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
+
+    # Ensure busybox/sh is available in the rootfs for standard library system() calls
+    local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
+    if [ -f "$bb_bin" ]; then
+        cp -L "$bb_bin" "$ROOTFS_DIR/bin/busybox"
+        for cmd in sh cat ls mkdir mount umount mdev sleep; do 
+            ln -sf busybox "$ROOTFS_DIR/bin/$cmd" || true
+        done
+        (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+        done
+        (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+        done
+    fi
 
     # Stage kmod and its dependencies so we can load kernel modules manually
     info "Staging kmod for kernel module loading..."
@@ -271,6 +286,8 @@ if [ -f /mnt/live/rootfs.squashfs ]; then
     echo "Tinexus OS: Mounting SquashFS rootfs..."
     /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
     /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
+    mkdir -p /newroot/dev/shm
+    /bin/mount -t tmpfs tmpfs /newroot/dev/shm 2>/dev/null || true
     /bin/mount -t proc proc /newroot/proc 2>/dev/null || true
     /bin/mount -t sysfs sysfs /newroot/sys 2>/dev/null || true
     /bin/mount -t tmpfs tmpfs /newroot/run 2>/dev/null || true

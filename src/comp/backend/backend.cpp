@@ -9,8 +9,9 @@ public:
         log::info("HeadlessBackend: Initialized headless display backend for CI test suites.");
         return true;
     }
-    void poll_events() override {}
-    void swap_buffers() override {}
+    bool start() override { return true; }
+    void stop() override {}
+    void shutdown() override {}
     BackendType type() const noexcept override { return BackendType::Headless; }
 };
 

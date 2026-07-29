@@ -1,9 +1,5 @@
 add_executable(tinexus-launcher
     main.cpp
-    theme_manager.cpp
-    search_model.cpp
-    ipc_client.cpp
-    launcher_controller.cpp
 )
 
 target_include_directories(tinexus-launcher PRIVATE
@@ -12,6 +8,7 @@ target_include_directories(tinexus-launcher PRIVATE
 
 target_link_libraries(tinexus-launcher PRIVATE
     tinexus_common
+    txui
     tinexus_warnings
     tinexus_sanitizers
 )

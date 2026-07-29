@@ -1,39 +1,54 @@
-#include "common/logger.hpp"
-#include "common/version.hpp"
-#include "launcher/theme_manager.hpp"
-#include "launcher/launcher_controller.hpp"
-#include "launcher/ipc_client.hpp"
-#include <csignal>
-#include <thread>
-#include <chrono>
-#include <atomic>
+#include <txui/window/Window.hpp>
+#include <txui/widgets/SolidColorWidget.hpp>
+#include <txui/widgets/SizedBox.hpp>
+#include <txui/layout/FlexLayout.hpp>
+#include <common/logger.hpp>
+#include <linux/input-event-codes.h>
 
-namespace {
-std::atomic<bool> g_running{true};
+using namespace tinexus;
 
-void signal_handler(int signal) {
-    tinexus::log::info("launcher received signal {}, shutting down...", signal);
-    g_running = false;
-}
-} // namespace
+int main() {
+    log::set_component_name("launcher");
+    log::info("Phase A: tinexus-launcher (Milestone 3) starting...");
 
-int main(int argc, char** argv) {
-    tinexus::log::set_component_name("tinexus-launcher");
-    tinexus::log::info("Starting tinexus-launcher v{} - Command Palette UI", tinexus::VERSION_STRING);
+    auto window = txui::Window::create(700, 500, "Tinexus Launcher");
 
-    std::signal(SIGINT, signal_handler);
-    std::signal(SIGTERM, signal_handler);
+    auto root = txui::make_ref<txui::FlexLayout>();
+    root->set_direction(txui::FlexDirection::Column);
+    root->set_main_axis_alignment(txui::MainAxisAlignment::SpaceEvenly);
+    root->set_cross_axis_alignment(txui::CrossAxisAlignment::Center);
 
-    tinexus::launcher::ThemeManager::instance().set_dark_theme();
-    tinexus::launcher::LauncherController::instance().show();
+    // Colored blocks for Search, Grid etc.
+    auto search_color = txui::make_ref<txui::SolidColorWidget>(txui::Color(255, 255, 255, 127));
+    auto search_box = txui::make_ref<txui::SizedBox>(600, 50);
+    search_box->add_child(search_color);
+    
+    auto grid_color = txui::make_ref<txui::SolidColorWidget>(txui::Color(0, 0, 0, 127));
+    auto grid_box = txui::make_ref<txui::SizedBox>(600, 300);
+    grid_box->add_child(grid_color);
 
-    tinexus::log::info("tinexus-launcher connected to wayland-0");
-    tinexus::log::info("tinexus-launcher UI ready.");
+    root->add_child(search_box);
+    root->add_child(grid_box);
 
-    while (g_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    window->set_root_widget(root);
+
+    // Run event loop
+    bool running = true;
+    while (running && !window->should_close()) {
+        txui::Event event;
+        while (window->poll_event(event)) {
+            if (event.type == txui::EventType::WindowClose) {
+                running = false;
+            } else if (event.type == txui::EventType::KeyDown) {
+                if (event.keyboard.key == txui::Key::Escape) {
+                    running = false;
+                }
+            }
+        }
+        
+        window->present();
+        window->wait();
     }
-
-    tinexus::log::info("tinexus-launcher shutdown complete.");
+    
     return 0;
 }

@@ -38,6 +38,7 @@ foreach(xml ${PROTOCOL_XMLS})
     add_custom_command(
         OUTPUT ${client_header_file}
         COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header ${CMAKE_CURRENT_SOURCE_DIR}/${xml} ${client_header_file}
+        COMMAND sed -i "s/namespace/layer_namespace/g" ${client_header_file}
         DEPENDS ${xml}
         VERBATIM
     )

@@ -10,6 +10,11 @@ add_library(txui STATIC
     wayland/WaylandConnection.cpp
     wayland/WaylandBuffer.cpp
     wayland/WaylandSurface.cpp
+    wayland/WaylandInput.cpp
+    wayland/WaylandEventLoop.cpp
+    window/Window.cpp
+    widgets/Widget.cpp
+    layout/FlexLayout.cpp
 )
 
 target_compile_features(txui PUBLIC cxx_std_20)
@@ -25,6 +30,7 @@ target_include_directories(txui
 target_link_libraries(txui
     PUBLIC
         PkgConfig::WAYLAND_CLIENT
+        tinexus_protocols_client
     PRIVATE
         tinexus_warnings
 )

@@ -174,6 +174,21 @@ bool ProcessManager::start_all_services() {
     auto startup_order = m_graph.get_startup_order();
     for (const auto& id : startup_order) {
         start_service(id);
+        
+        if (id == "comp") {
+            log::info("Waiting for Wayland socket (wayland-0)...");
+            int retries = 0;
+            // XDG_RUNTIME_DIR is /run/user/0
+            while (!std::filesystem::exists("/run/user/0/wayland-0") && retries < 50) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                retries++;
+            }
+            if (retries >= 50) {
+                log::error("Timeout waiting for wayland-0 socket!");
+            } else {
+                log::info("wayland-0 socket is ready.");
+            }
+        }
     }
     return true;
 }
