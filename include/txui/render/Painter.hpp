@@ -38,6 +38,10 @@ public:
     void fill_rounded_rect(const Rect& rect, Coordinate radius, const Color& color) {
         fill_rounded_rect(rect, radius, Brush{SolidBrush{color}});
     }
+
+    void draw_text(const Point& pos, const std::string& text, const Color& color, double scale = 1.0) {
+        m_buffer.push(DrawTextCommand{pos, text, color, scale});
+    }
 };
 
 } // namespace txui

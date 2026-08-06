@@ -4,6 +4,9 @@
 #include <txui/graphics/Brush.hpp>
 #include <variant>
 
+#include <txui/math/Point.hpp>
+#include <string>
+
 namespace txui {
 
 enum class CommandType : uint16 {
@@ -15,6 +18,7 @@ enum class CommandType : uint16 {
 
     DrawRect,
     DrawRoundedRect,
+    DrawText,
     DrawLine,
     DrawImage,
     DrawPath,
@@ -44,13 +48,21 @@ struct DrawRoundedRectCommand {
     Brush brush;
 };
 
-// Phase 4.2.2 Vertical Slice: Solid Rectangle + Rounded Rectangle exposed in Command variant.
+struct DrawTextCommand {
+    Point position;
+    std::string text;
+    Color color;
+    double scale{1.0};
+};
+
+// Phase 4.2.2 Vertical Slice: Solid Rectangle + Rounded Rectangle + Text exposed in Command variant.
 using Command = std::variant<
     BeginFrameCommand,
     EndFrameCommand,
     SetBrushCommand,
     DrawRectCommand,
-    DrawRoundedRectCommand
+    DrawRoundedRectCommand,
+    DrawTextCommand
 >;
 
 [[nodiscard]] inline constexpr CommandType command_type(const Command& cmd) noexcept {
@@ -61,6 +73,7 @@ using Command = std::variant<
         else if constexpr (std::is_same_v<T, SetBrushCommand>) return CommandType::SetBrush;
         else if constexpr (std::is_same_v<T, DrawRectCommand>) return CommandType::DrawRect;
         else if constexpr (std::is_same_v<T, DrawRoundedRectCommand>) return CommandType::DrawRoundedRect;
+        else if constexpr (std::is_same_v<T, DrawTextCommand>) return CommandType::DrawText;
     }, cmd);
 }
 

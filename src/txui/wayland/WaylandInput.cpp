@@ -4,6 +4,7 @@
 #include <linux/input-event-codes.h>
 #include <unistd.h>
 #include <utility>
+#include <memory>
 
 namespace txui::wayland {
 
@@ -183,14 +184,14 @@ WaylandInput& WaylandInput::operator=(WaylandInput&& other) noexcept {
 WaylandInput::~WaylandInput() noexcept {
     if (m_keyboard != nullptr) wl_keyboard_destroy(m_keyboard);
     if (m_pointer != nullptr) wl_pointer_destroy(m_pointer);
-    if (m_seat != nullptr) wl_seat_destroy(m_seat);
+    // Note: m_seat is owned by WaylandConnection; we do not call wl_seat_destroy here.
 }
 
-std::optional<WaylandInput> WaylandInput::create(wl_seat* seat) noexcept {
+std::unique_ptr<WaylandInput> WaylandInput::create(wl_seat* seat) noexcept {
     if (seat == nullptr) {
-        return std::nullopt;
+        return nullptr;
     }
-    return WaylandInput(seat);
+    return std::unique_ptr<WaylandInput>(new WaylandInput(seat));
 }
 
 void WaylandInput::set_event_sink(void* ctx, EventSink sink, uint32 window_id) noexcept {

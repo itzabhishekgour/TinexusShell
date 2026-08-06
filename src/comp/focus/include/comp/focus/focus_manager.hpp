@@ -106,6 +106,9 @@ private:
     FocusTargetType m_focus_type{FocusTargetType::None};
     uint64_t        m_surface_id{0};
     std::string     m_target_id;
+
+    // Keyboard focus tracking (Phase 4)
+    struct wlr_surface* m_keyboard_surface{nullptr}; ///< currently keyboard-focused surface
 };
 
 } // namespace tinexus::comp

@@ -38,6 +38,8 @@ public:
     
     void show() noexcept;
     int exec() noexcept;
+    [[nodiscard]] bool is_valid() const noexcept;
+    [[nodiscard]] bool should_close() const noexcept { return m_should_close; }
 
     // Callbacks
     void on_configure(uint32_t width, uint32_t height) noexcept;

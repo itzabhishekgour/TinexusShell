@@ -5,10 +5,12 @@ add_executable(tinexus-wallpaper
 
 target_include_directories(tinexus-wallpaper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/protocols
 )
 
 target_link_libraries(tinexus-wallpaper PRIVATE
     tinexus_common
+    txui
     tinexus_warnings
     tinexus_sanitizers
 )

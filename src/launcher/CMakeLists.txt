@@ -1,9 +1,11 @@
 add_executable(tinexus-launcher
     main.cpp
+    ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
 )
 
 target_include_directories(tinexus-launcher PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/indexer/include
 )
 
 target_link_libraries(tinexus-launcher PRIVATE

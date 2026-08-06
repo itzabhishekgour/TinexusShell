@@ -110,7 +110,7 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title) 
         win->m_event_loop = wayland::WaylandEventLoop(win->m_connection->display());
         win->m_input = wayland::WaylandInput::create(win->m_connection->seat());
 
-        if (win->m_input.has_value()) {
+        if (win->m_input != nullptr) {
             win->m_input->set_event_sink(win.get(), handle_input_event, win_id);
         }
 

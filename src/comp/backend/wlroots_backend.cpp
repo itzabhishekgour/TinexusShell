@@ -11,6 +11,7 @@ extern "C" {
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_cursor.h>
@@ -29,8 +30,12 @@ extern "C" {
 }
 
 #include "comp/input/seat_manager.hpp"
+#include "comp/input/shortcut_engine.hpp"
 #include "comp/cursor/cursor_manager.hpp"
 #include "comp/focus/focus_manager.hpp"
+#include <unistd.h>
+#include <cstdlib>
+#include <sys/wait.h>
 
 namespace tinexus::comp {
 
@@ -71,11 +76,13 @@ public:
         }
 
         // 4. Create compositor
-        m_wlr_compositor = wlr_compositor_create(m_display, 5, m_wlr_renderer);
+        m_wlr_compositor = wlr_compositor_create(m_display, 6, m_wlr_renderer);
         if (!m_wlr_compositor) {
             log::error("[Backend] Failed to create wlroots compositor.");
             return false;
         }
+
+        wlr_subcompositor_create(m_display);
 
         // 5. Create wlr_shm with renderer (critical for SHM buffer type recognition)
         // wl_display_init_shm alone doesn't register renderer-supported formats
@@ -196,6 +203,7 @@ public:
     BackendType type() const noexcept override { return BackendType::Wlroots; }
 
 private:
+    struct ToplevelWrapper;
     struct wl_display* m_display{nullptr};
     struct wlr_backend* m_wlr_backend{nullptr};
     struct wlr_renderer* m_wlr_renderer{nullptr};
@@ -228,6 +236,7 @@ private:
     struct wl_listener m_new_xdg_surface_listener;
 
     std::vector<std::unique_ptr<TinexusOutput>> m_outputs;
+    ToplevelWrapper* m_active_toplevel{nullptr};
 
     struct KeyboardWrapper {
         struct wl_listener modifiers;
@@ -238,12 +247,38 @@ private:
     };
     std::vector<std::unique_ptr<KeyboardWrapper>> m_keyboards;
 
+    // Tracks the Wayland socket name so child processes inherit WAYLAND_DISPLAY
+    std::string m_wayland_socket{};
+
     struct LayerSurfaceWrapper {
         struct wlr_layer_surface_v1* layer_surface{nullptr};
         struct wlr_scene_layer_surface_v1* scene_layer{nullptr};
         struct wl_listener destroy;
         struct wl_listener commit;
     };
+
+    struct ToplevelWrapper {
+        struct wlr_xdg_toplevel* toplevel{nullptr};
+        struct wlr_scene_tree* scene_tree{nullptr}; // scene node for rendering
+        struct wl_listener map;     // fires when surface first gains a buffer
+        struct wl_listener commit;  // fires on every client commit (needed for initial configure in wlroots 0.19)
+        struct wl_listener destroy;
+        struct wl_listener request_maximize;
+        struct wl_listener request_fullscreen;
+        struct wl_listener request_minimize;
+        WlrootsBackend* backend{nullptr};
+
+        // Window states
+        bool is_maximized{false};
+        bool is_fullscreen{false};
+
+        // Saved geometry for restoring after maximize/fullscreen
+        int32_t saved_x{50};
+        int32_t saved_y{100};
+        int32_t saved_width{800};
+        int32_t saved_height{600};
+    };
+    std::vector<std::unique_ptr<ToplevelWrapper>> m_toplevels;
 
     static void handle_new_layer_surface(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_layer_surface_listener);
@@ -296,16 +331,125 @@ private:
 
         wrapper->commit.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, commit);
-            if (w->layer_surface->initialized) {
-                struct wlr_box full_area = {0, 0, 0, 0};
-                if (w->layer_surface->output) {
-                    wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
-                }
-                struct wlr_box usable_area = full_area;
-                wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+            struct wlr_box full_area = {0, 0, 0, 0};
+            if (w->layer_surface->output) {
+                wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
             }
+            struct wlr_box usable_area = full_area;
+            wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
         };
         wl_signal_add(&layer_surface->surface->events.commit, &wrapper->commit);
+    }
+
+    ToplevelWrapper* find_toplevel_from_node(struct wlr_scene_node* node) {
+        if (!node) return nullptr;
+        struct wlr_scene_node* current = node;
+        while (current->parent != nullptr && current->parent != m_scene_tree_normal) {
+            current = &current->parent->node;
+        }
+        for (const auto& w : m_toplevels) {
+            if (w->scene_tree && &w->scene_tree->node == current) {
+                return w.get();
+            }
+        }
+        return nullptr;
+    }
+
+    void focus_toplevel(ToplevelWrapper* wrapper) {
+        if (m_active_toplevel == wrapper) {
+            return;
+        }
+        if (m_active_toplevel != nullptr) {
+            wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
+        }
+        m_active_toplevel = wrapper;
+        if (wrapper != nullptr) {
+            log::info("[Window] Focus window app_id='{}' title='{}'",
+                      wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown",
+                      wrapper->toplevel->title ? wrapper->toplevel->title : "untitled");
+            wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
+            wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
+        } else {
+            FocusManager::instance().set_keyboard_focus(nullptr);
+        }
+    }
+
+    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
+        if (wrapper->is_maximized == maximize) {
+            wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+            return;
+        }
+        wrapper->is_maximized = maximize;
+        if (maximize) {
+            if (!wrapper->is_fullscreen) {
+                wrapper->saved_x = wrapper->scene_tree->node.x;
+                wrapper->saved_y = wrapper->scene_tree->node.y;
+                wrapper->saved_width = wrapper->toplevel->base->current.geometry.width;
+                wrapper->saved_height = wrapper->toplevel->base->current.geometry.height;
+                if (wrapper->saved_width <= 0) wrapper->saved_width = 800;
+                if (wrapper->saved_height <= 0) wrapper->saved_height = 600;
+            }
+            struct wlr_box output_box = {0, 0, 1280, 800};
+            if (!m_outputs.empty()) {
+                struct wlr_output* out = m_outputs.front()->get_wlr_output();
+                if (out) {
+                    wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
+                }
+            }
+            int32_t target_width = output_box.width;
+            int32_t target_height = output_box.height - 48; // Exclude top panel
+            log::info("[Window] Maximize window to {}x{}", target_width, target_height);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 48);
+            wlr_xdg_toplevel_set_maximized(wrapper->toplevel, true);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, target_width, target_height);
+        } else {
+            log::info("[Window] Restore maximized window to {}x{}", wrapper->saved_width, wrapper->saved_height);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->saved_x, wrapper->saved_y);
+            wlr_xdg_toplevel_set_maximized(wrapper->toplevel, false);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
+        }
+        wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+    }
+
+    void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
+        if (wrapper->is_fullscreen == fullscreen) {
+            wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+            return;
+        }
+        wrapper->is_fullscreen = fullscreen;
+        if (fullscreen) {
+            if (!wrapper->is_maximized) {
+                wrapper->saved_x = wrapper->scene_tree->node.x;
+                wrapper->saved_y = wrapper->scene_tree->node.y;
+                wrapper->saved_width = wrapper->toplevel->base->current.geometry.width;
+                wrapper->saved_height = wrapper->toplevel->base->current.geometry.height;
+                if (wrapper->saved_width <= 0) wrapper->saved_width = 800;
+                if (wrapper->saved_height <= 0) wrapper->saved_height = 600;
+            }
+            struct wlr_box output_box = {0, 0, 1280, 800};
+            if (!m_outputs.empty()) {
+                struct wlr_output* out = m_outputs.front()->get_wlr_output();
+                if (out) {
+                    wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
+                }
+            }
+            log::info("[Window] Fullscreen window to {}x{}", output_box.width, output_box.height);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+            wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, true);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, output_box.width, output_box.height);
+        } else {
+            if (wrapper->is_maximized) {
+                wrapper->is_maximized = false; // reset flag to trigger correct resize logic
+                toplevel_set_maximized(wrapper, true);
+            } else {
+                log::info("[Window] Restore fullscreen window to {}x{}", wrapper->saved_width, wrapper->saved_height);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->saved_x, wrapper->saved_y);
+                wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, false);
+                wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
+            }
+        }
+        wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
     static void handle_new_xdg_toplevel(struct wl_listener* listener, void* data) {
@@ -313,7 +457,116 @@ private:
         auto* xdg_toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
 
         log::info("[XDGShell] New XDG toplevel surface created");
-        wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
+        struct wlr_scene_tree* scene_tree = wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
+
+        auto wrapper = std::make_unique<ToplevelWrapper>();
+        wrapper->toplevel = xdg_toplevel;
+        wrapper->scene_tree = scene_tree;
+        wrapper->backend  = self;
+
+        // Position window with cascade offset
+        int32_t offset_x = 50 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
+        int32_t offset_y = 100 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
+        wlr_scene_node_set_position(&scene_tree->node, offset_x, offset_y);
+
+        // map fires when the surface first attaches a buffer (i.e. is ready to show)
+        wrapper->map.notify = handle_toplevel_map;
+        wl_signal_add(&xdg_toplevel->base->surface->events.map, &wrapper->map);
+
+        // commit fires on client commits (needed to send configure on initial_commit)
+        wrapper->commit.notify = handle_toplevel_commit;
+        wl_signal_add(&xdg_toplevel->base->surface->events.commit, &wrapper->commit);
+
+        // destroy — clean up our wrapper
+        wrapper->destroy.notify = handle_toplevel_destroy;
+        wl_signal_add(&xdg_toplevel->events.destroy, &wrapper->destroy);
+
+        // State request listeners
+        wrapper->request_maximize.notify = handle_toplevel_request_maximize;
+        wl_signal_add(&xdg_toplevel->events.request_maximize, &wrapper->request_maximize);
+
+        wrapper->request_fullscreen.notify = handle_toplevel_request_fullscreen;
+        wl_signal_add(&xdg_toplevel->events.request_fullscreen, &wrapper->request_fullscreen);
+
+        wrapper->request_minimize.notify = handle_toplevel_request_minimize;
+        wl_signal_add(&xdg_toplevel->events.request_minimize, &wrapper->request_minimize);
+
+        self->m_toplevels.push_back(std::move(wrapper));
+    }
+
+    static void handle_toplevel_map(struct wl_listener* listener, void* /*data*/) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, map);
+        struct wlr_surface* surface = wrapper->toplevel->base->surface;
+        log::info("[XDGShell] Toplevel mapped — auto-focusing surface={}",
+                  static_cast<void*>(surface));
+        wrapper->backend->focus_toplevel(wrapper);
+    }
+
+    static void handle_toplevel_commit(struct wl_listener* listener, void* /*data*/) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, commit);
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+        if (toplevel->base->initial_commit) {
+            log::info("[XDGShell] Initial commit for toplevel — scheduling initial configure");
+            wlr_xdg_surface_schedule_configure(toplevel->base);
+        }
+    }
+
+    static void handle_toplevel_request_maximize(struct wl_listener* listener, void* data) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_maximize);
+        struct wlr_xdg_toplevel* toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
+        log::info("[XDGShell] Request maximize state={}", toplevel->requested.maximized);
+        wrapper->backend->toplevel_set_maximized(wrapper, toplevel->requested.maximized);
+    }
+
+    static void handle_toplevel_request_fullscreen(struct wl_listener* listener, void* data) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
+        struct wlr_xdg_toplevel* toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
+        log::info("[XDGShell] Request fullscreen state={}", toplevel->requested.fullscreen);
+        wrapper->backend->toplevel_set_fullscreen(wrapper, toplevel->requested.fullscreen);
+    }
+
+    static void handle_toplevel_request_minimize(struct wl_listener* listener, void* data) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
+        struct wlr_xdg_toplevel* toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
+        log::info("[XDGShell] Request minimize (not implemented) - acknowledging");
+        wlr_xdg_surface_schedule_configure(toplevel->base);
+    }
+
+    static void handle_toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        WlrootsBackend* backend = wrapper->backend;
+
+        if (backend->m_active_toplevel == wrapper) {
+            backend->m_active_toplevel = nullptr;
+            // Focus next available window in stack
+            if (backend->m_toplevels.size() > 1) {
+                ToplevelWrapper* next_focus = nullptr;
+                for (auto it = backend->m_toplevels.rbegin(); it != backend->m_toplevels.rend(); ++it) {
+                    if (it->get() != wrapper) {
+                        next_focus = it->get();
+                        break;
+                    }
+                }
+                backend->focus_toplevel(next_focus);
+            } else {
+                FocusManager::instance().set_keyboard_focus(nullptr);
+            }
+        }
+
+        wl_list_remove(&wrapper->map.link);
+        wl_list_remove(&wrapper->commit.link);
+        wl_list_remove(&wrapper->destroy.link);
+        wl_list_remove(&wrapper->request_maximize.link);
+        wl_list_remove(&wrapper->request_fullscreen.link);
+        wl_list_remove(&wrapper->request_minimize.link);
+
+        // Remove from list
+        for (auto it = backend->m_toplevels.begin(); it != backend->m_toplevels.end(); ++it) {
+            if (it->get() == wrapper) {
+                backend->m_toplevels.erase(it);
+                break;
+            }
+        }
     }
 
     static void handle_new_output(struct wl_listener* listener, void* data) {
@@ -421,20 +674,36 @@ private:
         KeyboardWrapper* wrapper = wl_container_of(listener, wrapper, key);
         auto* event = static_cast<struct wlr_keyboard_key_event*>(data);
 
-        // Debug: log key symbol for diagnostics
+        // XKB keycode = evdev keycode + 8
         uint32_t keycode = event->keycode + 8;
+        bool is_pressed = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
+
+        // Resolve XKB keysym for diagnostics and shortcut detection
+        xkb_keysym_t primary_sym = XKB_KEY_NoSymbol;
         if (wrapper->keyboard->xkb_state) {
             const xkb_keysym_t* syms;
             int nsyms = xkb_state_key_get_syms(
                 wrapper->keyboard->xkb_state, keycode, &syms);
             if (nsyms > 0) {
+                primary_sym = syms[0];
                 log::info("[Keyboard] Key sym={} state={}",
-                          syms[0], static_cast<uint32_t>(event->state));
+                          primary_sym, static_cast<uint32_t>(event->state));
             }
         } else {
             log::warn("[Keyboard] xkb_state is NULL! Cannot resolve keycode {}", keycode);
         }
 
+        // ── Global shortcut interception (Ctrl+K → launcher) ──────────────────
+        // Get current modifier state from wlroots keyboard struct
+        uint32_t wlr_mods = wlr_keyboard_get_modifiers(wrapper->keyboard);
+        // wlroots modifier flags: WLR_MODIFIER_CTRL = (1<<2)
+        if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed)) {
+            // Shortcut intercepted — do NOT forward to the focused Wayland client
+            log::info("[Keyboard] Global shortcut intercepted — swallowing key event.");
+            return;
+        }
+
+        // Forward normal key to focused client via seat
         SeatManager::instance().notify_keyboard_key(
             wrapper->keyboard,
             event->time_msec,
@@ -482,7 +751,22 @@ private:
     }
 
     static void handle_cursor_button(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_button_listener);
         auto* event = static_cast<struct wlr_pointer_button_event*>(data);
+
+        // Click-to-focus: on button press, find window from clicked scene node, focus & raise it
+        if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+            double sx{0.0}, sy{0.0};
+            struct wlr_scene_node* node = wlr_scene_node_at(
+                &self->m_scene->tree.node, self->m_cursor->x, self->m_cursor->y, &sx, &sy);
+            if (node) {
+                ToplevelWrapper* clicked_wrapper = self->find_toplevel_from_node(node);
+                if (clicked_wrapper != nullptr) {
+                    self->focus_toplevel(clicked_wrapper);
+                }
+            }
+        }
+
         SeatManager::instance().notify_button(
             event->time_msec, event->button,
             static_cast<uint32_t>(event->state));

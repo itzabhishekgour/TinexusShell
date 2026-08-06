@@ -4,9 +4,16 @@
 #include "comp/cursor/cursor_manager.hpp"
 #include "comp/workspace/workspace_manager.hpp"
 #include "comp/render/frame_scheduler.hpp"
+#include "comp/input/shortcut_engine.hpp"
 #include "common/logger.hpp"
 #include <thread>
 #include <chrono>
+#include <cstdlib>
+#include <cerrno>
+#include <cstring>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <csignal>
 
 #include <wayland-server-core.h>
 
@@ -65,6 +72,10 @@ bool TinexusServer::initialize() {
         m_display_socket = "wayland-0";
     }
 
+    // Export WAYLAND_DISPLAY so child processes (launcher, etc.) can connect
+    setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
+    log::info("TinexusServer: WAYLAND_DISPLAY={}", m_display_socket);
+
     // wl_shm is now initialized via wlr_shm_create_with_renderer() inside the backend
     log::info("TinexusServer: Successfully initialized wayland server on socket '{}'", m_display_socket);
 
@@ -80,6 +91,44 @@ bool TinexusServer::initialize() {
 
     // Target frame rate
     FrameScheduler::instance().set_target_refresh_rate(60);
+
+    // ── Register global shortcut handler ──────────────────────────────────────
+    // Ctrl+K → spawn tinexus-launcher as a Wayland client
+    ShortcutEngine::instance().set_shortcut_callback(
+        [this](const std::string& shortcut_name) {
+            if (shortcut_name == "launcher_toggle") {
+                log::info("[Server] Ctrl+K: spawning tinexus-launcher on WAYLAND_DISPLAY={}",
+                          m_display_socket);
+                // Double-fork to avoid zombie: parent returns immediately,
+                // grandchild execs the launcher.
+                pid_t pid = fork();
+                if (pid < 0) {
+                    log::error("[Server] fork() failed when spawning launcher");
+                    return;
+                }
+                if (pid == 0) {
+                    // First child: fork again then exit so init reaps grandchild
+                    pid_t grandchild = fork();
+                    if (grandchild < 0) { _exit(1); }
+                    if (grandchild == 0) {
+                        // Grandchild: become launcher
+                        // Ensure WAYLAND_DISPLAY is set for this process
+                        setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
+                        setsid(); // detach from compositor session
+                        execlp("tinexus-launcher", "tinexus-launcher", nullptr);
+                        // If execlp fails, try absolute path
+                        execl("/usr/bin/tinexus-launcher", "tinexus-launcher", nullptr);
+                        log::error("[Server] Failed to exec tinexus-launcher: {}", strerror(errno));
+                        _exit(127);
+                    }
+                    _exit(0); // First child exits immediately
+                }
+                // Parent: reap the first child quickly
+                int status = 0;
+                waitpid(pid, &status, 0);
+            }
+        });
+    log::info("[Server] ShortcutEngine: Ctrl+K callback registered.");
 
     return true;
 }

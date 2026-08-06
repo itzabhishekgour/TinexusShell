@@ -40,7 +40,7 @@ private:
 
     std::optional<wayland::WaylandConnection> m_connection;
     std::optional<wayland::WaylandEventLoop> m_event_loop;
-    std::optional<wayland::WaylandInput> m_input;
+    std::unique_ptr<wayland::WaylandInput> m_input;
     std::unique_ptr<RenderTarget> m_render_target;
 
     xdg_wm_base* m_wm_base{nullptr};

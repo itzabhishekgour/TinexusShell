@@ -14,6 +14,7 @@ extern "C" {
 #include <wlr/types/wlr_scene.h>
 #undef static
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_keyboard.h>   // wlr_seat_get_keyboard, wlr_keyboard
 #include <wlr/types/wlr_compositor.h> // wlr_surface
 }
 
@@ -101,20 +102,35 @@ void FocusManager::update_pointer_focus(const PickResult& pick,
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard focus  (Phase 4 stub — logs only, seat notify added later)
+// Keyboard focus — real implementation (Phase 4)
 // ---------------------------------------------------------------------------
 
 void FocusManager::set_keyboard_focus(struct wlr_surface* surface) noexcept {
     if (!m_seat) {
         return;
     }
+
+    // Avoid redundant re-enters
+    if (surface == m_keyboard_surface) {
+        return;
+    }
+
+    m_keyboard_surface = surface;
+
     if (surface) {
-        log::info("[Focus] Keyboard Focus → surface={}",
-                  static_cast<void*>(surface));
-        // Phase 4: wlr_seat_keyboard_notify_enter() will go here
+        struct wlr_keyboard* kb = wlr_seat_get_keyboard(m_seat);
+        if (kb) {
+            wlr_seat_keyboard_notify_enter(
+                m_seat, surface,
+                kb->keycodes, kb->num_keycodes,
+                &kb->modifiers);
+            log::info("[Focus] Keyboard → surface={}", static_cast<void*>(surface));
+        } else {
+            log::warn("[Focus] set_keyboard_focus: no keyboard attached to seat yet");
+        }
     } else {
-        log::info("[Focus] Keyboard Focus cleared");
-        // Phase 4: wlr_seat_keyboard_notify_clear_focus() will go here
+        wlr_seat_keyboard_notify_clear_focus(m_seat);
+        log::info("[Focus] Keyboard cleared");
     }
 }
 

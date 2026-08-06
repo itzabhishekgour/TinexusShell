@@ -126,7 +126,7 @@ void LayerShellWindow::on_close_request() noexcept {
 }
 
 void LayerShellWindow::present() noexcept {
-    if (!m_configured || !m_root_widget || m_should_close) return;
+    if (!is_valid() || !m_configured || !m_root_widget || m_should_close) return;
 
     // 1. Measure & Layout
     txui::Constraints constraints;
@@ -151,18 +151,46 @@ void LayerShellWindow::present() noexcept {
 }
 
 void LayerShellWindow::show() noexcept {
+    if (!is_valid()) return;
     // Initial roundtrip to process configure
     m_connection.roundtrip();
 }
 
+#include <poll.h>
+
 int LayerShellWindow::exec() noexcept {
+    if (!is_valid()) {
+        return -1;
+    }
     log::info("LayerShellWindow: Entering event loop...");
+    
+    int fd = wl_display_get_fd(m_connection.display());
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
     while (!m_should_close) {
-        if (wl_display_dispatch(m_connection.display()) == -1) {
-            break;
+        while (wl_display_prepare_read(m_connection.display()) != 0) {
+            wl_display_dispatch_pending(m_connection.display());
         }
+        wl_display_flush(m_connection.display());
+
+        int ret = poll(&pfd, 1, 1000); // 1 second timeout
+        if (ret > 0) {
+            wl_display_read_events(m_connection.display());
+            wl_display_dispatch_pending(m_connection.display());
+        } else {
+            wl_display_cancel_read(m_connection.display());
+        }
+        
+        // Return control briefly to allow main thread to process timer
+        break; 
     }
     return 0;
+}
+
+bool LayerShellWindow::is_valid() const noexcept {
+    return m_connection.is_valid() && m_layer_surface != nullptr && m_render_target != nullptr;
 }
 
 } // namespace tinexus::panel

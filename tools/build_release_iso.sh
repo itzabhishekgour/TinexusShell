@@ -81,27 +81,24 @@ EOF
     echo "tmpfs   /tmp    tmpfs   defaults,nosuid,nodev   0 0" > "$ROOTFS_DIR/etc/fstab"
 
     local staged=0
-    local tinexus_build="$BUILD_DIR/txui_verify"
-    if [ -d "$tinexus_build" ]; then
-        while IFS= read -r -d '' candidate; do
-            if file "$candidate" | grep -q "ELF.*executable\|ELF.*shared object"; then
-                if [[ "$candidate" == *"tinexus-"* ]] || [[ "$candidate" == *"libtinexus"* ]]; then
-                    local dest_dir="$ROOTFS_DIR/usr/bin"
-                    [[ "$candidate" == *".so"* ]] && dest_dir="$ROOTFS_DIR/usr/lib"
-                    mkdir -p "$dest_dir"
-                    cp -L "$candidate" "$dest_dir/"
-                    staged=$((staged + 1))
-                    
-                    ldd "$candidate" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                        [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-                    done
-                    ldd "$candidate" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                        [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-                    done
-                fi
+    while IFS= read -r -d '' candidate; do
+        if file "$candidate" | grep -q "ELF.*executable\|ELF.*shared object"; then
+            if [[ "$candidate" == *"tinexus-"* ]] || [[ "$candidate" == *"libtinexus"* ]]; then
+                local dest_dir="$ROOTFS_DIR/usr/bin"
+                [[ "$candidate" == *".so"* ]] && dest_dir="$ROOTFS_DIR/usr/lib"
+                mkdir -p "$dest_dir"
+                cp -L "$candidate" "$dest_dir/"
+                staged=$((staged + 1))
+                
+                ldd "$candidate" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                    [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+                done
+                ldd "$candidate" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+                    [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+                done
             fi
-        done < <(find "$tinexus_build" -maxdepth 4 \( -type f -o -type l \) \( -name 'tinexus-*' -o -name 'libtinexus*.so*' \) -print0 2>/dev/null)
-    fi
+        fi
+    done < <(find "$BUILD_DIR" -maxdepth 6 \( -type f -o -type l \) \( -name 'tinexus-*' -o -name 'libtinexus*.so*' \) -print0 2>/dev/null)
     success "Staged $staged Tinexus ELF binaries and dependencies."
 
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
@@ -166,6 +163,79 @@ EOF_UDEV_SEAT
             done
         done
     fi
+
+    # ── Stage foot terminal + fonts + fontconfig ──────────────────────────────
+    info "Staging foot terminal and font stack..."
+    local foot_bin
+    foot_bin="$(command -v foot 2>/dev/null || true)"
+    if [ -n "$foot_bin" ] && [ -f "$foot_bin" ]; then
+        cp -L "$foot_bin" "$ROOTFS_DIR/usr/bin/foot"
+        ldd "$foot_bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+        done
+        ldd "$foot_bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld; do
+            [ -f "$ld" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld")"; cp -L "$ld" "$ROOTFS_DIR$ld" 2>/dev/null || true; }
+        done
+        # terminfo entry (foot needs its own)
+        if [ -d "/usr/share/terminfo/f" ]; then
+            mkdir -p "$ROOTFS_DIR/usr/share/terminfo/f"
+            cp -r /usr/share/terminfo/f/. "$ROOTFS_DIR/usr/share/terminfo/f/" 2>/dev/null || true
+        fi
+        success "foot binary staged."
+    else
+        warn "foot not found on host — terminal launch will fall back to weston-terminal/alacritty."
+    fi
+
+    # Fonts — without these foot renders blank text or crashes
+    info "Staging fonts for foot terminal..."
+    mkdir -p "$ROOTFS_DIR/usr/share/fonts"
+    for font_dir in \
+        "/usr/share/fonts/truetype/dejavu" \
+        "/usr/share/fonts/truetype/liberation" \
+        "/usr/share/fonts/truetype/noto" \
+        "/usr/share/fonts/opentype/noto" \
+        "/usr/share/fonts/X11/misc"; do
+        if [ -d "$font_dir" ]; then
+            local dest="$ROOTFS_DIR${font_dir}"
+            mkdir -p "$dest"
+            cp -r "${font_dir}/." "$dest/" 2>/dev/null || true
+        fi
+    done
+
+    # fontconfig — so foot can discover fonts at runtime
+    info "Staging fontconfig..."
+    if [ -d "/etc/fonts" ]; then
+        cp -r /etc/fonts "$ROOTFS_DIR/etc/" 2>/dev/null || true
+    fi
+    if [ -d "/usr/share/fontconfig" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/share/fontconfig"
+        cp -r /usr/share/fontconfig/. "$ROOTFS_DIR/usr/share/fontconfig/" 2>/dev/null || true
+    fi
+    if [ -d "/var/cache/fontconfig" ]; then
+        mkdir -p "$ROOTFS_DIR/var/cache/fontconfig"
+        cp -r /var/cache/fontconfig/. "$ROOTFS_DIR/var/cache/fontconfig/" 2>/dev/null || true
+    fi
+
+    # Stage custom wallpaper image from Temp directory
+    info "Staging custom wallpaper image into rootfs..."
+    mkdir -p "$ROOTFS_DIR/usr/share/backgrounds"
+    if [ -f "$PROJECT_DIR/Temp/tinexus-default.jpg" ]; then
+        cp -L "$PROJECT_DIR/Temp/tinexus-default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
+        success "Staged 1080p mountain wallpaper (tinexus-default.jpg)."
+    elif [ -f "$PROJECT_DIR/Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg" ]; then
+        cp -L "$PROJECT_DIR/Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
+        success "Staged custom mountain wallpaper."
+    fi
+
+    # Locale — foot uses LC_ALL/LANG; stage minimal en_US.UTF-8
+    info "Staging locale data (en_US.UTF-8)..."
+    if [ -d "/usr/lib/locale" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/lib/locale"
+        cp -r /usr/lib/locale/en_US.utf8 "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
+        [ -f "/usr/lib/locale/locale-archive" ] && cp /usr/lib/locale/locale-archive "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
+    fi
+    mkdir -p "$ROOTFS_DIR/etc"
+    echo "LANG=en_US.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
 
     info "Staging minimal kernel modules into rootfs for runtime hardware support..."
     mkdir -p "$ROOTFS_DIR/lib/modules"

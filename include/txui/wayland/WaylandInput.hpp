@@ -4,6 +4,7 @@
 #include <txui/core/Types.hpp>
 #include <txui/input/Event.hpp>
 #include <optional>
+#include <memory>
 
 struct wl_seat;
 struct wl_keyboard;
@@ -37,7 +38,7 @@ public:
     ~WaylandInput() noexcept;
 
     // Creates input handler from given Wayland seat.
-    [[nodiscard]] static std::optional<WaylandInput> create(wl_seat* seat) noexcept;
+    [[nodiscard]] static std::unique_ptr<WaylandInput> create(wl_seat* seat) noexcept;
 
     void set_event_sink(void* ctx, EventSink sink, uint32 window_id) noexcept;
     void emit_event(const Event& event) noexcept;
