@@ -97,6 +97,13 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
         return true;
     }
 
+    // ── Super+Tab workspace overview (Mission Control) ───────────────────────
+    if (has_super && keycode == KEY_TAB) {
+        log::info("ShortcutEngine: workspace_overview_toggle");
+        m_callback("workspace_overview_toggle");
+        return true;
+    }
+
     // ── Workspace switching: Super+1–9 ────────────────────────────────────────
     if (has_super && keycode >= KEY_1 && keycode <= KEY_9) {
         uint32_t ws_num = keycode - KEY_1 + 1; // 1–9

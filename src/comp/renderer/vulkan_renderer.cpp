@@ -8,6 +8,7 @@ bool VulkanRenderer::initialize(uint32_t width, uint32_t height) {
     
     // Simulate Vulkan hardware initialization
     m_active_pipeline = GpuResourceManager::instance().create_pipeline("vulkan_damage_shader.spv");
+    m_blur_pass.initialize(width, height);
     m_vulkan_initialized = true;
     log::info("VulkanRenderer: Vulkan GPU Render Pipeline Initialized (VkSwapchainKHR & CommandBuffers Ready)");
     return true;
@@ -19,6 +20,9 @@ void VulkanRenderer::begin_frame() {
 
 void VulkanRenderer::compose_surface(RenderSurface& surface) {
     log::info("VulkanRenderer: Recorded VkCmdDrawIndexed for Surface ID={}", surface.id);
+    if (surface.has_blur) {
+        m_blur_pass.execute_blur_pipeline(surface);
+    }
 }
 
 void VulkanRenderer::damage_region(const DamageRegion& region) {

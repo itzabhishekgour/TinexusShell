@@ -55,6 +55,7 @@ add_executable(tinexus-comp
     renderer/gpu_resource_manager.cpp
     renderer/vulkan_renderer.cpp
     renderer/opengl_renderer.cpp
+    renderer/blur_pass.cpp
 )
 
 target_include_directories(tinexus-comp PRIVATE

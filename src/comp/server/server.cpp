@@ -177,6 +177,13 @@ bool TinexusServer::initialize() {
                 return;
             }
 
+            // ── Workspace overview (Mission Control): Super+Tab ───────────────
+            if (shortcut_name == "workspace_overview_toggle") {
+                log::info("[Server] Toggling workspace overview (Mission Control)");
+                WorkspaceManager::instance().toggle_overview();
+                return;
+            }
+
             log::warn("[Server] Unknown shortcut: {}", shortcut_name);
         });
     log::info("[Server] ShortcutEngine registered: Ctrl+K, Super+1–9, Super+L, Super+Arrows, Alt+Tab");

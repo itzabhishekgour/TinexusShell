@@ -14,6 +14,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 
 using namespace tinexus;
 namespace fs = std::filesystem;
@@ -23,6 +24,7 @@ struct AppItem {
     std::string exec;
     std::string description;
     bool is_terminal{false};
+    std::string icon;
 };
 
 // ---------------------------------------------------------------------------
@@ -93,17 +95,56 @@ static std::string to_lower(std::string_view sv) {
 // ---------------------------------------------------------------------------
 // Load applications from system .desktop directories + fallback apps
 // ---------------------------------------------------------------------------
+static std::string icon_to_emoji(const std::string& icon_name, const std::string& app_name) {
+    std::string name = to_lower(icon_name);
+    std::string app = to_lower(app_name);
+
+    if (name.find("terminal") != std::string::npos || app.find("terminal") != std::string::npos || app.find("foot") != std::string::npos || app.find("alacritty") != std::string::npos)
+        return "💻";
+    if (name.find("monitor") != std::string::npos || name.find("htop") != std::string::npos || app.find("monitor") != std::string::npos)
+        return "📊";
+    if (name.find("setting") != std::string::npos || name.find("prefer") != std::string::npos || app.find("setting") != std::string::npos)
+        return "⚙️";
+    if (name.find("package") != std::string::npos || name.find("software") != std::string::npos || app.find("package") != std::string::npos)
+        return "📦";
+    if (name.find("file") != std::string::npos || name.find("folder") != std::string::npos || app.find("file") != std::string::npos)
+        return "📂";
+    if (name.find("browser") != std::string::npos || name.find("firefox") != std::string::npos || name.find("chrome") != std::string::npos || name.find("web") != std::string::npos || name.find("internet") != std::string::npos)
+        return "🌐";
+    if (name.find("text") != std::string::npos || name.find("edit") != std::string::npos || name.find("note") != std::string::npos || name.find("document") != std::string::npos)
+        return "📄";
+    if (name.find("calc") != std::string::npos || app.find("calc") != std::string::npos)
+        return "🧮";
+    if (name.find("mail") != std::string::npos || name.find("thunderbird") != std::string::npos)
+        return "✉️";
+    if (name.find("music") != std::string::npos || name.find("player") != std::string::npos || name.find("audio") != std::string::npos || name.find("volume") != std::string::npos)
+        return "🎵";
+    if (name.find("video") != std::string::npos || name.find("vlc") != std::string::npos || name.find("movie") != std::string::npos)
+        return "🎬";
+    if (name.find("image") != std::string::npos || name.find("photo") != std::string::npos || name.find("gimp") != std::string::npos || name.find("paint") != std::string::npos)
+        return "🎨";
+    if (name.find("game") != std::string::npos || name.find("steam") != std::string::npos)
+        return "🎮";
+    if (name.find("development") != std::string::npos || name.find("code") != std::string::npos || name.find("visual-studio") != std::string::npos || name.find("developer") != std::string::npos)
+        return "🛠️";
+    
+    return "🔹";
+}
+
+// ---------------------------------------------------------------------------
+// Load applications from system .desktop directories + fallback apps
+// ---------------------------------------------------------------------------
 static std::vector<AppItem> load_system_apps() {
     std::vector<AppItem> apps;
 
     // Built-in system defaults
-    apps.push_back({"Foot Terminal", "foot", "Fast Wayland Terminal Emulator", true});
-    apps.push_back({"Weston Terminal", "weston-terminal", "Wayland Demo Terminal", true});
-    apps.push_back({"Alacritty", "alacritty", "GPU Accelerated Terminal", true});
-    apps.push_back({"Tinexus System Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false});
-    apps.push_back({"Tinexus Settings", "tinexus-settings", "System Configuration Manager", false});
-    apps.push_back({"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", false});
-    apps.push_back({"Tinexus Files", "tinexus-files", "Lightweight Desktop File Manager", false});
+    apps.push_back({"Foot Terminal", "foot", "Fast Wayland Terminal Emulator", true, "utilities-terminal"});
+    apps.push_back({"Weston Terminal", "weston-terminal", "Wayland Demo Terminal", true, "utilities-terminal"});
+    apps.push_back({"Alacritty", "alacritty", "GPU Accelerated Terminal", true, "utilities-terminal"});
+    apps.push_back({"Tinexus System Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor"});
+    apps.push_back({"Tinexus Settings", "tinexus-settings", "System Configuration Manager", false, "preferences-desktop"});
+    apps.push_back({"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", false, "system-software-install"});
+    apps.push_back({"Tinexus Files", "tinexus-files", "Lightweight Desktop File Manager", false, "system-file-manager"});
 
     // Scan system application directories
     std::vector<fs::path> search_dirs = {
@@ -131,7 +172,8 @@ static std::vector<AppItem> load_system_apps() {
                                 parsed->name,
                                 parsed->exec,
                                 parsed->comment.empty() ? parsed->generic_name : parsed->comment,
-                                parsed->terminal
+                                parsed->terminal,
+                                parsed->icon
                             });
                         }
                     }
@@ -222,6 +264,10 @@ int main() {
 
     window->set_root_widget(root);
 
+    // Initial render setup
+    auto animation_start_time = std::chrono::steady_clock::now();
+    bool is_animating = true;
+
     // Update results filter & UI elements
     auto update_results_ui = [&]() {
         std::string lq = to_lower(query);
@@ -250,27 +296,56 @@ int main() {
             search_text->set_color(txui::Color::white());
         }
 
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - animation_start_time).count();
+        bool any_row_animating = false;
+
         // Row updates
         for (size_t i = 0; i < MAX_VISIBLE_ROWS; ++i) {
+            // Stagger delay: i * 20ms
+            double row_delay = static_cast<double>(i) * 20.0;
+            double row_duration = 80.0; // 80ms
+            double row_elapsed = static_cast<double>(elapsed) - row_delay;
+            double progress = 0.0;
+            if (row_elapsed >= row_duration) {
+                progress = 1.0;
+            } else if (row_elapsed > 0.0) {
+                progress = row_elapsed / row_duration;
+                any_row_animating = true;
+            } else {
+                any_row_animating = true; // hasn't started yet
+            }
+
+            // Easing curve: cubic ease-out
+            double t = progress - 1.0;
+            double eased = t * t * t + 1.0;
+
+            // Offset: translateY 4px -> 0px
+            double offset_y = 4.0 * (1.0 - eased);
+            row_widgets[i].text->set_offset_y(offset_y);
+
             if (i < filtered.size()) {
                 const auto& item = filtered[i];
+                std::string emoji = icon_to_emoji(item.icon, item.name);
                 if (i == selected_index) {
                     // Highlighted active item
-                    row_widgets[i].bg->set_color(txui::Color(59, 130, 246, 240)); // #3B82F6 Accent Blue
-                    row_widgets[i].text->set_color(txui::Color::white());
-                    row_widgets[i].text->set_text(" > " + item.name + " (" + item.exec + ")");
+                    row_widgets[i].bg->set_color(txui::Color(59, 130, 246, static_cast<uint8_t>(240 * eased))); // #3B82F6 Accent Blue
+                    row_widgets[i].text->set_color(txui::Color(255, 255, 255, static_cast<uint8_t>(255 * eased)));
+                    row_widgets[i].text->set_text(" > " + emoji + "  " + item.name + " (" + item.exec + ")");
                 } else {
                     // Unselected item
-                    row_widgets[i].bg->set_color(txui::Color(30, 41, 59, 200)); // Dark Gray
-                    row_widgets[i].text->set_color(txui::Color(203, 213, 225, 255));
-                    row_widgets[i].text->set_text("   " + item.name);
+                    row_widgets[i].bg->set_color(txui::Color(30, 41, 59, static_cast<uint8_t>(200 * eased))); // Dark Gray
+                    row_widgets[i].text->set_color(txui::Color(203, 213, 225, static_cast<uint8_t>(255 * eased)));
+                    row_widgets[i].text->set_text("   " + emoji + "  " + item.name);
                 }
             } else {
                 // Empty row
-                row_widgets[i].bg->set_color(txui::Color(15, 23, 42, 100));
+                row_widgets[i].bg->set_color(txui::Color(15, 23, 42, static_cast<uint8_t>(100 * eased)));
                 row_widgets[i].text->set_text("");
             }
         }
+
+        is_animating = any_row_animating;
     };
 
     // Initial render
@@ -315,15 +390,21 @@ int main() {
                 } else if (event.keyboard.key == txui::Key::Up) {
                     if (selected_index > 0) {
                         selected_index--;
+                        animation_start_time = std::chrono::steady_clock::now();
+                        is_animating = true;
                         update_results_ui();
                     }
                 } else if (event.keyboard.key == txui::Key::Down) {
                     selected_index++;
+                    animation_start_time = std::chrono::steady_clock::now();
+                    is_animating = true;
                     update_results_ui();
                 } else if (event.keyboard.key == txui::Key::Backspace) {
                     if (!query.empty()) {
                         query.pop_back();
                         selected_index = 0;
+                        animation_start_time = std::chrono::steady_clock::now();
+                        is_animating = true;
                         update_results_ui();
                     }
                 } else {
@@ -331,14 +412,24 @@ int main() {
                     if (ch != '\0') {
                         query += ch;
                         selected_index = 0;
+                        animation_start_time = std::chrono::steady_clock::now();
+                        is_animating = true;
                         update_results_ui();
                     }
                 }
             }
         }
 
+        if (is_animating) {
+            update_results_ui();
+        }
+
         window->present();
-        window->wait();
+        if (is_animating) {
+            usleep(16666); // ~60fps
+        } else {
+            window->wait();
+        }
     }
 
     log::info("[Launcher] Exiting launcher loop cleanly.");

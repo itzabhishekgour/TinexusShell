@@ -6,6 +6,8 @@
 #include "comp/renderer/render_target.hpp"
 #include "comp/renderer/gpu_resource_manager.hpp"
 
+#include "comp/renderer/blur_pass.hpp"
+
 namespace tinexus::comp {
 
 class VulkanRenderer : public Renderer {
@@ -28,6 +30,7 @@ public:
 private:
     bool m_vulkan_initialized{false};
     GpuResourceHandle m_active_pipeline;
+    BlurPass m_blur_pass;
 };
 
 } // namespace tinexus::comp

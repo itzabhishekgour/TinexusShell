@@ -18,6 +18,22 @@ std::vector<RenderSurface> WindowNode::build_render_surfaces() const {
     surface.opacity = opacity;
     surface.buffer = render_buffer;
 
+    // Apply backdrop blur based on application type (macOS / Windows glassmorphism)
+    const std::string& app = toplevel.app_id();
+    if (app == "launcher" || app == "tinexus-launcher") {
+        surface.has_blur = true;
+        surface.blur_radius = 40;
+        surface.blur_tint = 0x13131ACC; // 80% opacity dark surface
+    } else if (app == "notifications" || app == "tinexus-notif") {
+        surface.has_blur = true;
+        surface.blur_radius = 30;
+        surface.blur_tint = 0x13131ACC;
+    } else if (app == "lock" || app == "tinexus-lock") {
+        surface.has_blur = true;
+        surface.blur_radius = 60;
+        surface.blur_tint = 0x0A0A0EB3; // 70% opacity dark tint
+    }
+
     return {surface};
 }
 

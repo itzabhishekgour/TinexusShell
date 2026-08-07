@@ -26,6 +26,10 @@ public:
 
     DamageRect damage;
     std::shared_ptr<RenderBuffer> buffer;
+
+    bool has_blur{false};
+    int32_t blur_radius{0};
+    uint32_t blur_tint{0x00000000}; // RGBA
 };
 
 } // namespace tinexus::comp
