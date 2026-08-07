@@ -280,7 +280,23 @@ build_initramfs() {
 
     info "Building minimal Tinexus cpio initramfs..."
     local init_staging="$WORK_DIR/initramfs_staging"
-    mkdir -p "$init_staging"/{bin,sbin,dev,proc,sys,mnt,newroot,live}
+    mkdir -p "$init_staging"/{bin,sbin,dev,proc,sys,mnt,newroot,live,tmp}
+
+    # Stage tinexus-splash and logo
+    if [ -f "$BUILD_DIR/tinexus-splash" ]; then
+        cp -L "$BUILD_DIR/tinexus-splash" "$init_staging/bin/"
+        (ldd "$BUILD_DIR/tinexus-splash" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
+        done
+        (ldd "$BUILD_DIR/tinexus-splash" 2>/dev/null || true) | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
+        done
+    else
+        warn "tinexus-splash binary not found!"
+    fi
+    if [ -f "$PROJECT_DIR/Temp/tinexus-logo.png" ]; then
+        cp -L "$PROJECT_DIR/Temp/tinexus-logo.png" "$init_staging/"
+    fi
 
     local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
     cp -L "$bb_bin" "$init_staging/bin/busybox"
@@ -335,14 +351,24 @@ for mod in /lib/modules/*.ko; do
 done
 /bin/mdev -s 2>/dev/null
 
+# Graphics modules loaded, start splash screen
+if [ -x /bin/tinexus-splash ]; then
+    /bin/tinexus-splash &
+    # Give it a moment to create the fifo
+    sleep 0.1
+    echo 20 > /tmp/splash_progress 2>/dev/null
+fi
+
 echo "Tinexus OS: Searching for Live CD rootfs..."
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    echo 30 > /tmp/splash_progress 2>/dev/null
     /bin/mdev -s 2>/dev/null
     for dev in /dev/sr0 /dev/sr1 /dev/sda /dev/sdb /dev/vda /dev/vdb /dev/sg0; do
         if [ -b "$dev" ]; then
             /bin/mount -o ro "$dev" /mnt 2>/dev/null
             if [ -f /mnt/live/rootfs.squashfs ]; then
                 echo "Tinexus OS: Found rootfs on $dev!"
+                echo 50 > /tmp/splash_progress 2>/dev/null
                 break 2
             else
                 /bin/umount /mnt 2>/dev/null
@@ -354,6 +380,7 @@ done
 
 if [ -f /mnt/live/rootfs.squashfs ]; then
     echo "Tinexus OS: Mounting SquashFS rootfs..."
+    echo 70 > /tmp/splash_progress 2>/dev/null
     /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
     /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
     mkdir -p /newroot/dev/shm
@@ -365,7 +392,16 @@ if [ -f /mnt/live/rootfs.squashfs ]; then
     /bin/mount -t tmpfs tmpfs /newroot/var 2>/dev/null || true
     /bin/mount -t tmpfs tmpfs /newroot/root 2>/dev/null || true
     /bin/mount -t tmpfs tmpfs /newroot/home 2>/dev/null || true
+    
+    echo 90 > /tmp/splash_progress 2>/dev/null
     echo "Tinexus OS: Switching to Tinexus Serviced Init..."
+    
+    # We must keep the splash daemon running until wayland starts,
+    # but switch_root will kill processes holding handles to old root.
+    # To fix this, we signal 100% so it can exit on its own.
+    echo 100 > /tmp/splash_progress 2>/dev/null
+    sleep 0.2
+    
     exec switch_root /newroot /usr/bin/tinexus-serviced
 else
     echo "Tinexus OS: FATAL — rootfs.squashfs not found. Dropping to emergency shell."
@@ -392,7 +428,7 @@ insmod iso9660
 terminal_output gfxterm
 
 menuentry "Tinexus OS Live (Wayland Desktop)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs console=tty0 console=ttyS0,115200n8
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs quiet loglevel=3 vt.global_cursor_default=0 logo.nologo fbcon=nodefer console=ttyS0,115200n8
     initrd  /boot/initramfs.img
 }
 
