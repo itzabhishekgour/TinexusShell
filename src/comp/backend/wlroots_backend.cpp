@@ -202,6 +202,14 @@ public:
 
     BackendType type() const noexcept override { return BackendType::Wlroots; }
 
+    void set_locked(bool locked) noexcept {
+        m_is_locked = locked;
+        log::info("[Backend] Session lock state: {}", locked ? "LOCKED" : "UNLOCKED");
+    }
+
+    bool is_locked() const noexcept { return m_is_locked; }
+
+
 private:
     struct ToplevelWrapper;
     struct wl_display* m_display{nullptr};
@@ -237,6 +245,7 @@ private:
 
     std::vector<std::unique_ptr<TinexusOutput>> m_outputs;
     ToplevelWrapper* m_active_toplevel{nullptr};
+    struct wlr_surface* m_lock_surface{nullptr};
 
     struct KeyboardWrapper {
         struct wl_listener modifiers;
@@ -247,8 +256,13 @@ private:
     };
     std::vector<std::unique_ptr<KeyboardWrapper>> m_keyboards;
 
+    // Session lock state — when true, ALL global shortcuts are suppressed
+    // and keyboard input goes exclusively to the lock client
+    bool m_is_locked{false};
+
     // Tracks the Wayland socket name so child processes inherit WAYLAND_DISPLAY
     std::string m_wayland_socket{};
+
 
     struct LayerSurfaceWrapper {
         struct wlr_layer_surface_v1* layer_surface{nullptr};
@@ -356,6 +370,12 @@ private:
     }
 
     void focus_toplevel(ToplevelWrapper* wrapper) {
+        if (m_is_locked && m_lock_surface != nullptr) {
+            // When locked, ONLY the lock surface pointer is permitted to receive focus
+            if (wrapper != nullptr && wrapper->toplevel->base->surface != m_lock_surface) {
+                return;
+            }
+        }
         if (m_active_toplevel == wrapper) {
             return;
         }
@@ -497,10 +517,20 @@ private:
     static void handle_toplevel_map(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, map);
         struct wlr_surface* surface = wrapper->toplevel->base->surface;
-        log::info("[XDGShell] Toplevel mapped — auto-focusing surface={}",
-                  static_cast<void*>(surface));
+        const char* app_id = wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "";
+        log::info("[XDGShell] Toplevel mapped — app_id='{}' surface={}",
+                  app_id, static_cast<void*>(surface));
+
+        // If the lock screen just connected, track surface pointer and mark session locked
+        if (std::string(app_id) == "lock" || std::string(app_id) == "tinexus-lock") {
+            log::info("[XDGShell] Lock screen mapped — m_lock_surface={} session LOCKED", static_cast<void*>(surface));
+            wrapper->backend->m_is_locked = true;
+            wrapper->backend->m_lock_surface = surface;
+        }
+
         wrapper->backend->focus_toplevel(wrapper);
     }
+
 
     static void handle_toplevel_commit(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, commit);
@@ -511,23 +541,23 @@ private:
         }
     }
 
-    static void handle_toplevel_request_maximize(struct wl_listener* listener, void* data) {
+    static void handle_toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_maximize);
-        struct wlr_xdg_toplevel* toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request maximize state={}", toplevel->requested.maximized);
         wrapper->backend->toplevel_set_maximized(wrapper, toplevel->requested.maximized);
     }
 
-    static void handle_toplevel_request_fullscreen(struct wl_listener* listener, void* data) {
+    static void handle_toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
-        struct wlr_xdg_toplevel* toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request fullscreen state={}", toplevel->requested.fullscreen);
         wrapper->backend->toplevel_set_fullscreen(wrapper, toplevel->requested.fullscreen);
     }
 
-    static void handle_toplevel_request_minimize(struct wl_listener* listener, void* data) {
+    static void handle_toplevel_request_minimize(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
-        struct wlr_xdg_toplevel* toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request minimize (not implemented) - acknowledging");
         wlr_xdg_surface_schedule_configure(toplevel->base);
     }
@@ -535,22 +565,17 @@ private:
     static void handle_toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
         WlrootsBackend* backend = wrapper->backend;
+        struct wlr_surface* surface = wrapper->toplevel->base->surface;
+
+        const bool was_lock = (surface == backend->m_lock_surface);
+        if (was_lock) {
+            log::info("[XDGShell] Lock screen destroyed — marking session UNLOCKED atomically");
+            backend->m_is_locked = false;
+            backend->m_lock_surface = nullptr;
+        }
 
         if (backend->m_active_toplevel == wrapper) {
             backend->m_active_toplevel = nullptr;
-            // Focus next available window in stack
-            if (backend->m_toplevels.size() > 1) {
-                ToplevelWrapper* next_focus = nullptr;
-                for (auto it = backend->m_toplevels.rbegin(); it != backend->m_toplevels.rend(); ++it) {
-                    if (it->get() != wrapper) {
-                        next_focus = it->get();
-                        break;
-                    }
-                }
-                backend->focus_toplevel(next_focus);
-            } else {
-                FocusManager::instance().set_keyboard_focus(nullptr);
-            }
         }
 
         wl_list_remove(&wrapper->map.link);
@@ -566,6 +591,15 @@ private:
                 backend->m_toplevels.erase(it);
                 break;
             }
+        }
+
+        // Restore focus to top available toplevel immediately without gap
+        if (backend->m_active_toplevel == nullptr) {
+            ToplevelWrapper* next_focus = nullptr;
+            if (!backend->m_toplevels.empty()) {
+                next_focus = backend->m_toplevels.back().get();
+            }
+            backend->focus_toplevel(next_focus);
         }
     }
 
@@ -694,13 +728,13 @@ private:
         }
 
         // ── Global shortcut interception (Ctrl+K → launcher) ──────────────────
-        // Get current modifier state from wlroots keyboard struct
-        uint32_t wlr_mods = wlr_keyboard_get_modifiers(wrapper->keyboard);
-        // wlroots modifier flags: WLR_MODIFIER_CTRL = (1<<2)
-        if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed)) {
-            // Shortcut intercepted — do NOT forward to the focused Wayland client
-            log::info("[Keyboard] Global shortcut intercepted — swallowing key event.");
-            return;
+        // SECURITY: when locked, ALL shortcuts are suppressed — keys go to lock client only
+        if (!wrapper->backend->m_is_locked) {
+            uint32_t wlr_mods = wlr_keyboard_get_modifiers(wrapper->keyboard);
+            if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed)) {
+                log::info("[Keyboard] Global shortcut intercepted — swallowing key event.");
+                return;
+            }
         }
 
         // Forward normal key to focused client via seat
@@ -734,9 +768,6 @@ private:
     }
 
     void process_cursor_motion(uint32_t time) {
-        // [3D.1] Debug: confirm motion events reach us
-        log::info("[Cursor] motion x={:.1f} y={:.1f}", m_cursor->x, m_cursor->y);
-
         // [3D.2] Cursor image — keep hardware cursor visible
         wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, "default");
 

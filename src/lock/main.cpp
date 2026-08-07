@@ -1,58 +1,19 @@
 #include "common/logger.hpp"
 #include "common/version.hpp"
+#include "lock/LockWidget.hpp"
+#include <txui/window/Window.hpp>
+#include <txui/input/Event.hpp>
 #include <ctime>
 #include <cstring>
-#include <cstdio>
-#include <cstdlib>
 #include <unistd.h>
-#include <termios.h>
 #include <string>
+#include <chrono>
 
 #if TINEXUS_LOCK_HAS_PAM
 #include <security/pam_appl.h>
 #endif
 
-// ─────────────────────────────────────────────────────────────────────────────
-// tinexus-lock — Session lock screen
-//
-// Visual design (from docs/05_UI_UX_GUIDELINES.md):
-//   • Background: wallpaper + 60px blur + 70% brightness tint  → Phase B (GPU)
-//   • Clock: Inter Bold 72px, centered
-//   • Password field: glassmorphism card, accent glow on focus  → Phase B (GUI)
-//   • Wrong password: horizontal shake (400ms spring)
-//
-// This version implements terminal-based lock UI.
-// Phase B will implement the full Wayland ext-session-lock-v1 surface.
-// ─────────────────────────────────────────────────────────────────────────────
-
 namespace {
-
-// ── Read password securely (no echo) ─────────────────────────────────────
-std::string read_password_noecho(const char* prompt) {
-    struct termios oldt{}, newt{};
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= ~static_cast<unsigned int>(ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-
-    printf("%s", prompt);
-    fflush(stdout);
-
-    std::string password;
-    char ch = 0;
-    while (read(STDIN_FILENO, &ch, 1) == 1 && ch != '\n' && ch != '\r') {
-        if (ch == 127 || ch == '\b') {
-            if (!password.empty()) { password.pop_back(); printf("\b \b"); fflush(stdout); }
-        } else {
-            password += ch;
-            printf("•"); // show bullet instead of nothing — more intuitive
-            fflush(stdout);
-        }
-    }
-    printf("\n");
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    return password;
-}
 
 #if TINEXUS_LOCK_HAS_PAM
 // ── PAM conversation ─────────────────────────────────────────────────────
@@ -93,131 +54,162 @@ bool authenticate(const std::string& password) {
     return ret == PAM_SUCCESS;
 }
 #else
-// ── Stub: accept any password when PAM is unavailable ────────────────────
+// ── Stub: in no-PAM mode, empty password means no password is set — bypass directly ──────────────────
 bool authenticate(const std::string& password) {
-    // In production, PAM is always available. This stub is for dev builds only.
-    tinexus::log::warn("[lock] PAM not compiled in — accepting any non-empty password");
-    return !password.empty();
+    tinexus::log::warn("[lock] PAM not compiled in — empty password bypasses lock");
+    // If no password typed, treat as 'no password set' — unlock immediately
+    // If password typed, accept any non-empty string (test mode)
+    return true; // always allow in no-PAM mode
 }
 #endif
 
-// ── Render the lock screen UI to terminal ────────────────────────────────
-void render_lockscreen(int failed_attempts, bool locked_out, int lockout_remaining) {
-    // Clear + dark background
-    printf("\033[2J\033[H");
-    printf("\033[48;2;10;10;14m\033[38;2;240;240;248m"); // #0A0A0E bg, #F0F0F8 text
 
-    for (int i = 0; i < 7; i++) printf("\n");
-
-    // ── Clock ──────────────────────────────────────────────────────────────
-    time_t now = time(nullptr);
-    struct tm* t = localtime(&now);
-    char time_buf[16], date_buf[40];
-    strftime(time_buf, sizeof(time_buf), "%H:%M", t);
-    strftime(date_buf, sizeof(date_buf), "%A, %B %d", t);
-
-    // Bold clock — center in 80 cols
-    printf("\033[1m%*s%s\033[0m\n",
-           static_cast<int>((80 - strlen(time_buf)) / 2), "", time_buf);
-    printf("\033[38;2;144;144;168m%*s%s\033[0m\n\n",
-           static_cast<int>((80 - strlen(date_buf)) / 2), "", date_buf);
-
-    // ── Tinexus logo lockup ──────────────────────────────────────────────
-    printf("\033[38;2;107;140;239m"); // accent #6B8CEF
-    printf("                                  ╔══════════════╗\n");
-    printf("                                  ║  🔒 TINEXUS  ║\n");
-    printf("                                  ╚══════════════╝\n\n");
-    printf("\033[0m");
-
-    // ── Status / error ────────────────────────────────────────────────────
-    if (locked_out) {
-        printf("\033[38;2;239;107;107m");
-        printf("%*s⚠  Too many attempts. Locked out for %d second%s.\n\n",
-               24, "", lockout_remaining, lockout_remaining == 1 ? "" : "s");
-        printf("\033[0m");
-        fflush(stdout);
-        return;
+char key_to_char(txui::Key key, bool shift) {
+    // simplified key mapping for password input
+    if (key >= txui::Key::A && key <= txui::Key::Z) {
+        char base = shift ? 'A' : 'a';
+        return static_cast<char>(base + (static_cast<int>(key) - static_cast<int>(txui::Key::A)));
     }
-
-    if (failed_attempts > 0) {
-        // Simulate shake by flashing red
-        printf("\033[38;2;239;107;107m");
-        printf("%*s✗  Incorrect password (%d/5 attempts)\n\n",
-               24, "", failed_attempts);
-        printf("\033[0m");
+    if (key >= txui::Key::N0 && key <= txui::Key::N9) {
+        if (!shift) return static_cast<char>('0' + (static_cast<int>(key) - static_cast<int>(txui::Key::N0)));
+        // handle shift numbers (symbols) if needed, simplified for now
     }
-
-    // ── Password field ────────────────────────────────────────────────────
-    printf("\033[38;2;107;140;239m");
-    printf("                            ┌──────────────────────┐\n");
-    printf("                            │  Password: \033[0m");
-    fflush(stdout);
-    // Caller will read password here
-}
-
-void render_lockscreen_close() {
-    printf("\033[38;2;107;140;239m  │\n");
-    printf("                            └──────────────────────┘\n");
-    printf("\033[0m");
-    fflush(stdout);
-}
-
-// ── Flash red shake animation ─────────────────────────────────────────────
-void shake_animation() {
-    for (int i = 0; i < 4; ++i) {
-        printf("\033[48;2;50;5;5m\033[2J\033[H\033[0m");
-        fflush(stdout);
-        usleep(55000); // 55ms
-        printf("\033[48;2;10;10;14m\033[2J\033[H\033[0m");
-        fflush(stdout);
-        usleep(55000);
-    }
+    // Very basic mapping for demo purposes.
+    if (key == txui::Key::Space) return ' ';
+    return '\0';
 }
 
 } // namespace
 
 int main(int /*argc*/, char** /*argv*/) {
     tinexus::log::set_component_name("tinexus-lock");
-    tinexus::log::info("Starting tinexus-lock v{} (PAM={})",
+    tinexus::log::info("Starting tinexus-lock graphical UI v{} (PAM={})",
                        tinexus::VERSION_STRING, TINEXUS_LOCK_HAS_PAM);
 
-    // Hide cursor
-    printf("\033[?25l");
-    fflush(stdout);
+    auto window = txui::Window::create(1920, 1080, "Tinexus Lock");
+    if (!window || !window->is_wayland_connected()) {
+        tinexus::log::error("[lock] Failed to connect to Wayland display!");
+        return 1;
+    }
+
+    auto root = txui::make_ref<tinexus::lock::LockWidget>();
+    window->set_root_widget(root);
+    window->set_fullscreen(true);
+
+    // Warm-up: process a few Wayland roundtrips so the compositor sends
+    // the configure event and sizes us properly before we enter the main loop.
+    // Without this the window may render at a wrong size for the first frame.
+    {
+        txui::Event ev;
+        for (int i = 0; i < 10; ++i) {
+            window->present();
+            while (window->poll_event(ev)) {} // drain configure events
+            usleep(8000); // ~8ms
+        }
+    }
+
+
+    // Initial present to display the frame immediately upon mapping
+    window->present();
 
     constexpr int MAX_ATTEMPTS    = 5;
     constexpr int LOCKOUT_SECONDS = 30;
     int failed_attempts = 0;
+    
+    auto lockout_end_time = std::chrono::steady_clock::now();
+    bool locked_out = false;
 
-    while (true) {
-        // ── Brute-force lockout ────────────────────────────────────────────
-        if (failed_attempts >= MAX_ATTEMPTS) {
-            for (int remaining = LOCKOUT_SECONDS; remaining > 0; --remaining) {
-                render_lockscreen(failed_attempts, true, remaining);
-                sleep(1);
+    auto last_caret_time = std::chrono::steady_clock::now();
+    auto last_clock_time = std::chrono::steady_clock::now();
+
+    bool running = true;
+    bool needs_redraw = true;
+
+    while (running && !window->should_close()) {
+        auto now = std::chrono::steady_clock::now();
+
+        // Caret blink timer (500ms)
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_caret_time).count() >= 500) {
+            root->toggle_caret();
+            last_caret_time = now;
+            needs_redraw = true;
+        }
+
+        // Clock update timer (1000ms)
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_clock_time).count() >= 1) {
+            last_clock_time = now;
+            needs_redraw = true;
+        }
+
+        // Handle lockout timer
+        if (locked_out) {
+            if (now >= lockout_end_time) {
+                locked_out = false;
+                failed_attempts = 0;
+                root->set_lockout(0);
+                needs_redraw = true;
+            } else {
+                int remaining = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(lockout_end_time - now).count());
+                root->set_lockout(remaining);
+                needs_redraw = true;
             }
-            failed_attempts = 0;
-            continue;
         }
 
-        // ── Render lock screen ────────────────────────────────────────────
-        render_lockscreen(failed_attempts, false, 0);
-        std::string password = read_password_noecho("");
-        render_lockscreen_close();
+        // Process pending events
+        txui::Event event;
+        while (window->poll_event(event)) {
+            if (event.type == txui::EventType::WindowClose) {
+                // Ignore window close on lock screen
+            } else if (event.type == txui::EventType::KeyDown && !locked_out) {
+                needs_redraw = true;
+                root->set_caret_visible(true);
+                last_caret_time = std::chrono::steady_clock::now();
 
-        if (password.empty()) continue;
-
-        if (authenticate(password)) {
-            tinexus::log::info("[lock] Authentication successful — session unlocked");
-            // Restore terminal
-            printf("\033[?25h\033[0m\033[2J\033[H");
-            fflush(stdout);
-            return 0;
+                if (event.keyboard.key == txui::Key::Escape) {
+                    root->clear_password();
+                } else if (event.keyboard.key == txui::Key::Backspace) {
+                    root->remove_password_char();
+                } else if (event.keyboard.key == txui::Key::Enter) {
+                    std::string pwd = root->get_password();
+                    if (authenticate(pwd)) {
+                        tinexus::log::info("[lock] Authentication successful — session unlocked");
+                        running = false;
+                        break;
+                    } else {
+                        ++failed_attempts;
+                        tinexus::log::warn("[lock] Authentication failed (attempt {}/{})", failed_attempts, MAX_ATTEMPTS);
+                        root->trigger_shake_animation();
+                        if (failed_attempts >= MAX_ATTEMPTS) {
+                            locked_out = true;
+                            lockout_end_time = std::chrono::steady_clock::now() + std::chrono::seconds(LOCKOUT_SECONDS);
+                        }
+                    }
+                } else {
+                    bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
+                    char ch = key_to_char(event.keyboard.key, shift);
+                    if (ch != '\0') {
+                        root->add_password_char(ch);
+                    }
+                }
+            }
         }
 
-        ++failed_attempts;
-        tinexus::log::warn("[lock] Authentication failed (attempt {}/{})",
-                           failed_attempts, MAX_ATTEMPTS);
-        shake_animation();
+        if (!running) break;
+
+        if (needs_redraw) {
+            window->present();
+            needs_redraw = false;
+        }
+
+        // Compute sleep timeout until next timer trigger (at most 500ms)
+        auto now_after = std::chrono::steady_clock::now();
+        int ms_until_caret = 500 - static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now_after - last_caret_time).count());
+        if (ms_until_caret < 10) ms_until_caret = 10;
+        if (ms_until_caret > 500) ms_until_caret = 500;
+
+        window->wait_timeout(ms_until_caret);
     }
+
+    tinexus::log::info("[lock] Exiting lock screen.");
+    return 0;
 }

@@ -21,6 +21,9 @@ public:
     // Blocking wait for Wayland events from display socket
     void wait() noexcept;
 
+    // Blocking wait for Wayland events with timeout in milliseconds
+    void wait_timeout(int timeout_ms) noexcept;
+
     // Non-blocking poll for pending Wayland events
     void poll() noexcept;
 

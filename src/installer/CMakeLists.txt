@@ -5,6 +5,7 @@ add_executable(tinexus-installer
     squashfs_extractor.cpp
     bootloader_config.cpp
     install_controller.cpp
+    ui/InstallerWindow.cpp
 )
 
 target_include_directories(tinexus-installer PRIVATE
@@ -14,6 +15,7 @@ target_include_directories(tinexus-installer PRIVATE
 target_link_libraries(tinexus-installer PRIVATE
     tinexus-sdk
     tinexus_common
+    txui
     tinexus_warnings
     tinexus_sanitizers
 )

@@ -31,7 +31,11 @@ public:
     }
 
     BackendType type() const noexcept override { return BackendType::Headless; }
+
+    void set_locked(bool /*locked*/) noexcept override {}
+    bool is_locked() const noexcept override { return false; }
 };
+
 
 std::unique_ptr<Backend> create_headless_backend() {
     return std::make_unique<HeadlessBackend>();

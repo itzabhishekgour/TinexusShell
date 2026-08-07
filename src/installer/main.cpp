@@ -1,7 +1,7 @@
-#include "installer/install_controller.hpp"
+#include "installer/InstallerWindow.hpp"
+#include <txui/wayland/WaylandEventLoop.hpp>
 #include "tinexus/client.hpp"
 #include "common/logger.hpp"
-#include <iostream>
 
 int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("tinexus-installer");
@@ -12,16 +12,26 @@ int main(int argc, char* argv[]) {
         tinexus::log::info("Tinexus Installer: Connected to Tinexus Platform IPC broker via SDK.");
     }
 
-    bool dry_run = true;
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--dry-run") dry_run = true;
+    // Launch the Graphical Installer
+    auto window = txui::Window::create(800, 600, "Tinexus OS Installer");
+    if (!window || !window->is_wayland_connected()) {
+        tinexus::log::error("Failed to connect to Wayland display!");
+        return 1;
     }
 
-    tinexus::installer::DiskInspector inspector;
-    auto disks = inspector.discover_disks();
-    if (!disks.empty()) {
-        tinexus::installer::InstallController controller;
-        controller.run_installation(disks[0], dry_run);
+    auto root = txui::make_ref<tinexus::installer::InstallerWidget>();
+    window->set_root_widget(root);
+
+    bool running = true;
+    while (running && !window->should_close()) {
+        txui::Event event;
+        while (window->poll_event(event)) {
+            if (event.type == txui::EventType::WindowClose) {
+                running = false;
+            }
+        }
+        window->present();
+        window->wait();
     }
 
     sdk_client.disconnect();

@@ -68,6 +68,10 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     launch_component("notifications");
 
+    // 4. Lock Screen (overlay on top of desktop)
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    launch_component("lock");
+
     log::info("[Session] All desktop shell components launched.");
 
     // Supervision loop: reap zombies & monitor daemons

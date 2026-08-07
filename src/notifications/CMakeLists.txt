@@ -4,6 +4,7 @@ add_executable(tinexus-notifications
     dnd_manager.cpp
     notification_manager.cpp
     notification_server.cpp
+    NotificationBubble.cpp
 )
 
 target_include_directories(tinexus-notifications PRIVATE

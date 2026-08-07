@@ -25,13 +25,23 @@ cp "/mnt/e/Tinu's Technology/Tinexus Manager/CMakeLists.txt" ~/tinexus/
 cp "/mnt/e/Tinu's Technology/Tinexus Manager/CMakePresets.json" ~/tinexus/
 cp "/mnt/e/Tinu's Technology/Tinexus Manager/VERSION" ~/tinexus/
 
-echo "[+] Building all targets in WSL (skipping tests)..."
+echo "[+] Building all targets in WSL (skipping tests, sanitizers disabled for live ISO)..."
 cd ~/tinexus
-cmake --preset debug -DBUILD_TESTING=OFF -B ~/tinexus/build/debug
+cmake --preset debug -DBUILD_TESTING=OFF -DTINEXUS_ENABLE_SANITIZERS=OFF -B ~/tinexus/build/debug
 cmake --build ~/tinexus/build/debug -j2
 
 echo "[+] Build completed successfully."
-mkdir -p "/mnt/e/Tinu's Technology/Tinexus Manager/build"
-cp -r ~/tinexus/build/debug/bin/* "/mnt/e/Tinu's Technology/Tinexus Manager/build/" || true
-cp -r ~/tinexus/build/debug/lib* "/mnt/e/Tinu's Technology/Tinexus Manager/build/" || true
-echo "[+] Successfully copied compiled binaries to the workspace build folder!"
+mkdir -p "/mnt/e/Tinu's Technology/Tinexus Manager/build/bin"
+mkdir -p "/mnt/e/Tinu's Technology/Tinexus Manager/build/lib"
+
+echo "[+] Syncing all binaries and libraries to the workspace build folder..."
+cp -a ~/tinexus/build/debug/bin/* "/mnt/e/Tinu's Technology/Tinexus Manager/build/bin/" 2>/dev/null || true
+cp -a ~/tinexus/build/debug/bin/* "/mnt/e/Tinu's Technology/Tinexus Manager/build/" 2>/dev/null || true
+cp -a ~/tinexus/build/debug/lib/* "/mnt/e/Tinu's Technology/Tinexus Manager/build/lib/" 2>/dev/null || true
+cp -a ~/tinexus/build/debug/lib/* "/mnt/e/Tinu's Technology/Tinexus Manager/build/" 2>/dev/null || true
+
+# Catch any remaining binaries/libraries from subdirectories
+find ~/tinexus/build/debug -maxdepth 4 -type f -executable -not -name "*.so*" -exec cp -a {} "/mnt/e/Tinu's Technology/Tinexus Manager/build/" \; 2>/dev/null || true
+find ~/tinexus/build/debug -maxdepth 4 \( -type f -o -type l \) -name "*.so*" -exec cp -a {} "/mnt/e/Tinu's Technology/Tinexus Manager/build/" \; 2>/dev/null || true
+
+echo "[+] Successfully copied compiled binaries and shared libraries to the workspace build folder!"

@@ -87,9 +87,6 @@ void FocusManager::update_pointer_focus(const PickResult& pick,
 
         wlr_seat_pointer_notify_enter(m_seat, pick.surface, pick.sx, pick.sy);
         wlr_seat_pointer_notify_motion(m_seat, time_msec, pick.sx, pick.sy);
-
-        log::info("[Focus] Pointer Motion surface={} sx={:.1f} sy={:.1f}",
-                  static_cast<void*>(pick.surface), pick.sx, pick.sy);
     } else {
         // Cursor over empty desktop — clear focus
         if (m_pointer_surface) {

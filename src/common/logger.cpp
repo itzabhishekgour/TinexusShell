@@ -9,7 +9,6 @@ namespace tinexus::log {
 
 namespace {
     std::string g_component_name = "tinexus-unknown";
-    Level g_current_level = Level::Info;
     std::mutex g_log_mutex;
 
     const char* level_to_string(Level lvl) noexcept {
@@ -30,8 +29,7 @@ void set_component_name(std::string_view name) {
 }
 
 void set_level(Level level) {
-    std::lock_guard<std::mutex> lock(g_log_mutex);
-    g_current_level = level;
+    g_current_level.store(level, std::memory_order_relaxed);
 }
 
 void write_log(Level level, std::string_view message) {

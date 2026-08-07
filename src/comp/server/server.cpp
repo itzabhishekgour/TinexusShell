@@ -14,6 +14,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <csignal>
+#include <atomic>
+
 
 #include <wayland-server-core.h>
 
@@ -96,8 +98,13 @@ bool TinexusServer::initialize() {
     ShortcutEngine::instance().set_shortcut_callback(
         [this](const std::string& shortcut_name) {
 
-            // ── Launcher ─────────────────────────────────────────────────────
+            // ── Launcher ──────────────────────────────────────────────────
             if (shortcut_name == "launcher_toggle") {
+                // SECURITY: never spawn launcher while screen is locked
+                if (m_backend->is_locked()) {
+                    log::warn("[Server] Launcher blocked — screen is locked.");
+                    return;
+                }
                 log::info("[Server] Ctrl+K: spawning tinexus-launcher");
                 pid_t pid = fork();
                 if (pid < 0) { log::error("[Server] fork() failed"); return; }
@@ -118,11 +125,16 @@ bool TinexusServer::initialize() {
                 return;
             }
 
-            // ── Lock screen: Super+L ──────────────────────────────────────────
+            // ── Lock screen: Super+L ─────────────────────────────────────────
             if (shortcut_name == "lock_screen") {
-                log::info("[Server] Super+L: spawning tinexus-lock");
+                if (m_backend->is_locked()) {
+                    log::info("[Server] Already locked.");
+                    return;
+                }
+                log::info("[Server] Super+L: spawning tinexus-lock, marking session LOCKED");
+                m_backend->set_locked(true);
                 pid_t pid = fork();
-                if (pid < 0) { log::error("[Server] fork() failed for lock"); return; }
+                if (pid < 0) { log::error("[Server] fork() failed for lock"); m_backend->set_locked(false); return; }
                 if (pid == 0) {
                     pid_t grandchild = fork();
                     if (grandchild < 0) { _exit(1); }
@@ -135,6 +147,7 @@ bool TinexusServer::initialize() {
                     }
                     _exit(0);
                 }
+                // Wait for the intermediate child; the grandchild (lock) is now orphaned
                 int status = 0;
                 waitpid(pid, &status, 0);
                 return;

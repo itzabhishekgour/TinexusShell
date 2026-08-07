@@ -21,7 +21,7 @@ struct Header {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(Header) == 20, "IPC Header must be exactly 20 bytes");
+static_assert(sizeof(Header) == 22, "IPC Header must be exactly 22 bytes");
 
 // Reserved Message IDs for Service Routing and Pub/Sub
 enum class MessageType : uint16_t {

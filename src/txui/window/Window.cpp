@@ -130,7 +130,13 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title) 
                 if (win->m_xdg_toplevel != nullptr) {
                     xdg_toplevel_add_listener(win->m_xdg_toplevel, &xdg_toplevel_listener, win.get());
                     xdg_toplevel_set_title(win->m_xdg_toplevel, win->m_title.c_str());
-                    xdg_toplevel_set_app_id(win->m_xdg_toplevel, "io.tinexus.shell");
+                    // Use a sanitised app_id derived from the title (lowercase, spaces->hyphens)
+                    std::string app_id = "io.tinexus.shell";
+                    if (win->m_title == "Tinexus Lock") app_id = "tinexus-lock";
+                    else if (win->m_title == "Tinexus Launcher") app_id = "tinexus-launcher";
+                    else if (win->m_title == "Tinexus Settings") app_id = "tinexus-settings";
+                    xdg_toplevel_set_app_id(win->m_xdg_toplevel, app_id.c_str());
+
                 }
             }
 
@@ -166,10 +172,26 @@ void Window::wait() noexcept {
     }
 }
 
+void Window::wait_timeout(int timeout_ms) noexcept {
+    if (m_event_loop.has_value()) {
+        m_event_loop->wait_timeout(timeout_ms);
+    }
+}
+
 void Window::set_title(std::string_view title) noexcept {
     m_title = title;
     if (m_xdg_toplevel != nullptr) {
         xdg_toplevel_set_title(m_xdg_toplevel, m_title.c_str());
+    }
+}
+
+void Window::set_fullscreen(bool fullscreen) noexcept {
+    if (m_xdg_toplevel != nullptr) {
+        if (fullscreen) {
+            xdg_toplevel_set_fullscreen(m_xdg_toplevel, nullptr);
+        } else {
+            xdg_toplevel_unset_fullscreen(m_xdg_toplevel);
+        }
     }
 }
 

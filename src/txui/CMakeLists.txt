@@ -13,8 +13,11 @@ add_library(txui STATIC
     wayland/WaylandInput.cpp
     wayland/WaylandEventLoop.cpp
     window/Window.cpp
+    window/WindowDecorator.cpp
     widgets/Widget.cpp
     layout/FlexLayout.cpp
+    animation/KineticScroller.cpp
+    animation/CursorAnimator.cpp
 )
 
 target_compile_features(txui PUBLIC cxx_std_20)

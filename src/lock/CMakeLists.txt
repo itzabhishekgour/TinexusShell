@@ -8,11 +8,17 @@ find_path(PAM_INCLUDE_DIR security/pam_appl.h
     PATH_SUFFIXES security
 )
 
-add_executable(tinexus-lock main.cpp)
+add_executable(tinexus-lock 
+    main.cpp
+    LockWidget.cpp
+)
+
+target_include_directories(tinexus-lock PRIVATE include)
 
 target_link_libraries(tinexus-lock PRIVATE
     tinexus_common
     tinexus_warnings
+    txui
     PkgConfig::WAYLAND_CLIENT
 )
 

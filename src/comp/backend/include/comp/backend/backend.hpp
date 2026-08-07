@@ -25,7 +25,12 @@ public:
 
     virtual struct wl_display* display() = 0;
     [[nodiscard]] virtual BackendType type() const noexcept = 0;
+
+    // Session lock state \u2014 must be implemented by concrete backends
+    virtual void set_locked(bool locked) noexcept = 0;
+    [[nodiscard]] virtual bool is_locked() const noexcept = 0;
 };
+
 
 // Factory functions
 std::unique_ptr<Backend> create_headless_backend();

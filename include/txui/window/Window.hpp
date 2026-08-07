@@ -73,8 +73,14 @@ public:
     // Blocks waiting for Wayland events from the compositor.
     void wait() noexcept;
 
+    // Blocks waiting for Wayland events up to timeout_ms milliseconds.
+    void wait_timeout(int timeout_ms) noexcept;
+
     // Sets window title on xdg_toplevel.
     void set_title(std::string_view title) noexcept;
+
+    // Set the window to fullscreen mode
+    void set_fullscreen(bool fullscreen) noexcept;
 
     // Exposes Painter API for rendering commands.
     [[nodiscard]] Painter& painter() noexcept { return *m_painter; }

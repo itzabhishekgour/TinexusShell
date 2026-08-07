@@ -82,6 +82,7 @@ EOF
 
     local staged=0
     while IFS= read -r -d '' candidate; do
+        if [[ "$candidate" == *"/debug/"* ]] || [[ "$candidate" == *"/txui_verify/"* ]]; then continue; fi
         if file "$candidate" | grep -q "ELF.*executable\|ELF.*shared object"; then
             if [[ "$candidate" == *"tinexus-"* ]] || [[ "$candidate" == *"libtinexus"* ]]; then
                 local dest_dir="$ROOTFS_DIR/usr/bin"
@@ -99,6 +100,10 @@ EOF
             fi
         fi
     done < <(find "$BUILD_DIR" -maxdepth 6 \( -type f -o -type l \) \( -name 'tinexus-*' -o -name 'libtinexus*.so*' \) -print0 2>/dev/null)
+    
+    # Force copy all shared libraries and their version symlinks to /usr/lib to fix broken RUNPATHs
+    find "$BUILD_DIR" \( -type f -o -type l \) -name "libtinexus*.so*" -exec cp -a {} "$ROOTFS_DIR/usr/lib/" \; 2>/dev/null || true
+    
     success "Staged $staged Tinexus ELF binaries and dependencies."
 
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
@@ -315,14 +320,20 @@ build_initramfs() {
     mkdir -p "$init_staging"/{bin,sbin,dev,proc,sys,mnt,newroot,live,tmp}
 
     # Stage tinexus-splash and logo
-    if [ -f "$BUILD_DIR/tinexus-splash" ]; then
-        cp -L "$BUILD_DIR/tinexus-splash" "$init_staging/bin/"
-        (ldd "$BUILD_DIR/tinexus-splash" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+    # The splash binary is built to build/bin/ per its CMakeLists RUNTIME_OUTPUT_DIRECTORY
+    SPLASH_BIN=""
+    for candidate in "$BUILD_DIR/bin/tinexus-splash" "$BUILD_DIR/tinexus-splash" "$BUILD_DIR/src/splash/tinexus-splash"; do
+        if [ -f "$candidate" ]; then SPLASH_BIN="$candidate"; break; fi
+    done
+    if [ -n "$SPLASH_BIN" ]; then
+        cp -L "$SPLASH_BIN" "$init_staging/bin/tinexus-splash"
+        (ldd "$SPLASH_BIN" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
             [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
         done
-        (ldd "$BUILD_DIR/tinexus-splash" 2>/dev/null || true) | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+        (ldd "$SPLASH_BIN" 2>/dev/null || true) | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
             [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
         done
+        success "tinexus-splash staged from $SPLASH_BIN"
     else
         warn "tinexus-splash binary not found!"
     fi

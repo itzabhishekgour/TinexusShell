@@ -162,7 +162,6 @@ int LayerShellWindow::exec() noexcept {
     if (!is_valid()) {
         return -1;
     }
-    log::info("LayerShellWindow: Entering event loop...");
     
     int fd = wl_display_get_fd(m_connection.display());
     struct pollfd pfd;
@@ -177,10 +176,20 @@ int LayerShellWindow::exec() noexcept {
 
         int ret = poll(&pfd, 1, 1000); // 1 second timeout
         if (ret > 0) {
-            wl_display_read_events(m_connection.display());
-            wl_display_dispatch_pending(m_connection.display());
+            if (wl_display_read_events(m_connection.display()) == -1) {
+                m_should_close = true;
+                break;
+            }
+            if (wl_display_dispatch_pending(m_connection.display()) == -1) {
+                m_should_close = true;
+                break;
+            }
         } else {
             wl_display_cancel_read(m_connection.display());
+            if (ret < 0) {
+                m_should_close = true;
+                break;
+            }
         }
         
         // Return control briefly to allow main thread to process timer

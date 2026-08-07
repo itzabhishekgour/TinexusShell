@@ -433,7 +433,186 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
     }
 }
 
-} // namespace
+
+// ---------------------------------------------------------------------------
+// Linear Gradient Rasterizer
+// Interpolates linearly from color_start to color_end across the rect.
+// ---------------------------------------------------------------------------
+void rasterize_gradient_rect(RenderTarget& target, const Rect& rect,
+                              const Color& cs, const Color& ce,
+                              bool horizontal) noexcept {
+    const int32 target_w = static_cast<int32>(target.width());
+    const int32 target_h = static_cast<int32>(target.height());
+
+    int32 left   = std::max(0, static_cast<int32>(std::floor(rect.left())));
+    int32 top    = std::max(0, static_cast<int32>(std::floor(rect.top())));
+    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(rect.right())));
+    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(rect.bottom())));
+
+    if (left >= right || top >= bottom) return;
+
+    const double span = horizontal
+        ? std::max(1.0, rect.width())
+        : std::max(1.0, rect.height());
+
+    uint32* buffer = target.data();
+    for (int32 y = top; y < bottom; ++y) {
+        uint32* row = buffer + static_cast<size_t>(y) * static_cast<size_t>(target_w);
+        const double vy = horizontal ? 0.0 : (y + 0.5 - rect.top()) / span;
+
+        for (int32 x = left; x < right; ++x) {
+            const double t = horizontal
+                ? std::clamp((x + 0.5 - rect.left()) / span, 0.0, 1.0)
+                : std::clamp(vy, 0.0, 1.0);
+
+            const uint32 r = static_cast<uint32>(cs.r() + t * (static_cast<double>(ce.r()) - cs.r()));
+            const uint32 g = static_cast<uint32>(cs.g() + t * (static_cast<double>(ce.g()) - cs.g()));
+            const uint32 b = static_cast<uint32>(cs.b() + t * (static_cast<double>(ce.b()) - cs.b()));
+            const uint32 a = static_cast<uint32>(cs.a() + t * (static_cast<double>(ce.a()) - cs.a()));
+
+            Color px(static_cast<uint8>(r), static_cast<uint8>(g),
+                     static_cast<uint8>(b), static_cast<uint8>(a));
+            const uint32 src = px.to_argb32_premultiplied();
+
+            if (a == 255) {
+                row[x] = src;
+            } else {
+                row[x] = blend_argb32_premultiplied(row[x], src);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gradient Rounded Rect Rasterizer (gradient + corner rounding combined)
+// ---------------------------------------------------------------------------
+void rasterize_gradient_rounded_rect(RenderTarget& target, const Rect& rect, double radius,
+                                     const Color& cs, const Color& ce,
+                                     bool horizontal) noexcept {
+    const double max_rad = std::min(rect.width(), rect.height()) * 0.5;
+    const double rad = std::clamp(radius, 0.0, max_rad);
+
+    if (rad <= 0.5) {
+        rasterize_gradient_rect(target, rect, cs, ce, horizontal);
+        return;
+    }
+
+    const int32 target_w = static_cast<int32>(target.width());
+    const int32 target_h = static_cast<int32>(target.height());
+
+    int32 left   = std::max(0, static_cast<int32>(std::floor(rect.left())));
+    int32 top    = std::max(0, static_cast<int32>(std::floor(rect.top())));
+    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(rect.right())));
+    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(rect.bottom())));
+
+    if (left >= right || top >= bottom) return;
+
+    const double rx1 = rect.left()  + rad;
+    const double ry1 = rect.top()   + rad;
+    const double rx2 = rect.right() - rad;
+    const double ry2 = rect.bottom()- rad;
+
+    const double span = horizontal
+        ? std::max(1.0, rect.width())
+        : std::max(1.0, rect.height());
+
+    uint32* buffer = target.data();
+    for (int32 y = top; y < bottom; ++y) {
+        uint32* row = buffer + static_cast<size_t>(y) * static_cast<size_t>(target_w);
+        const double cy = y + 0.5;
+        const double vy = horizontal ? 0.0 : (cy - rect.top()) / span;
+
+        for (int32 x = left; x < right; ++x) {
+            const double cx = x + 0.5;
+            double dist = 0.0;
+
+            if      (cx < rx1 && cy < ry1) dist = std::hypot(rx1 - cx, ry1 - cy);
+            else if (cx > rx2 && cy < ry1) dist = std::hypot(cx - rx2, ry1 - cy);
+            else if (cx < rx1 && cy > ry2) dist = std::hypot(rx1 - cx, cy - ry2);
+            else if (cx > rx2 && cy > ry2) dist = std::hypot(cx - rx2, cy - ry2);
+
+            double cov = 1.0;
+            if (dist > 0.0) {
+                if      (dist >= rad + 0.7071) { cov = 0.0; }
+                else if (dist >  rad - 0.7071) {
+                    double d = rad - dist;
+                    cov = std::clamp((d + 0.7071) / 1.4142, 0.0, 1.0);
+                    cov = cov * cov * (3.0 - 2.0 * cov);
+                }
+            }
+            if (cov <= 0.0) continue;
+
+            const double t = horizontal
+                ? std::clamp((cx - rect.left()) / span, 0.0, 1.0)
+                : std::clamp(vy, 0.0, 1.0);
+
+            const uint32 r = static_cast<uint32>(cs.r() + t * (static_cast<double>(ce.r()) - cs.r()));
+            const uint32 g = static_cast<uint32>(cs.g() + t * (static_cast<double>(ce.g()) - cs.g()));
+            const uint32 b = static_cast<uint32>(cs.b() + t * (static_cast<double>(ce.b()) - cs.b()));
+            uint32 a       = static_cast<uint32>(cs.a() + t * (static_cast<double>(ce.a()) - cs.a()));
+            a = static_cast<uint32>(static_cast<double>(a) * cov);
+
+            Color px(static_cast<uint8>(r), static_cast<uint8>(g),
+                     static_cast<uint8>(b), static_cast<uint8>(a));
+            row[x] = blend_argb32_premultiplied(row[x], px.to_argb32_premultiplied());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Circle Rasterizer (filled or stroke) with sub-pixel AA
+// ---------------------------------------------------------------------------
+void rasterize_circle(RenderTarget& target, const Point& center, double radius,
+                      const Color& color, double stroke_width) noexcept {
+    const int32 target_w = static_cast<int32>(target.width());
+    const int32 target_h = static_cast<int32>(target.height());
+
+    const double outer_r  = radius;
+    const double inner_r  = (stroke_width > 0.0) ? std::max(0.0, radius - stroke_width) : 0.0;
+
+    int32 left   = std::max(0, static_cast<int32>(std::floor(center.x - outer_r - 1.0)));
+    int32 top    = std::max(0, static_cast<int32>(std::floor(center.y - outer_r - 1.0)));
+    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(center.x + outer_r + 1.0)));
+    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(center.y + outer_r + 1.0)));
+
+    const uint32 src_argb = color.to_argb32_premultiplied();
+    uint32* buffer = target.data();
+
+    for (int32 y = top; y < bottom; ++y) {
+        uint32* row = buffer + static_cast<size_t>(y) * static_cast<size_t>(target_w);
+        const double dy = (y + 0.5) - center.y;
+
+        for (int32 x = left; x < right; ++x) {
+            const double dx = (x + 0.5) - center.x;
+            const double dist = std::sqrt(dx * dx + dy * dy);
+
+            // Coverage on outer edge (AA)
+            double outer_cov = std::clamp(outer_r - dist + 0.7071, 0.0, 1.4142) / 1.4142;
+            outer_cov = outer_cov * outer_cov * (3.0 - 2.0 * outer_cov); // smoothstep
+
+            if (outer_cov <= 0.0) continue;
+
+            double cov = outer_cov;
+            if (inner_r > 0.0) {
+                // Hollow: subtract inner region with AA
+                double inner_cov = std::clamp(inner_r - dist + 0.7071, 0.0, 1.4142) / 1.4142;
+                inner_cov = inner_cov * inner_cov * (3.0 - 2.0 * inner_cov);
+                cov = outer_cov - inner_cov;
+                cov = std::clamp(cov, 0.0, 1.0);
+            }
+
+            if (cov <= 0.0) continue;
+
+            const uint32 a = static_cast<uint32>(static_cast<double>(color.a()) * cov);
+            if (a == 0) continue;
+
+            Color px(color.r(), color.g(), color.b(), static_cast<uint8>(a));
+            row[x] = blend_argb32_premultiplied(row[x], px.to_argb32_premultiplied());
+        }
+    }
+}
+
+} // namespace (anonymous)
 
 void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
     TXUI_ASSERT(!buffer.is_empty(), "Cannot execute empty CommandBuffer");
@@ -466,6 +645,12 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                 }, cmd.brush);
 
                 rasterize_rounded_rect(target, cmd.rect, cmd.radius, rrect_color);
+            } else if constexpr (std::is_same_v<T, DrawGradientRectCommand>) {
+                rasterize_gradient_rect(target, cmd.rect, cmd.color_start, cmd.color_end, cmd.horizontal);
+            } else if constexpr (std::is_same_v<T, DrawGradientRoundedRectCommand>) {
+                rasterize_gradient_rounded_rect(target, cmd.rect, cmd.radius, cmd.color_start, cmd.color_end, cmd.horizontal);
+            } else if constexpr (std::is_same_v<T, DrawCircleCommand>) {
+                rasterize_circle(target, cmd.center, cmd.radius, cmd.color, cmd.stroke_width);
             } else if constexpr (std::is_same_v<T, DrawTextCommand>) {
                 rasterize_text(target, cmd.position, cmd.text, cmd.color, cmd.scale);
             }

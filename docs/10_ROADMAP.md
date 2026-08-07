@@ -187,16 +187,16 @@ Version 0.2 completes the user-facing experience. It is suitable for **developer
 
 #### Launcher Enhancements
 - [ ] Scrollable result list (unlimited results)
-- [ ] Result categories with Tab navigation
-- [ ] Inline calculator (tinyexpr integration)
-- [ ] System actions provider (Lock, Sleep, Shutdown, Restart, Logout)
-- [ ] Recent apps section (empty state)
-- [ ] Stagger animation for results (20ms per item)
-- [ ] Keyboard shortcut: Ctrl+1…9 for Nth result
-- [ ] Alt+Enter secondary action
+- [x] Result categories with Tab navigation
+- [x] Inline calculator (tinyexpr integration)
+- [x] System actions provider (Lock, Sleep, Shutdown, Restart, Logout)
+- [x] Recent apps section (empty state)
+- [x] Stagger animation for results (20ms per item)
+- [x] Keyboard shortcut: Ctrl+1…9 for Nth result
+- [x] Alt+Enter secondary action
 - [ ] Clipboard section (reads from tinexus-clip)
-- [ ] Result icons (app icons, 24×24)
-- [ ] Empty state design (logo + placeholder text)
+- [x] Result icons (app icons, 24×24)
+- [x] Empty state design (logo + placeholder text)
 - [ ] Launcher position: centered, 30% from top
 
 #### Notification System
@@ -438,8 +438,8 @@ All AI features must be:
 
 ### 7.1 Distribution Scope
 
-- [ ] Custom installer (Python/GTK4, not Calamares)
-  - [ ] Disk partitioning
+- [x] Custom installer (txui Wayland UI, not Calamares)
+  - [x] Disk partitioning
   - [ ] User account creation
   - [ ] Hardware detection
   - [ ] Network configuration
