@@ -86,49 +86,100 @@ bool TinexusServer::initialize() {
     // Setup cursor theme
     CursorManager::instance().set_theme("Adwaita", 24);
 
-    // Setup workspace manager
-    WorkspaceManager::instance().initialize_default_workspaces(3);
+    // Setup workspace manager with 9 workspaces (Super+1–9)
+    WorkspaceManager::instance().initialize_default_workspaces(9);
 
     // Target frame rate
     FrameScheduler::instance().set_target_refresh_rate(60);
 
-    // ── Register global shortcut handler ──────────────────────────────────────
-    // Ctrl+K → spawn tinexus-launcher as a Wayland client
+    // ── Global shortcut handler ───────────────────────────────────────────────
     ShortcutEngine::instance().set_shortcut_callback(
         [this](const std::string& shortcut_name) {
+
+            // ── Launcher ─────────────────────────────────────────────────────
             if (shortcut_name == "launcher_toggle") {
-                log::info("[Server] Ctrl+K: spawning tinexus-launcher on WAYLAND_DISPLAY={}",
-                          m_display_socket);
-                // Double-fork to avoid zombie: parent returns immediately,
-                // grandchild execs the launcher.
+                log::info("[Server] Ctrl+K: spawning tinexus-launcher");
                 pid_t pid = fork();
-                if (pid < 0) {
-                    log::error("[Server] fork() failed when spawning launcher");
-                    return;
-                }
+                if (pid < 0) { log::error("[Server] fork() failed"); return; }
                 if (pid == 0) {
-                    // First child: fork again then exit so init reaps grandchild
                     pid_t grandchild = fork();
                     if (grandchild < 0) { _exit(1); }
                     if (grandchild == 0) {
-                        // Grandchild: become launcher
-                        // Ensure WAYLAND_DISPLAY is set for this process
                         setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
-                        setsid(); // detach from compositor session
+                        setsid();
                         execlp("tinexus-launcher", "tinexus-launcher", nullptr);
-                        // If execlp fails, try absolute path
                         execl("/usr/bin/tinexus-launcher", "tinexus-launcher", nullptr);
-                        log::error("[Server] Failed to exec tinexus-launcher: {}", strerror(errno));
                         _exit(127);
                     }
-                    _exit(0); // First child exits immediately
+                    _exit(0);
                 }
-                // Parent: reap the first child quickly
                 int status = 0;
                 waitpid(pid, &status, 0);
+                return;
             }
+
+            // ── Lock screen: Super+L ──────────────────────────────────────────
+            if (shortcut_name == "lock_screen") {
+                log::info("[Server] Super+L: spawning tinexus-lock");
+                pid_t pid = fork();
+                if (pid < 0) { log::error("[Server] fork() failed for lock"); return; }
+                if (pid == 0) {
+                    pid_t grandchild = fork();
+                    if (grandchild < 0) { _exit(1); }
+                    if (grandchild == 0) {
+                        setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
+                        setsid();
+                        execlp("tinexus-lock", "tinexus-lock", nullptr);
+                        execl("/usr/bin/tinexus-lock", "tinexus-lock", nullptr);
+                        _exit(127);
+                    }
+                    _exit(0);
+                }
+                int status = 0;
+                waitpid(pid, &status, 0);
+                return;
+            }
+
+            // ── Workspace switching: Super+1–9 ────────────────────────────────
+            if (shortcut_name.rfind("workspace_switch_", 0) == 0) {
+                uint32_t ws_num = static_cast<uint32_t>(
+                    std::stoul(shortcut_name.substr(17))); // skip "workspace_switch_"
+                log::info("[Server] Switching to workspace {}", ws_num);
+                WorkspaceManager::instance().switch_workspace(ws_num);
+                return;
+            }
+
+            // ── Window snapping (wired to focused window in future) ───────────
+            if (shortcut_name == "snap_left") {
+                log::info("[Server] snap_left — window snapping (Phase B)");
+                return;
+            }
+            if (shortcut_name == "snap_right") {
+                log::info("[Server] snap_right — window snapping (Phase B)");
+                return;
+            }
+            if (shortcut_name == "maximize") {
+                log::info("[Server] maximize — window maximize (Phase B)");
+                return;
+            }
+            if (shortcut_name == "restore") {
+                log::info("[Server] restore — window restore (Phase B)");
+                return;
+            }
+            if (shortcut_name == "close_window") {
+                log::info("[Server] close_window — (Phase B)");
+                return;
+            }
+
+            // ── Alt+Tab ───────────────────────────────────────────────────────
+            if (shortcut_name == "alttab_next" || shortcut_name == "alttab_prev") {
+                log::info("[Server] {} — window switcher (Phase B)", shortcut_name);
+                return;
+            }
+
+            log::warn("[Server] Unknown shortcut: {}", shortcut_name);
         });
-    log::info("[Server] ShortcutEngine: Ctrl+K callback registered.");
+    log::info("[Server] ShortcutEngine registered: Ctrl+K, Super+1–9, Super+L, Super+Arrows, Alt+Tab");
 
     return true;
 }

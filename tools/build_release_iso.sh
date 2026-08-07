@@ -237,6 +237,38 @@ EOF_UDEV_SEAT
     mkdir -p "$ROOTFS_DIR/etc"
     echo "LANG=en_US.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
 
+    # PAM — required by tinexus-lock for authentication
+    info "Staging PAM libraries and configuration for tinexus-lock..."
+    mkdir -p "$ROOTFS_DIR/lib/security" "$ROOTFS_DIR/usr/lib/security" \
+             "$ROOTFS_DIR/etc/pam.d" "$ROOTFS_DIR/etc/security"
+    # Copy PAM modules (pam_unix.so, pam_permit.so, etc.)
+    for pam_dir in "/lib/security" "/lib/x86_64-linux-gnu/security" \
+                   "/usr/lib/security" "/usr/lib/x86_64-linux-gnu/security"; do
+        if [ -d "$pam_dir" ]; then
+            cp -r "${pam_dir}/." "$ROOTFS_DIR/lib/security/" 2>/dev/null || true
+            cp -r "${pam_dir}/." "$ROOTFS_DIR/usr/lib/security/" 2>/dev/null || true
+        fi
+    done
+    # Copy PAM config for 'login' (tinexus-lock calls pam_start("login", ...))
+    if [ -f "/etc/pam.d/login" ]; then
+        cp /etc/pam.d/login "$ROOTFS_DIR/etc/pam.d/login"
+    else
+        # Minimal fallback PAM config
+        cat > "$ROOTFS_DIR/etc/pam.d/login" << 'EOF_PAM'
+auth       required   pam_unix.so
+account    required   pam_unix.so
+session    required   pam_unix.so
+EOF_PAM
+    fi
+    # Common PAM includes
+    for f in common-auth common-account common-session; do
+        [ -f "/etc/pam.d/$f" ] && cp "/etc/pam.d/$f" "$ROOTFS_DIR/etc/pam.d/$f" 2>/dev/null || true
+    done
+    # /etc/passwd and /etc/shadow needed for pam_unix
+    [ -f /etc/passwd ] && cp /etc/passwd "$ROOTFS_DIR/etc/passwd" 2>/dev/null || true
+    [ -f /etc/group ]  && cp /etc/group  "$ROOTFS_DIR/etc/group"  2>/dev/null || true
+    [ -f /etc/shadow ] && cp /etc/shadow "$ROOTFS_DIR/etc/shadow" 2>/dev/null || true
+
     info "Staging minimal kernel modules into rootfs for runtime hardware support..."
     mkdir -p "$ROOTFS_DIR/lib/modules"
     if [ -d "/lib/modules/7.0.0-28-generic" ]; then

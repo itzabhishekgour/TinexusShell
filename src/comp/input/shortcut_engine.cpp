@@ -1,5 +1,6 @@
 #include "comp/input/shortcut_engine.hpp"
 #include "common/logger.hpp"
+#include <string>
 
 namespace tinexus::comp {
 
@@ -17,26 +18,92 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
 
     constexpr uint32_t MOD_CTRL  = (1 << 2);
     constexpr uint32_t MOD_ALT   = (1 << 3);
-    constexpr uint32_t MOD_LOGO  = (1 << 6);
+    constexpr uint32_t MOD_LOGO  = (1 << 6); // Super/Win key as modifier
 
-    constexpr uint32_t KEY_K_EVDEV     = 37;
-    constexpr uint32_t KEY_SPACE_EVDEV = 57;
-    constexpr uint32_t KEY_LEFTMETA    = 125;
-    constexpr uint32_t KEY_RIGHTMETA   = 126;
+    // Evdev keycodes
+    constexpr uint32_t KEY_K          = 37;
+    constexpr uint32_t KEY_SPACE      = 57;
+    constexpr uint32_t KEY_LEFTMETA   = 125;
+    constexpr uint32_t KEY_RIGHTMETA  = 126;
+    constexpr uint32_t KEY_L          = 38;   // Super+L  → lock
+    constexpr uint32_t KEY_TAB        = 15;   // Alt+Tab  → window switcher
+    constexpr uint32_t KEY_LEFT       = 105;  // Super+Left  → snap left
+    constexpr uint32_t KEY_RIGHT      = 106;  // Super+Right → snap right
+    constexpr uint32_t KEY_UP         = 103;  // Super+Up    → maximize
+    constexpr uint32_t KEY_DOWN       = 108;  // Super+Down  → restore
+    constexpr uint32_t KEY_Q          = 16;   // Super+Q     → close window
+    // Number keys 1–9 (evdev codes 2–10)
+    constexpr uint32_t KEY_1          = 2;
+    constexpr uint32_t KEY_9          = 10;
 
-    bool has_ctrl = (modifiers & MOD_CTRL) != 0;
-    bool has_alt  = (modifiers & MOD_ALT) != 0;
-    bool is_k     = (keycode == KEY_K_EVDEV);
-    bool is_space = (keycode == KEY_SPACE_EVDEV);
-    bool is_super = (keycode == KEY_LEFTMETA || keycode == KEY_RIGHTMETA);
+    bool has_ctrl  = (modifiers & MOD_CTRL) != 0;
+    bool has_alt   = (modifiers & MOD_ALT)  != 0;
+    bool has_super = (modifiers & MOD_LOGO) != 0;
+    bool is_super_key = (keycode == KEY_LEFTMETA || keycode == KEY_RIGHTMETA);
 
-    // Trigger launcher on Ctrl+K, Ctrl+Space, Alt+Space, or Super key
-    if ((has_ctrl && is_k) || (has_ctrl && is_space) || (has_alt && is_space) || is_super) {
-        log::info("ShortcutEngine: Launcher shortcut triggered (keycode={}, mods={})! Dispatching activation.", keycode, modifiers);
-        if (m_callback) {
-            m_callback("launcher_toggle");
-        }
-        return true; // Intercepted by compositor
+    if (!m_callback) return false;
+
+    // ── Launcher: Ctrl+K, Ctrl+Space, Alt+Space, bare Super key ──────────────
+    if ((has_ctrl && keycode == KEY_K) ||
+        (has_ctrl && keycode == KEY_SPACE) ||
+        (has_alt  && keycode == KEY_SPACE) ||
+        is_super_key) {
+        log::info("ShortcutEngine: launcher_toggle (keycode={}, mods={})", keycode, modifiers);
+        m_callback("launcher_toggle");
+        return true;
+    }
+
+    // ── Lock screen: Super+L ─────────────────────────────────────────────────
+    if (has_super && keycode == KEY_L) {
+        log::info("ShortcutEngine: lock_screen");
+        m_callback("lock_screen");
+        return true;
+    }
+
+    // ── Window snapping: Super+Left / Right / Up / Down ──────────────────────
+    if (has_super && keycode == KEY_LEFT) {
+        log::info("ShortcutEngine: snap_left");
+        m_callback("snap_left");
+        return true;
+    }
+    if (has_super && keycode == KEY_RIGHT) {
+        log::info("ShortcutEngine: snap_right");
+        m_callback("snap_right");
+        return true;
+    }
+    if (has_super && keycode == KEY_UP) {
+        log::info("ShortcutEngine: maximize");
+        m_callback("maximize");
+        return true;
+    }
+    if (has_super && keycode == KEY_DOWN) {
+        log::info("ShortcutEngine: restore");
+        m_callback("restore");
+        return true;
+    }
+
+    // ── Close window: Super+Q ────────────────────────────────────────────────
+    if (has_super && keycode == KEY_Q) {
+        log::info("ShortcutEngine: close_window");
+        m_callback("close_window");
+        return true;
+    }
+
+    // ── Alt+Tab window switcher ───────────────────────────────────────────────
+    if (has_alt && keycode == KEY_TAB) {
+        bool reverse = (modifiers & MOD_CTRL) != 0; // Alt+Ctrl+Tab = reverse
+        log::info("ShortcutEngine: alttab_switch (reverse={})", reverse);
+        m_callback(reverse ? "alttab_prev" : "alttab_next");
+        return true;
+    }
+
+    // ── Workspace switching: Super+1–9 ────────────────────────────────────────
+    if (has_super && keycode >= KEY_1 && keycode <= KEY_9) {
+        uint32_t ws_num = keycode - KEY_1 + 1; // 1–9
+        std::string action = "workspace_switch_" + std::to_string(ws_num);
+        log::info("ShortcutEngine: {} (keycode={})", action, keycode);
+        m_callback(action);
+        return true;
     }
 
     return false;
