@@ -127,6 +127,25 @@ int main(int argc, char** argv) {
         tinexus::log::error("Failed to create /run/user/0: {}", e.what());
     }
 
+    // ── Launch splash screen immediately — fills the framebuffer before Wayland ──
+    // Splash runs on /dev/fb0 independently of the compositor. We kill it with
+    // SIGTERM once wayland-0 is up so the compositor's first frame takes over.
+    pid_t splash_pid = -1;
+    {
+        pid_t pid = fork();
+        if (pid == 0) {
+            // Child: exec splash. No WAYLAND_DISPLAY needed — uses /dev/fb0 directly.
+            execlp("tinexus-splash", "tinexus-splash", nullptr);
+            execl("/usr/bin/tinexus-splash", "tinexus-splash", nullptr);
+            _exit(127);
+        } else if (pid > 0) {
+            splash_pid = pid;
+            tinexus::log::info("Splash screen started (PID={}).", splash_pid);
+        } else {
+            tinexus::log::warn("Failed to fork tinexus-splash — boot will show black screen.");
+        }
+    }
+
     // Default Platform Supervision Graph
     tinexus::serviced::DependencyGraph graph;
 
@@ -146,6 +165,7 @@ int main(int argc, char** argv) {
 
     if (graph.has_cycle()) {
         tinexus::log::error("FATAL: Circular dependency detected in supervision tree!");
+        if (splash_pid > 0) kill(splash_pid, SIGTERM);
         return 1;
     }
 
@@ -157,6 +177,7 @@ int main(int argc, char** argv) {
 
     if (!socket.start()) {
         tinexus::log::error("Failed to start Runtime Control Socket");
+        if (splash_pid > 0) kill(splash_pid, SIGTERM);
         return 1;
     }
 
@@ -164,6 +185,27 @@ int main(int argc, char** argv) {
     run_udev_setup();
     pm.start_all_services();
 
+    // ── Wait for wayland-0 socket, then dismiss splash ──────────────────────────
+    // tinexus-comp writes the socket; once it exists the compositor is rendering.
+    // Killing splash here minimises the fb0→Wayland black gap to ≤1 frame (~16ms).
+    {
+        const std::filesystem::path wayland_sock("/run/user/0/wayland-0");
+        tinexus::log::info("Waiting for Wayland socket (wayland-0)...");
+        for (int tries = 0; tries < 100; ++tries) { // up to 10 seconds
+            if (std::filesystem::exists(wayland_sock)) {
+                tinexus::log::info("wayland-0 socket is ready.");
+                break;
+            }
+            usleep(100'000); // 100ms
+        }
+        if (splash_pid > 0) {
+            kill(splash_pid, SIGTERM);
+            waitpid(splash_pid, nullptr, 0); // reap immediately — don't leave zombie
+            tinexus::log::info("Splash screen dismissed.");
+        }
+    }
+
     socket.run_accept_loop();
     return 0;
 }
+

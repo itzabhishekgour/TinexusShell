@@ -91,10 +91,9 @@ void LayerShellWindow::setup_layer_surface() noexcept {
     zwlr_layer_surface_v1_add_listener(m_layer_surface, &layer_surface_listener, this);
     
     zwlr_layer_surface_v1_set_size(m_layer_surface, m_width, m_height);
-    zwlr_layer_surface_v1_set_anchor(m_layer_surface, 
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | 
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | 
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+    zwlr_layer_surface_v1_set_anchor(m_layer_surface, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+    zwlr_layer_surface_v1_set_margin(m_layer_surface, 8, 0, 0, 0); // 8px top margin
+    zwlr_layer_surface_v1_set_keyboard_interactivity(m_layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     zwlr_layer_surface_v1_set_exclusive_zone(m_layer_surface, static_cast<int32_t>(m_height));
     
     // Commit to trigger configure event
@@ -106,6 +105,16 @@ void LayerShellWindow::set_root_widget(txui::Ref<txui::Widget> root) noexcept {
     m_root_widget = std::move(root);
     if (m_root_widget) {
         m_root_widget->mark_needs_measure();
+    }
+}
+
+void LayerShellWindow::resize(uint32_t width, uint32_t height) noexcept {
+    if (m_width == width && m_height == height) return;
+    m_width = width;
+    m_height = height;
+    if (m_layer_surface) {
+        zwlr_layer_surface_v1_set_size(m_layer_surface, m_width, m_height);
+        wl_surface_commit(m_render_target->surface().surface());
     }
 }
 

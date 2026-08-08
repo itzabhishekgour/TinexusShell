@@ -94,7 +94,7 @@ public:
     ~SpringAnimation() override = default;
 
     void start()                              override;
-    void update(double progress)              override = 0; // progress = current spring value [from..to]
+    void update(double /*progress*/)          override {} // progress = current spring value [from..to]
     void on_complete()                        override {}
 
     [[nodiscard]] bool is_running() const noexcept override;

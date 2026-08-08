@@ -120,8 +120,8 @@ int main() {
     // Clear screen to black
     memset(fbp, 0, screensize);
 
-    // Load logo
-    int img_w, img_h, img_channels;
+    // Load logo — initialize to 0 to avoid UB if stbi_load fails
+    int img_w = 0, img_h = 0, img_channels = 0;
     uint8_t* img_data = stbi_load("/tinexus-logo.png", &img_w, &img_h, &img_channels, 0);
     if (img_data) {
         int x = (static_cast<int>(vinfo.xres) - img_w) / 2;
@@ -132,62 +132,39 @@ int main() {
         std::cerr << "Warning: Could not load /tinexus-logo.png" << std::endl;
     }
 
-    // Draw initial progress bar outline (Elegant macOS/Windows style)
-    int bar_w = 200; // Same width as the small logo
-    int bar_h = 6;   // Thinner, elegant bar
-    int bar_x = (static_cast<int>(vinfo.xres) - bar_w) / 2;
-    int bar_y = (static_cast<int>(vinfo.yres) + img_h) / 2 - 10; // Placed 40px below the logo
+    // Progress bar geometry — safe even if img_h is 0 (logo failed to load)
+    const int bar_w = 200;
+    const int bar_h = 6;
+    const int bar_x = (static_cast<int>(vinfo.xres) - bar_w) / 2;
+    // Place bar 40px below where the logo bottom would be, or at 65% screen height as fallback
+    const int logo_bottom = (static_cast<int>(vinfo.yres) - img_h) / 2 - 50 + img_h;
+    const int bar_y_from_logo = logo_bottom + 40;
+    const int bar_y_fallback  = static_cast<int>(vinfo.yres * 65 / 100);
+    const int bar_y = (img_h > 0) ? bar_y_from_logo : bar_y_fallback;
 
-    // Draw white background for bar
+    // Draw white progress bar track
     draw_rect(fbp, vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, bar_x, bar_y, bar_w, bar_h, BAR_BG);
 
-    const char* fifo_path = "/tmp/splash_progress";
-    mkfifo(fifo_path, 0666);
-    
-    int pipe_fd = open(fifo_path, O_RDONLY | O_NONBLOCK);
-    if (pipe_fd == -1) {
-        std::cerr << "Error opening progress pipe." << std::endl;
-    }
-
-    int progress = 0;
-    char buffer[16];
-    std::string current_num;
-
-    while (progress < 100) {
-        if (pipe_fd != -1) {
-            ssize_t bytes_read = read(pipe_fd, buffer, sizeof(buffer) - 1);
-            if (bytes_read > 0) {
-                buffer[bytes_read] = '\0';
-                for (ssize_t i = 0; i < bytes_read; ++i) {
-                    if (buffer[i] == '\n') {
-                        if (!current_num.empty()) {
-                            try {
-                                progress = std::stoi(current_num);
-                            } catch (...) {}
-                            current_num.clear();
-                        }
-                    } else if (isdigit(buffer[i])) {
-                        current_num += buffer[i];
-                    }
-                }
-
-                // Draw light green progress fill
-                int fill_w = (bar_w * progress) / 100;
-                if (fill_w > 0) {
-                    draw_rect(fbp, vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, bar_x, bar_y, fill_w, bar_h, BAR_FG);
-                }
-            }
+    // ── Indeterminate animation: fill 0→100% over 50 × 50ms = 2.5 seconds ────
+    // Exits when either:
+    //   (a) 100% animation completes naturally, or
+    //   (b) SIGTERM is received from serviced (compositor is up)
+    constexpr int TOTAL_FRAMES = 50;
+    for (int frame = 0; frame <= TOTAL_FRAMES; ++frame) {
+        int fill_w = (bar_w * frame) / TOTAL_FRAMES;
+        if (fill_w > 0) {
+            draw_rect(fbp, vinfo.xres, vinfo.yres, vinfo.bits_per_pixel,
+                      bar_x, bar_y, fill_w, bar_h, BAR_FG);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    // Hold for a moment when 100% reached before Wayland takes over
+    // Hold at 100% briefly before compositor takes over
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     munmap(fbp, screensize);
     close(fbfd);
-    if (pipe_fd != -1) close(pipe_fd);
-    unlink(fifo_path);
 
     return 0;
 }
+

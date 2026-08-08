@@ -59,7 +59,34 @@ void LockWidget::clear_password() {
 
 void LockWidget::trigger_shake_animation() {
     clear_password();
+    m_shaking     = true;
+    m_shake_frame = 0;
+    m_shake_offset = 0;
     mark_needs_paint();
+}
+
+bool LockWidget::advance_shake() noexcept {
+    if (!m_shaking) return false;
+
+    // 8-frame sequence: alternating ±10px displacement (right, left, right…)
+    // Frame offsets: [ +10, -10, +8, -8, +5, -5, +2, -2, 0 ]
+    static constexpr int kOffsets[] = { 10, -10, 8, -8, 5, -5, 2, -2, 0 };
+    constexpr int kFrameCount = static_cast<int>(
+        sizeof(kOffsets) / sizeof(kOffsets[0]));
+
+    if (m_shake_frame < kFrameCount) {
+        m_shake_offset = kOffsets[m_shake_frame];
+        ++m_shake_frame;
+        mark_needs_paint();
+        return true;
+    }
+
+    // Animation complete
+    m_shaking      = false;
+    m_shake_offset = 0;
+    m_shake_frame  = 0;
+    mark_needs_paint();
+    return false;
 }
 
 void LockWidget::set_lockout(int seconds) {
@@ -128,15 +155,16 @@ void LockWidget::paint_override(txui::Painter& painter) const noexcept {
     const double user_x = cx - (static_cast<double>(user_name.size()) * 8.0) * 0.5;
     painter.draw_text(txui::Point(user_x, avatar_y + 36.0), user_name, USER_COLOR, 1.0);
 
-    // ── 5. Glassmorphism Password Input Pill
+    // ── 5. Glassmorphism Password Input Pill (with shake offset when auth fails)
     const double pw_w = 280.0;
     const double pw_h = 44.0;
-    const double pw_x = cx - pw_w * 0.5;
+    const double pw_x = cx - pw_w * 0.5 + static_cast<double>(m_shake_offset);
     const double pw_y = card_y + 140.0;
     const txui::Rect pw_rect(pw_x, pw_y, pw_w, pw_h);
 
-    // Pill border + background
-    const txui::Color border_color = (!m_password.empty() || m_caret_visible) ? PILL_BORDER : CARD_BORDER;
+    // Pill border: use ERROR_COL while shaking, accent otherwise
+    const txui::Color border_color = m_shaking ? ERROR_COL
+        : ((!m_password.empty() || m_caret_visible) ? PILL_BORDER : CARD_BORDER);
     painter.fill_rounded_rect(
         txui::Rect(pw_x - 1, pw_y - 1, pw_w + 2, pw_h + 2),
         23.0, border_color);

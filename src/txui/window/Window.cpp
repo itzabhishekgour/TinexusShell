@@ -4,6 +4,7 @@
 #include <txui/render/CanvasRenderTarget.hpp>
 #include <wayland-client.h>
 #include <xdg-shell-client-protocol.h>
+#include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include <atomic>
 #include <utility>
 
@@ -70,11 +71,28 @@ void handle_input_event(void* ctx, const Event& event) noexcept {
     win->push_event(event);
 }
 
+static void handle_layer_surface_configure(void* data, struct zwlr_layer_surface_v1* surface, uint32_t serial, uint32_t width, uint32_t height) {
+    auto* win = static_cast<Window*>(data);
+    if (width > 0 && height > 0) {
+        win->on_configure(width, height);
+    }
+    zwlr_layer_surface_v1_ack_configure(surface, serial);
+}
+
+static void handle_layer_surface_closed(void* data, struct zwlr_layer_surface_v1* /*surface*/) {
+    auto* win = static_cast<Window*>(data);
+    win->on_close_request();
+}
+
+static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
+    .configure = handle_layer_surface_configure,
+    .closed = handle_layer_surface_closed,
+};
+
 } // namespace
 
-Window::Window(uint32 id, uint32 width, uint32 height, std::string_view title) noexcept
-    : m_id(id),
-      m_width(width),
+Window::Window(uint32 width, uint32 height, std::string_view title) noexcept
+    : m_width(width),
       m_height(height),
       m_title(title),
       m_painter(std::make_unique<Painter>(m_command_buffer)) {}
@@ -92,6 +110,10 @@ Window::~Window() {
         xdg_surface_destroy(m_xdg_surface);
         m_xdg_surface = nullptr;
     }
+    if (m_layer_surface != nullptr) {
+        zwlr_layer_surface_v1_destroy(m_layer_surface);
+        m_layer_surface = nullptr;
+    }
     m_render_target.reset();
     m_input.reset();
     m_event_loop.reset();
@@ -99,13 +121,14 @@ Window::~Window() {
     m_state = WindowState::Destroyed;
 }
 
-Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title) noexcept {
+Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, bool layer_shell) noexcept {
     uint32 win_id = s_next_window_id.fetch_add(1, std::memory_order_relaxed);
-    auto* raw_win = new Window(win_id, width, height, title);
+    auto* raw_win = new Window(width, height, title);
+    raw_win->m_id = win_id;
     Ref<Window> win(raw_win);
 
     auto conn_opt = wayland::WaylandConnection::connect();
-    if (conn_opt.has_value() && conn_opt->is_valid() && conn_opt->wm_base() != nullptr) {
+    if (conn_opt.has_value() && conn_opt->is_valid()) {
         win->m_connection = std::move(conn_opt);
         win->m_event_loop = wayland::WaylandEventLoop(win->m_connection->display());
         win->m_input = wayland::WaylandInput::create(win->m_connection->seat());
@@ -114,29 +137,46 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title) 
             win->m_input->set_event_sink(win.get(), handle_input_event, win_id);
         }
 
-        win->bind_wm_base(win->m_connection->wm_base());
-        xdg_wm_base_add_listener(win->m_wm_base, &wm_base_listener, win.get());
-
         auto target_opt = WaylandRenderTarget::create(*win->m_connection, width, height);
         if (target_opt.has_value()) {
             auto* target_ptr = new WaylandRenderTarget(std::move(*target_opt));
             win->m_render_target.reset(target_ptr);
 
-            // Create XDG surface & toplevel wrappers for Wayland window
-            win->m_xdg_surface = xdg_wm_base_get_xdg_surface(win->m_wm_base, target_ptr->surface().surface());
-            if (win->m_xdg_surface != nullptr) {
-                xdg_surface_add_listener(win->m_xdg_surface, &xdg_surface_listener, win.get());
-                win->m_xdg_toplevel = xdg_surface_get_toplevel(win->m_xdg_surface);
-                if (win->m_xdg_toplevel != nullptr) {
-                    xdg_toplevel_add_listener(win->m_xdg_toplevel, &xdg_toplevel_listener, win.get());
-                    xdg_toplevel_set_title(win->m_xdg_toplevel, win->m_title.c_str());
-                    // Use a sanitised app_id derived from the title (lowercase, spaces->hyphens)
-                    std::string app_id = "io.tinexus.shell";
-                    if (win->m_title == "Tinexus Lock") app_id = "tinexus-lock";
-                    else if (win->m_title == "Tinexus Launcher") app_id = "tinexus-launcher";
-                    else if (win->m_title == "Tinexus Settings") app_id = "tinexus-settings";
-                    xdg_toplevel_set_app_id(win->m_xdg_toplevel, app_id.c_str());
+            if (layer_shell) {
+                if (win->m_connection->layer_shell() != nullptr) {
+                    win->m_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+                        win->m_connection->layer_shell(),
+                        target_ptr->surface().surface(),
+                        nullptr, // default output
+                        ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+                        "tinexus-shell"
+                    );
+                    zwlr_layer_surface_v1_add_listener(win->m_layer_surface, &layer_surface_listener, win.get());
+                    zwlr_layer_surface_v1_set_size(win->m_layer_surface, width, height);
+                    zwlr_layer_surface_v1_set_anchor(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, 8, 0, 0, 0); // 8px top margin
+                    zwlr_layer_surface_v1_set_keyboard_interactivity(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
+                    zwlr_layer_surface_v1_set_exclusive_zone(win->m_layer_surface, height + 8);
+                }
+            } else {
+                if (win->m_connection->wm_base() != nullptr) {
+                    xdg_wm_base_add_listener(win->m_connection->wm_base(), &wm_base_listener, win.get());
 
+                    win->m_xdg_surface = xdg_wm_base_get_xdg_surface(win->m_connection->wm_base(), target_ptr->surface().surface());
+                    if (win->m_xdg_surface != nullptr) {
+                        xdg_surface_add_listener(win->m_xdg_surface, &xdg_surface_listener, win.get());
+                        win->m_xdg_toplevel = xdg_surface_get_toplevel(win->m_xdg_surface);
+                        if (win->m_xdg_toplevel != nullptr) {
+                            xdg_toplevel_add_listener(win->m_xdg_toplevel, &xdg_toplevel_listener, win.get());
+                            xdg_toplevel_set_title(win->m_xdg_toplevel, win->m_title.c_str());
+                            
+                            std::string app_id = "io.tinexus.shell";
+                            if (win->m_title == "Tinexus Lock") app_id = "tinexus-lock";
+                            else if (win->m_title == "Tinexus Launcher") app_id = "tinexus-launcher";
+                            else if (win->m_title == "Tinexus Settings") app_id = "tinexus-settings";
+                            xdg_toplevel_set_app_id(win->m_xdg_toplevel, app_id.c_str());
+                        }
+                    }
                 }
             }
 
@@ -297,6 +337,30 @@ void Window::push_event(const Event& event) noexcept {
             m_events.pop_front(); // Drop oldest
         }
         m_events.push_back(event);
+    }
+}
+
+void Window::resize(uint32_t width, uint32_t height) noexcept {
+    if (m_width == width && m_height == height) return;
+    m_width = width;
+    m_height = height;
+
+    if (m_render_target) {
+        auto* wayland_target = static_cast<WaylandRenderTarget*>(m_render_target.get());
+        if (wayland_target->resize(width, height)) {
+            if (m_layer_surface) {
+                zwlr_layer_surface_v1_set_size(m_layer_surface, width, height);
+                wl_surface_commit(wayland_target->surface().surface());
+            } else if (m_xdg_surface) {
+                // Resize for XDG surface requires configure event logic, but for simplicity here:
+                wl_surface_commit(wayland_target->surface().surface());
+            }
+        }
+    }
+    // m_configured = false; // BUG: Do not clear this, or we drop frames waiting for compositor!
+    m_frame_ready = true;
+    if (m_root_widget) {
+        m_root_widget->mark_needs_paint();
     }
 }
 

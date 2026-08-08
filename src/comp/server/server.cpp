@@ -13,8 +13,9 @@
 #include <cstring>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <csignal>
-#include <atomic>
 
 
 #include <wayland-server-core.h>
@@ -105,23 +106,41 @@ bool TinexusServer::initialize() {
                     log::warn("[Server] Launcher blocked — screen is locked.");
                     return;
                 }
-                log::info("[Server] Ctrl+K: spawning tinexus-launcher");
-                pid_t pid = fork();
-                if (pid < 0) { log::error("[Server] fork() failed"); return; }
-                if (pid == 0) {
-                    pid_t grandchild = fork();
-                    if (grandchild < 0) { _exit(1); }
-                    if (grandchild == 0) {
-                        setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
-                        setsid();
-                        execlp("tinexus-launcher", "tinexus-launcher", nullptr);
-                        execl("/usr/bin/tinexus-launcher", "tinexus-launcher", nullptr);
-                        _exit(127);
+                log::info("[Server] Ctrl+K: Sending SHORTCUT_ACTIVATED to ipcd");
+                int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+                if (sock >= 0) {
+                    struct sockaddr_un addr;
+                    memset(&addr, 0, sizeof(addr));
+                    addr.sun_family = AF_UNIX;
+                    char path[256];
+                    snprintf(path, sizeof(path), "/run/user/%d/tinexus/ipc.sock", getuid());
+                    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+                    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+#pragma pack(push, 1)
+                        struct IpcHeader {
+                            uint32_t magic = 0x544E5853;
+                            uint16_t version = 0x0100;
+                            uint16_t msg_type;
+                            uint16_t flags = 0;
+                            uint32_t sequence_id = 0;
+                            uint32_t payload_len = 0;
+                            uint32_t checksum = 0;
+                        };
+#pragma pack(pop)
+                        IpcHeader msg1;
+                        msg1.msg_type = 1005; // SHORTCUT_ACTIVATED
+                        send(sock, &msg1, sizeof(msg1), MSG_NOSIGNAL);
+
+                        IpcHeader msg2;
+                        msg2.msg_type = 10; // SYS_PING
+                        send(sock, &msg2, sizeof(msg2), MSG_NOSIGNAL);
+
+                        // Block until we get PONG to ensure ipcd read the queue
+                        IpcHeader rx;
+                        recv(sock, &rx, sizeof(rx), 0);
                     }
-                    _exit(0);
+                    close(sock);
                 }
-                int status = 0;
-                waitpid(pid, &status, 0);
                 return;
             }
 

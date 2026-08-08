@@ -21,6 +21,7 @@
 struct xdg_wm_base;
 struct xdg_surface;
 struct xdg_toplevel;
+struct zwlr_layer_surface_v1;
 struct wl_callback;
 
 namespace txui {
@@ -46,6 +47,7 @@ private:
     xdg_wm_base* m_wm_base{nullptr};
     xdg_surface* m_xdg_surface{nullptr};
     xdg_toplevel* m_xdg_toplevel{nullptr};
+    zwlr_layer_surface_v1* m_layer_surface{nullptr};
     wl_callback* m_frame_callback{nullptr};
 
     CommandBuffer m_command_buffer;
@@ -55,14 +57,17 @@ private:
     std::deque<Event> m_events;
     size_t m_event_queue_capacity{10000}; // Default capacity
 
-    Window(uint32 id, uint32 width, uint32 height, std::string_view title) noexcept;
+    Window(uint32 width, uint32 height, std::string_view title) noexcept;
+    bool init_wayland(bool layer_shell) noexcept;
 
 public:
     ~Window() override;
 
     // Creates a new production Wayland window. Returns Ref<Window> per intrusive Object ref-counting rule.
     [[nodiscard]] static Ref<Window> create(
-        uint32 width, uint32 height, std::string_view title = "Tinexus Application") noexcept;
+        uint32 width, uint32 height, std::string_view title = "Tinexus Application", bool layer_shell = false) noexcept;
+
+    void resize(uint32 width, uint32 height) noexcept;
 
     // Pops the next pending event from this window's private event queue.
     bool poll_event(Event& out_event) noexcept;

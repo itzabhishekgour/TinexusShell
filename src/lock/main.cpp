@@ -96,21 +96,33 @@ int main(int /*argc*/, char** /*argv*/) {
     window->set_root_widget(root);
     window->set_fullscreen(true);
 
-    // Warm-up: process a few Wayland roundtrips so the compositor sends
-    // the configure event and sizes us properly before we enter the main loop.
-    // Without this the window may render at a wrong size for the first frame.
+    // Warm-up: wait for the compositor's fullscreen configure event to arrive
+    // before the first visible present(). Without this, the first frame renders
+    // at the hardcoded 1920×1080 instead of the actual output size (e.g. 1536×793
+    // on Virtual-1), producing a visibly wrong/clipped first frame.
+    //
+    // Strategy: drain events every 8ms until window->width() changes from the
+    // initial hardcoded value (configure processed), or 400ms timeout expires.
     {
+        const uint32_t initial_w = window->width(); // hardcoded value from create()
         txui::Event ev;
-        for (int i = 0; i < 10; ++i) {
-            window->present();
-            while (window->poll_event(ev)) {} // drain configure events
-            usleep(8000); // ~8ms
+        for (int i = 0; i < 50; ++i) {            // 50 × 8ms = 400ms hard timeout
+            while (window->poll_event(ev)) {}      // drain pending events
+            if (window->width() != initial_w) {
+                tinexus::log::info("[lock] Fullscreen configure received: {}×{} (after {}ms)",
+                                   window->width(), window->height(), i * 8);
+                break;
+            }
+            usleep(8000); // 8ms
+        }
+        if (window->width() == initial_w) {
+            tinexus::log::warn("[lock] Fullscreen configure not received within 400ms — using initial dimensions.");
         }
     }
 
-
-    // Initial present to display the frame immediately upon mapping
+    // Initial present — window is now at the correct compositor-assigned size
     window->present();
+
 
     constexpr int MAX_ATTEMPTS    = 5;
     constexpr int LOCKOUT_SECONDS = 30;
@@ -121,6 +133,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     auto last_caret_time = std::chrono::steady_clock::now();
     auto last_clock_time = std::chrono::steady_clock::now();
+    auto last_shake_time = std::chrono::steady_clock::now();
 
     bool running = true;
     bool needs_redraw = true;
@@ -138,6 +151,14 @@ int main(int /*argc*/, char** /*argv*/) {
         // Clock update timer (1000ms)
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_clock_time).count() >= 1) {
             last_clock_time = now;
+            needs_redraw = true;
+        }
+
+        // Shake animation timer (60ms per frame — 9 frames = ~540ms total)
+        if (root->is_shaking() &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_shake_time).count() >= 60) {
+            root->advance_shake();
+            last_shake_time = now;
             needs_redraw = true;
         }
 

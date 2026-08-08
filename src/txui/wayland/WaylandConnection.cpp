@@ -1,6 +1,7 @@
 #include <txui/wayland/WaylandConnection.hpp>
 #include <wayland-client.h>
 #include <xdg-shell-client-protocol.h>
+#include <wlr-layer-shell-unstable-v1-client-protocol.h>
 #include <cstring>
 #include <utility>
 
@@ -16,6 +17,8 @@ void handle_global(void* data, struct wl_registry* registry, uint32_t name, cons
         conn->bind_shm(registry, name, version);
     } else if (std::strcmp(interface, "xdg_wm_base") == 0) {
         conn->bind_wm_base(registry, name, version);
+    } else if (std::strcmp(interface, "zwlr_layer_shell_v1") == 0) {
+        conn->bind_layer_shell(registry, name, version);
     } else if (std::strcmp(interface, "wl_seat") == 0) {
         conn->bind_seat(registry, name, version);
     }
@@ -48,11 +51,13 @@ WaylandConnection::WaylandConnection(WaylandConnection&& other) noexcept
       m_compositor(std::exchange(other.m_compositor, nullptr)),
       m_shm(std::exchange(other.m_shm, nullptr)),
       m_wm_base(std::exchange(other.m_wm_base, nullptr)),
+      m_layer_shell(std::exchange(other.m_layer_shell, nullptr)),
       m_seat(std::exchange(other.m_seat, nullptr)) {}
 
 WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexcept {
     if (this != &other) {
         if (m_wm_base != nullptr) xdg_wm_base_destroy(m_wm_base);
+        if (m_layer_shell != nullptr) zwlr_layer_shell_v1_destroy(m_layer_shell);
         if (m_seat != nullptr) wl_seat_destroy(m_seat);
         if (m_compositor != nullptr) wl_compositor_destroy(m_compositor);
         if (m_shm != nullptr) wl_shm_destroy(m_shm);
@@ -64,6 +69,7 @@ WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexc
         m_compositor = std::exchange(other.m_compositor, nullptr);
         m_shm = std::exchange(other.m_shm, nullptr);
         m_wm_base = std::exchange(other.m_wm_base, nullptr);
+        m_layer_shell = std::exchange(other.m_layer_shell, nullptr);
         m_seat = std::exchange(other.m_seat, nullptr);
     }
     return *this;
@@ -71,6 +77,7 @@ WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexc
 
 WaylandConnection::~WaylandConnection() noexcept {
     if (m_wm_base != nullptr) xdg_wm_base_destroy(m_wm_base);
+    if (m_layer_shell != nullptr) zwlr_layer_shell_v1_destroy(m_layer_shell);
     if (m_seat != nullptr) wl_seat_destroy(m_seat);
     if (m_compositor != nullptr) wl_compositor_destroy(m_compositor);
     if (m_shm != nullptr) wl_shm_destroy(m_shm);
@@ -102,29 +109,35 @@ void WaylandConnection::flush() noexcept {
     }
 }
 
-void WaylandConnection::bind_compositor(wl_registry* registry, uint32 name, uint32 version) noexcept {
-    uint32 bind_ver = (version < 4U) ? version : 4U;
+void WaylandConnection::bind_compositor(wl_registry* registry, uint32_t name, uint32_t version) noexcept {
+    uint32_t bind_ver = (version < 4U) ? version : 4U;
     m_compositor = static_cast<wl_compositor*>(
         wl_registry_bind(registry, name, &wl_compositor_interface, bind_ver)
     );
 }
 
-void WaylandConnection::bind_shm(wl_registry* registry, uint32 name, uint32 version) noexcept {
-    uint32 bind_ver = (version < 1U) ? version : 1U;
+void WaylandConnection::bind_shm(wl_registry* registry, uint32_t name, uint32_t version) noexcept {
+    uint32_t bind_ver = (version < 1U) ? version : 1U;
     m_shm = static_cast<wl_shm*>(
         wl_registry_bind(registry, name, &wl_shm_interface, bind_ver)
     );
 }
 
-void WaylandConnection::bind_wm_base(wl_registry* registry, uint32 name, uint32 version) noexcept {
-    uint32 bind_ver = (version < 3U) ? version : 3U;
+void WaylandConnection::bind_wm_base(wl_registry* registry, uint32_t name, uint32_t version) noexcept {
+    uint32_t bind_ver = (version < 3U) ? version : 3U;
     m_wm_base = static_cast<xdg_wm_base*>(
         wl_registry_bind(registry, name, &xdg_wm_base_interface, bind_ver)
     );
 }
 
-void WaylandConnection::bind_seat(wl_registry* registry, uint32 name, uint32 version) noexcept {
-    uint32 bind_ver = (version < 7U) ? version : 7U;
+void WaylandConnection::bind_layer_shell(wl_registry* registry, uint32_t name, uint32_t version) noexcept {
+    m_layer_shell = static_cast<zwlr_layer_shell_v1*>(
+        wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, version >= 4 ? 4 : version)
+    );
+}
+
+void WaylandConnection::bind_seat(wl_registry* registry, uint32_t name, uint32_t version) noexcept {
+    uint32_t bind_ver = (version < 7U) ? version : 7U;
     m_seat = static_cast<wl_seat*>(
         wl_registry_bind(registry, name, &wl_seat_interface, bind_ver)
     );

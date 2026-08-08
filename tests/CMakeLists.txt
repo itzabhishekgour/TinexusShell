@@ -1,6 +1,9 @@
 find_package(SQLite3 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_SERVER wayland-server)
+pkg_check_modules(WLROOTS IMPORTED_TARGET wlroots-0.19)
+pkg_check_modules(XKBCOMMON IMPORTED_TARGET xkbcommon)
+pkg_check_modules(PIXMAN IMPORTED_TARGET pixman-1)
 
 add_executable(unit_test_common
     unit/test_common.cpp
@@ -108,10 +111,17 @@ target_include_directories(unit_test_comp PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
 )
 
+target_compile_definitions(unit_test_comp PRIVATE WLR_USE_UNSTABLE=1)
+
 target_link_libraries(unit_test_comp PRIVATE
     tinexus_common
     tinexus_warnings
     tinexus_sanitizers
+    tinexus_protocols
+    PkgConfig::WAYLAND_SERVER
+    PkgConfig::WLROOTS
+    PkgConfig::XKBCOMMON
+    PkgConfig::PIXMAN
 )
 
 add_test(NAME unit_test_comp COMMAND unit_test_comp)

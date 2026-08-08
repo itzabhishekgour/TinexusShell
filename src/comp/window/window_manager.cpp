@@ -50,7 +50,7 @@ void WindowManager::tick_animations(double dt) {
     for (auto& [id, win] : m_windows) {
         if (win->m_opacity_anim.is_running()) {
             win->m_opacity_anim.tick_dt(dt);
-            win->opacity = win->m_opacity_anim.current_value();
+            win->opacity = static_cast<float>(win->m_opacity_anim.current_value());
         }
     }
 }

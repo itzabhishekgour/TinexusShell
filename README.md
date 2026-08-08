@@ -20,7 +20,7 @@ Tinexus Platform tracks component maturity transparently across three tiers:
 | **Platform Supervisor (`tinexus-serviced`)** | 🟢 **REAL SYSTEM APIs** | POSIX `fork()`, `execvp()`, `kill()`, `waitpid()`, supervision watchdog, Unix sockets (`/tmp/tinexus-serviced.sock`). |
 | **IPC Broker (`tinexus-ipcd`) & SDK** | 🟢 **REAL SYSTEM APIs** | Real Unix domain socket broker, IPC packet framing, payload serialization, `libtinexus-sdk.so` client library. |
 | **Settings Daemon (`tinexus-settings`)** | 🟢 **REAL SYSTEM APIs** | TOML config parser, schema validator, atomic file sync (`.tmp` ➔ `fsync` ➔ `rename`). |
-| **Wayland Compositor (`tinexus-comp`)** | 🟡 **PARTIAL / FRAMEWORK** | Window rules engine, workspace manager, surface manager, frame scheduler; event loop currently runs sleep loop. |
+| **Wayland Compositor (`tinexus-comp`)** | 🟡 **PARTIAL / FRAMEWORK** | Window rules engine, workspace manager, surface manager, frame scheduler; event loop uses blocking `wl_display_run()` C-API (sleep loop removed). |
 | **Display Manager (`tinexus-displayd`)** | 🟡 **PARTIAL / FRAMEWORK** | VT allocation/switching architecture, seat0 acquisition, login supervisor, systemd `READY=1`/`STOPPING=1` socket signals. |
 | **Package Manager (`tinexus-pkg`)** | 🟡 **PARTIAL / FRAMEWORK** | `.tinexus` manifest parser, SHA256 checksums, Ed25519 signatures, topological DAG solver, package DB, staging state machine. |
 | **PAM Login (`tinexus-login`)** | 🟡 **PARTIAL / FRAMEWORK** | Memory zeroing (`explicit_bzero`), POSIX privilege drop sequence (`initgroups()` ➔ `setgid()` ➔ `setuid()`), baseline auth rules. |
