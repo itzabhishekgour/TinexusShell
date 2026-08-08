@@ -1,4 +1,5 @@
 #include "comp/output/output.hpp"
+#include "comp/window/window_manager.hpp"
 #include "common/logger.hpp"
 #include <ctime>
 
@@ -102,6 +103,16 @@ void TinexusOutput::frame() {
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
+
+    if (m_last_frame_time.tv_sec != 0) {
+        double dt = (now.tv_sec - m_last_frame_time.tv_sec) + 
+                    (now.tv_nsec - m_last_frame_time.tv_nsec) / 1e9;
+        if (dt > 0.0) {
+            WindowManager::instance().tick_animations(dt);
+        }
+    }
+    m_last_frame_time = now;
+
     wlr_scene_output_send_frame_done(scene_output, &now);
 }
 

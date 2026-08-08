@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include <pixman.h>
+
 namespace tinexus::comp {
 
 PixmanRenderer::~PixmanRenderer() = default;
@@ -33,24 +35,45 @@ void PixmanRenderer::compose_surface(RenderSurface& surface) {
     int32_t src_w = surface.buffer->width;
     int32_t src_h = surface.buffer->height;
 
-    int32_t start_x = std::max(0, surface.x);
-    int32_t start_y = std::max(0, surface.y);
-    int32_t end_x = std::min(static_cast<int32_t>(m_width), surface.x + src_w);
-    int32_t end_y = std::min(static_cast<int32_t>(m_height), surface.y + src_h);
+    if (surface.opacity >= 0.999f) {
+        // Fast path: direct assignment without blending
+        int32_t start_x = std::max(0, surface.x);
+        int32_t start_y = std::max(0, surface.y);
+        int32_t end_x = std::min(static_cast<int32_t>(m_width), surface.x + src_w);
+        int32_t end_y = std::min(static_cast<int32_t>(m_height), surface.y + src_h);
 
-    for (int32_t y = start_y; y < end_y; ++y) {
-        for (int32_t x = start_x; x < end_x; ++x) {
-            int32_t src_x = x - surface.x;
-            int32_t src_y = y - surface.y;
-            uint32_t pixel = src[src_y * src_w + src_x];
-
-            // Perform alpha-blended composition (PIXMAN_OP_OVER) onto canvas
-            size_t canvas_idx = static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x);
-            m_canvas[canvas_idx] = pixel;
+        for (int32_t y = start_y; y < end_y; ++y) {
+            for (int32_t x = start_x; x < end_x; ++x) {
+                int32_t src_x = x - surface.x;
+                int32_t src_y = y - surface.y;
+                uint32_t pixel = src[src_y * src_w + src_x];
+                size_t canvas_idx = static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x);
+                m_canvas[canvas_idx] = pixel;
+            }
         }
+    } else {
+        // Alpha-blended composition path using pixman
+        pixman_image_t* src_img = pixman_image_create_bits(
+            PIXMAN_a8r8g8b8, src_w, src_h, src, src_w * 4);
+        pixman_image_t* dst_img = pixman_image_create_bits(
+            PIXMAN_a8r8g8b8, m_width, m_height, m_canvas.data(), m_width * 4);
+
+        pixman_color_t color;
+        color.alpha = static_cast<uint16_t>(surface.opacity * 65535.0f);
+        color.red = 0; color.green = 0; color.blue = 0;
+        pixman_image_t* mask_img = pixman_image_create_solid_fill(&color);
+
+        pixman_image_composite32(
+            PIXMAN_OP_OVER, src_img, mask_img, dst_img,
+            0, 0, 0, 0, surface.x, surface.y, src_w, src_h);
+
+        pixman_image_unref(src_img);
+        pixman_image_unref(mask_img);
+        pixman_image_unref(dst_img);
     }
 
-    log::info("PixmanRenderer: Composited surface #{} ({}x{} @ {},{}) onto Pixman canvas", surface.id, src_w, src_h, surface.x, surface.y);
+    log::info("PixmanRenderer: Composited surface #{} ({}x{} @ {},{}, opacity: {:.2f}) onto Pixman canvas", 
+              surface.id, src_w, src_h, surface.x, surface.y, surface.opacity);
 }
 
 void PixmanRenderer::end_frame() {

@@ -33,6 +33,8 @@ public:
     [[nodiscard]] std::shared_ptr<WindowNode> find_window(uint64_t surface_id) const;
     [[nodiscard]] size_t managed_windows_count() const noexcept { return m_windows.size(); }
 
+    void tick_animations(double dt);
+
     // Legacy unit test support
     uint64_t register_window(uint64_t surface_id, const std::string& app_id, const std::string& title);
     void unregister_window(uint64_t surface_id);

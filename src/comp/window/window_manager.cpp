@@ -21,6 +21,10 @@ bool WindowManager::map_window(uint64_t surface_id, SceneGraph& scene_graph) {
     if (!win) return false;
 
     win->visible = true;
+    win->opacity = 0.0f;
+    win->m_opacity_anim = SpringAnimation(0.0, 1.0, 300.0, 25.0);
+    win->m_opacity_anim.start();
+
     scene_graph.add_node(win);
     log::info("WindowManager: Mapped window #{} into SceneGraph", surface_id);
     return true;
@@ -40,6 +44,15 @@ bool WindowManager::unmap_window(uint64_t surface_id, SceneGraph& scene_graph) {
 std::shared_ptr<WindowNode> WindowManager::find_window(uint64_t surface_id) const {
     auto it = m_windows.find(surface_id);
     return (it != m_windows.end()) ? it->second : nullptr;
+}
+
+void WindowManager::tick_animations(double dt) {
+    for (auto& [id, win] : m_windows) {
+        if (win->m_opacity_anim.is_running()) {
+            win->m_opacity_anim.tick_dt(dt);
+            win->opacity = win->m_opacity_anim.current_value();
+        }
+    }
 }
 
 uint64_t WindowManager::register_window(uint64_t surface_id, const std::string& app_id, const std::string& title) {

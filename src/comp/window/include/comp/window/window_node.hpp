@@ -3,6 +3,7 @@
 
 #include "comp/window/scene_node.hpp"
 #include "comp/window/xdg_toplevel_node.hpp"
+#include "comp/animation/animation.hpp"
 
 namespace tinexus::comp {
 
@@ -18,7 +19,9 @@ public:
     int32_t width{800};
     int32_t height{600};
     bool visible{true};
-    float opacity{1.0f};
+    float opacity{0.0f};
+
+    SpringAnimation m_opacity_anim{0.0, 1.0, 300.0, 25.0};
 
     XdgToplevelNode toplevel;
     std::shared_ptr<RenderBuffer> render_buffer;

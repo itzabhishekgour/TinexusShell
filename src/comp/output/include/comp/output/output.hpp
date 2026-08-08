@@ -29,6 +29,7 @@ private:
     struct wlr_allocator* m_allocator{nullptr};
     struct wlr_renderer* m_renderer{nullptr};
     struct wlr_scene* m_scene{nullptr};
+    struct timespec m_last_frame_time{0, 0};
 
     struct wl_listener m_frame_listener;
     struct wl_listener m_request_state_listener;
