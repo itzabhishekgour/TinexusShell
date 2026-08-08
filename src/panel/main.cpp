@@ -4,6 +4,7 @@
 #include <txui/widgets/SizedBox.hpp>
 #include <txui/widgets/TextWidget.hpp>
 #include <txui/graphics/Color.hpp>
+#include <txui/theme/Theme.hpp>
 #include <common/logger.hpp>
 #include <ctime>
 #include <chrono>
@@ -28,7 +29,7 @@ int main() {
     log::set_component_name("panel");
     log::info("[Panel] Tinexus Desktop Top Panel starting...");
 
-    panel::LayerShellWindow window(32); // 32px height panel
+    panel::LayerShellWindow window(txui::theme::PANEL_HEIGHT);
 
     auto root_layout = txui::make_ref<txui::FlexLayout>();
     root_layout->set_direction(txui::FlexDirection::Row);
@@ -87,12 +88,20 @@ int main() {
     window.show();
     log::info("[Panel] Top status panel initialized.");
 
-    // Main loop: Update clock every second and process Wayland events
+    // Main loop: Update clock every second and process Wayland events.
+    // present() is only called when the clock string has actually changed,
+    // avoiding needless compositor commits (and CPU) when nothing is different.
+    std::string last_clock_str;
     while (!window.should_close()) {
-        clock_text->set_text(" " + get_current_time_string() + " ");
-        window.present();
-        window.exec();
+        std::string new_clock = " " + get_current_time_string() + " ";
+        if (new_clock != last_clock_str) {
+            last_clock_str = new_clock;
+            clock_text->set_text(new_clock);
+            window.present();
+        }
+        window.exec(); // blocks up to 1s on poll()
     }
 
     return 0;
 }
+

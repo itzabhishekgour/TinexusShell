@@ -4,6 +4,7 @@
 #include <txui/render/PixmanBackend.hpp>
 #include <txui/render/CommandBuffer.hpp>
 #include <txui/render/Painter.hpp>
+#include <txui/theme/Theme.hpp>
 #include <common/logger.hpp>
 
 #include <wlr-layer-shell-unstable-v1-client-protocol.h>
@@ -72,7 +73,7 @@ int main() {
         return 1;
     }
 
-    uint32_t w = 360;
+    uint32_t w = 420;
     uint32_t h = 80;
 
     auto target_opt = txui::WaylandRenderTarget::create(connection, w, h);
@@ -90,7 +91,7 @@ int main() {
 
     zwlr_layer_surface_v1_add_listener(layer_surface, &layer_surface_listener, nullptr);
     zwlr_layer_surface_v1_set_size(layer_surface, w, h);
-    zwlr_layer_surface_v1_set_margin(layer_surface, 44, 16, 0, 0); // Top 44px, Right 16px
+    zwlr_layer_surface_v1_set_margin(layer_surface, txui::theme::NOTIFICATION_TOP_MARGIN, txui::theme::NOTIFICATION_RIGHT_MARGIN, 0, 0);
     zwlr_layer_surface_v1_set_anchor(layer_surface,
         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
     zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
