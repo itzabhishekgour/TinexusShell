@@ -37,13 +37,13 @@ protected:
         if (children().empty()) return Size(0.0, 0.0);
         auto child = children().front();
         child->measure(constraints);
-        return child->desired_size();
+        return m_expanded ? constraints.constrain(child->desired_size()) : child->desired_size();
     }
 
     void layout_override(const Rect& frame) noexcept override {
-        if (children().empty()) return;
-        auto child = children().front();
-        child->layout(Rect(frame.left(), frame.top(), child->desired_size().width, child->desired_size().height));
+        if (!children().empty()) {
+            children().front()->layout(frame);
+        }
     }
 
     void paint_override(Painter& painter) const noexcept override {
