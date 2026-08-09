@@ -97,6 +97,19 @@ int main(int argc, char** argv) {
     tinexus::log::set_component_name("tinexus-serviced");
     tinexus::log::info("Starting Platform Runtime Manager v{} (PID 1 Service Authority)...", tinexus::VERSION_STRING);
 
+    // ── Boot-Time UID Validation (PID 1 Panic Prevention) ──
+    struct passwd* pw = getpwuid(1000);
+    if (!pw || std::string(pw->pw_name) != "tinexus") {
+        tinexus::log::error("FATAL: UID 1000 does not map to 'tinexus' user in /etc/passwd.");
+        tinexus::log::error("Dropping to emergency root shell. System halt.");
+        pid_t rescue = fork();
+        if (rescue == 0) {
+            execl("/bin/sh", "sh", nullptr);
+            _exit(127);
+        }
+        while (true) pause();
+    }
+
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGCHLD, signal_handler);
@@ -126,10 +139,10 @@ int main(int argc, char** argv) {
     setenv("LIBSEAT_BACKEND", "builtin", 1);
     setenv("WLR_LOG_LEVEL", "DEBUG", 1);
 
-    // Ensure XDG_RUNTIME_DIR exists with correct permissions (0700)
+    // Ensure XDG_RUNTIME_DIR exists with correct permissions so unprivileged apps can traverse it
     try {
         std::filesystem::create_directories("/run/user/0");
-        chmod("/run/user/0", 0700);
+        chmod("/run/user/0", 0755);
     } catch (const std::exception& e) {
         tinexus::log::error("Failed to create /run/user/0: {}", e.what());
     }

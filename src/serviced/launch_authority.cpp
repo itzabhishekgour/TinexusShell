@@ -105,15 +105,23 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req, int app_fd) {
         std::vector<std::string> clean_env_strings = {
             "HOME=/home/tinexus",
             "USER=tinexus",
-            "PATH=/usr/local/bin:/usr/bin:/bin",
-            "XDG_RUNTIME_DIR=/run/user/1000",
-            "WAYLAND_DISPLAY=wayland-1",
+            "LOGNAME=tinexus",
+            "PATH=/usr/bin:/bin:/usr/local/bin:/opt/tinexus-apps",
+            "XDG_RUNTIME_DIR=/run/user/0",
+            "WAYLAND_DISPLAY=wayland-0",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8"
         };
         
+        static const std::unordered_set<std::string> ALLOWED_OVERRIDE_KEYS = {
+            "APP_LOCALE", "APP_THEME_MODE", "TZ"
+        };
         for (const auto& [k, v] : req.env) {
-            clean_env_strings.push_back(k + "=" + v);
+            if (ALLOWED_OVERRIDE_KEYS.count(k)) {
+                clean_env_strings.push_back(k + "=" + v);
+            } else {
+                log::warn("LaunchAuthority: Dropped non-allowlisted env var: {}", k);
+            }
         }
         
         std::vector<char*> child_env;
@@ -129,6 +137,48 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req, int app_fd) {
             args.push_back(const_cast<char*>(arg.c_str()));
         }
         args.push_back(nullptr);
+
+        // 1. Explicit FD Sanitization
+#ifdef __linux__
+#include <linux/close_range.h>
+#include <sys/syscall.h>
+        if (syscall(__NR_close_range, 3, ~0U, 0) != 0) {
+#endif
+            // Fallback for older kernels or if close_range fails
+            DIR* dir = opendir("/proc/self/fd");
+            if (dir != nullptr) {
+                struct dirent* entry;
+                while ((entry = readdir(dir)) != nullptr) {
+                    int fd = atoi(entry->d_name);
+                    if (fd > 2 && fd != dirfd(dir) && fd != app_fd) {
+                        close(fd);
+                    }
+                }
+                closedir(dir);
+            }
+#ifdef __linux__
+        }
+#endif
+
+        // 2. Strict Privilege Drop Sequence
+        constexpr uid_t TINEXUS_USER_UID = 1000;
+        constexpr gid_t TINEXUS_USER_GID = 1000;
+
+        // Clear root supplementary groups (Security Critical)
+        if (setgroups(0, nullptr) != 0) {
+            log::error("LaunchAuthority: FATAL: setgroups failed");
+            _exit(1); 
+        }
+        // Drop GID
+        if (setgid(TINEXUS_USER_GID) != 0) { 
+            log::error("LaunchAuthority: FATAL: setgid failed");
+            _exit(1); 
+        }
+        // Drop UID (Point of no return)
+        if (setuid(TINEXUS_USER_UID) != 0) { 
+            log::error("LaunchAuthority: FATAL: setuid failed");
+            _exit(1); 
+        }
 
         // If we have an FD (third-party app), use fexecve to prevent TOCTOU
         if (app_fd >= 0) {
