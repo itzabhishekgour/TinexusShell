@@ -150,7 +150,6 @@ EOF
         ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
             [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
         done
-        done
     fi
 
     info "Staging AppImage support (FUSE3 and tx-appimage)..."
@@ -277,6 +276,11 @@ EOF_UDEV_SEAT
     mkdir -p "$ROOTFS_DIR/usr/lib/locale"
     if [ -f "/usr/lib/locale/locale-archive" ]; then
         cp -L "/usr/lib/locale/locale-archive" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
+    fi
+    if [ -d "/usr/lib/locale/C.utf8" ]; then
+        cp -r "/usr/lib/locale/C.utf8" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
+    elif [ -d "/usr/lib/locale/C.UTF-8" ]; then
+        cp -r "/usr/lib/locale/C.UTF-8" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
     fi
     mkdir -p "$ROOTFS_DIR/etc"
     echo "LANG=C.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
