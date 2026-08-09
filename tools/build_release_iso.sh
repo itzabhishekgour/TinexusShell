@@ -232,15 +232,12 @@ EOF_UDEV_SEAT
         success "Staged custom mountain wallpaper."
     fi
 
-    # Locale — foot uses LC_ALL/LANG; stage minimal en_US.UTF-8
-    info "Staging locale data (en_US.UTF-8)..."
-    if [ -d "/usr/lib/locale" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/lib/locale"
-        cp -r /usr/lib/locale/en_US.utf8 "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
-        [ -f "/usr/lib/locale/locale-archive" ] && cp /usr/lib/locale/locale-archive "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
-    fi
+    # Locale — foot uses LC_ALL/LANG; stage minimal C.UTF-8
+    info "Staging locale data (C.UTF-8)..."
+    mkdir -p "$ROOTFS_DIR/usr/share/locale"
+    mkdir -p "$ROOTFS_DIR/usr/lib/locale"
     mkdir -p "$ROOTFS_DIR/etc"
-    echo "LANG=en_US.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
+    echo "LANG=C.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
 
     # PAM — required by tinexus-lock for authentication
     info "Staging PAM libraries and configuration for tinexus-lock..."
@@ -427,7 +424,9 @@ if [ -f /mnt/live/rootfs.squashfs ]; then
     /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
     /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
     mkdir -p /newroot/dev/shm
+    mkdir -p /newroot/dev/pts
     /bin/mount -t tmpfs tmpfs /newroot/dev/shm 2>/dev/null || true
+    /bin/mount -t devpts devpts /newroot/dev/pts 2>/dev/null || true
     /bin/mount -t proc proc /newroot/proc 2>/dev/null || true
     /bin/mount -t sysfs sysfs /newroot/sys 2>/dev/null || true
     /bin/mount -t tmpfs tmpfs /newroot/run 2>/dev/null || true
