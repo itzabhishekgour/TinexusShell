@@ -107,7 +107,9 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req, int app_fd) {
             "USER=tinexus",
             "PATH=/usr/local/bin:/usr/bin:/bin",
             "XDG_RUNTIME_DIR=/run/user/1000",
-            "WAYLAND_DISPLAY=wayland-1"
+            "WAYLAND_DISPLAY=wayland-1",
+            "LANG=C.UTF-8",
+            "LC_ALL=C.UTF-8"
         };
         
         for (const auto& [k, v] : req.env) {
