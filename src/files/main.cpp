@@ -29,11 +29,22 @@ int main(int argc, char* argv[]) {
 
     auto files_window = std::make_shared<tinexus::files::ui::ColumnBrowserWidget>();
     files_window->set_on_execute([&](const std::filesystem::path& path) {
-        // Launch via IPC (Phase 1)
         if (sdk_client.is_connected()) {
             tinexus::log::info("Launching {} via SDK", path.string());
-            // SDK Launch not implemented yet, just log for now
+            tinexus::ActionRequest req;
+            req.type = tinexus::ActionType::OpenFile;
+            req.target = path.string();
+            auto res = sdk_client.actions().execute(req);
+            if (!res.is_ok()) {
+                tinexus::log::error("Failed to launch file: {}", res.error().message());
+            }
         }
+    });
+
+    files_window->set_on_trash([&](const std::filesystem::path& path) {
+        tinexus::log::info("Moving {} to trash", path.string());
+        tinexus::files::TrashManager::move_to_trash(path);
+        // Note: We need to trigger a refresh on the parent directory, but for MVP it's just logging.
     });
 
     window->set_root_widget(files_window);

@@ -434,6 +434,167 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
 }
 
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include <unordered_map>
+#include <vector>
+
+namespace {
+    FT_Library g_ft_library = nullptr;
+    FT_Face g_ft_face = nullptr;
+    bool g_ft_initialized = false;
+    bool g_ft_failed = false;
+
+    struct GlyphCacheKey {
+        char ch;
+        int size;
+        bool operator==(const GlyphCacheKey& other) const {
+            return ch == other.ch && size == other.size;
+        }
+    };
+
+    struct GlyphCacheKeyHash {
+        std::size_t operator()(const GlyphCacheKey& k) const {
+            return std::hash<char>()(k.ch) ^ (std::hash<int>()(k.size) << 1);
+        }
+    };
+
+    struct CachedGlyph {
+        std::vector<uint8_t> bitmap;
+        int width;
+        int rows;
+        int pitch;
+        int bitmap_left;
+        int bitmap_top;
+        int advance_x;
+    };
+
+    std::unordered_map<GlyphCacheKey, CachedGlyph, GlyphCacheKeyHash> g_glyph_cache;
+
+    void init_freetype() {
+        if (g_ft_initialized || g_ft_failed) return;
+        g_ft_initialized = true;
+        
+        if (FT_Init_FreeType(&g_ft_library)) {
+            txui::log::error("PixmanBackend: Could not init FreeType library");
+            g_ft_failed = true;
+            return;
+        }
+        
+        const char* font_paths[] = {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+        };
+        
+        for (const char* path : font_paths) {
+            if (FT_New_Face(g_ft_library, path, 0, &g_ft_face) == 0) {
+                txui::log::info("PixmanBackend: Loaded FreeType font {}", path);
+                break;
+            }
+        }
+        
+        if (!g_ft_face) {
+            txui::log::error("PixmanBackend: Failed to load any TrueType font. Text rendering will be disabled.");
+            g_ft_failed = true;
+        }
+    }
+
+    const CachedGlyph* get_cached_glyph(char ch, int size) {
+        GlyphCacheKey key{ch, size};
+        auto it = g_glyph_cache.find(key);
+        if (it != g_glyph_cache.end()) {
+            return &it->second;
+        }
+
+        if (FT_Set_Pixel_Sizes(g_ft_face, 0, static_cast<FT_UInt>(size))) {
+            return nullptr;
+        }
+
+        if (FT_Load_Char(g_ft_face, ch, FT_LOAD_RENDER)) {
+            return nullptr;
+        }
+
+        CachedGlyph glyph;
+        FT_Bitmap* bitmap = &g_ft_face->glyph->bitmap;
+        
+        glyph.width = bitmap->width;
+        glyph.rows = bitmap->rows;
+        glyph.pitch = bitmap->pitch;
+        glyph.bitmap_left = g_ft_face->glyph->bitmap_left;
+        glyph.bitmap_top = g_ft_face->glyph->bitmap_top;
+        glyph.advance_x = (g_ft_face->glyph->advance.x >> 6);
+        
+        if (bitmap->buffer && bitmap->rows > 0 && bitmap->pitch > 0) {
+            glyph.bitmap.assign(bitmap->buffer, bitmap->buffer + (bitmap->rows * bitmap->pitch));
+        }
+
+        g_glyph_cache[key] = std::move(glyph);
+        return &g_glyph_cache[key];
+    }
+}
+
+void rasterize_text(RenderTarget& target, const Point& pos, const std::string& text, const Color& color, double scale, const Rect& clip) noexcept {
+    init_freetype();
+    if (!g_ft_face || g_ft_failed) return; // Graceful fallback (draw nothing)
+    
+    int size = static_cast<int>(scale);
+    
+    const int32 target_w = static_cast<int32>(target.width());
+    const int32 target_h = static_cast<int32>(target.height());
+    uint32* buffer = target.data();
+    if (!buffer) return;
+
+    const uint32 solid_argb = color.to_argb32_premultiplied();
+    const bool is_opaque = (color.a() == 255U);
+
+    int32 pen_x = static_cast<int32>(std::floor(pos.x));
+    int32 pen_y = static_cast<int32>(std::floor(pos.y)) + size; // Baseline adjustment
+
+    int32 clip_left   = std::max(0, static_cast<int32>(clip.left()));
+    int32 clip_top    = std::max(0, static_cast<int32>(clip.top()));
+    int32 clip_right  = std::min(target_w, static_cast<int32>(std::ceil(clip.right())));
+    int32 clip_bottom = std::min(target_h, static_cast<int32>(std::ceil(clip.bottom())));
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        const CachedGlyph* glyph = get_cached_glyph(text[i], size);
+        if (!glyph) continue;
+
+        int32 draw_x = pen_x + glyph->bitmap_left;
+        int32 draw_y = pen_y - glyph->bitmap_top;
+
+        for (int32 row = 0; row < glyph->rows; ++row) {
+            int32 py = draw_y + row;
+            if (py < clip_top || py >= clip_bottom) continue;
+
+            uint32* row_ptr = buffer + (static_cast<size_t>(py) * static_cast<size_t>(target_w));
+            for (int32 col = 0; col < glyph->width; ++col) {
+                int32 px = draw_x + col;
+                if (px < clip_left || px >= clip_right) continue;
+
+                uint8_t alpha = glyph->bitmap[row * glyph->pitch + col];
+                if (alpha == 0) continue;
+
+                if (alpha == 255 && is_opaque) {
+                    row_ptr[px] = solid_argb;
+                } else {
+                    uint32 a_norm = alpha;
+                    uint32 src_r = (color.r() * a_norm) / 255;
+                    uint32 src_g = (color.g() * a_norm) / 255;
+                    uint32 src_b = (color.b() * a_norm) / 255;
+                    uint32 src_a = (color.a() * a_norm) / 255;
+                    uint32 premult_src = (src_a << 24) | (src_r << 16) | (src_g << 8) | src_b;
+                    
+                    row_ptr[px] = blend_argb32_premultiplied(row_ptr[px], premult_src);
+                }
+            }
+        }
+        pen_x += glyph->advance_x;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Linear Gradient Rasterizer
 // Interpolates linearly from color_start to color_end across the rect.
