@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # tx-appimage: Tinexus AppImage Runner
 # Bypasses tinexus-guard to run legacy/third-party AppImages.
 # NOTE: This is a Phase 1.5 experimental feature.
@@ -18,9 +18,9 @@ echo " WARNING: SECURITY TRADE-OFF"
 echo " This app has full access to your system — files, network, and display."
 echo " It runs OUTSIDE the Tinexus sandbox."
 echo "============================================================"
-read -p "Proceed? (y/N) " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+printf "Proceed? (y/N) "
+read REPLY
+if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
     echo "Launch aborted by user."
     exit 1
 fi
