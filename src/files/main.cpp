@@ -5,6 +5,8 @@
 #include "common/logger.hpp"
 #include <iostream>
 #include <csignal>
+#include <fcntl.h>
+#include <unistd.h>
 #include "ui/FilesWindow.hpp"
 #include "tinexus_protocols_client.h"
 
@@ -34,7 +36,17 @@ int main(int argc, char* argv[]) {
             tinexus::ActionRequest req;
             req.type = tinexus::ActionType::OpenFile;
             req.target = path.string();
+            
+            // Pass FD to prevent TOCTOU attacks
+            int fd = open(path.string().c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd >= 0) {
+                req.target_fd = fd;
+            }
+
             auto res = sdk_client.actions().execute(req);
+            
+            if (fd >= 0) close(fd); // Cleanup after IPC dispatch
+
             if (!res.is_ok()) {
                 tinexus::log::error("Failed to launch file: {}", res.error().message());
             }

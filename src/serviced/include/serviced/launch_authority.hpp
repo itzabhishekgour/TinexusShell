@@ -14,7 +14,7 @@ public:
     LaunchAuthority() = default;
     ~LaunchAuthority() = default;
 
-    pid_t execute_action(const ActionRequest& req, int app_fd = -1);
+    pid_t execute_action(const ActionRequest& req);
     pid_t launch_app(const std::string& app_id, const std::string& exec_cmd);
     
     // Returns a valid file descriptor (>0) if it's a secured app, 

@@ -72,9 +72,17 @@ int LaunchAuthority::validate_and_get_fd(const std::string& exec_cmd) const {
     return app_fd;
 }
 
-pid_t LaunchAuthority::execute_action(const ActionRequest& req, int app_fd) {
-    log::info("LaunchAuthority: Executing ActionRequest Type {} -> Target: {}", static_cast<int>(req.type), req.target);
+pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
+    int app_fd = req.target_fd;
+    log::info("LaunchAuthority: Executing ActionRequest Type {} -> Target: {} (FD: {})", static_cast<int>(req.type), req.target, app_fd);
     EventJournal::instance().log_event("action_authority", "ACTION_EXEC", req.target);
+
+    if (req.type == ActionType::OpenFile) {
+        if (!req.target.ends_with(".AppImage") && !req.target.ends_with(".txapp")) {
+            log::error("LaunchAuthority: Rejected OpenFile for non-executable type: {}", req.target);
+            return -1;
+        }
+    }
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -180,9 +188,19 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req, int app_fd) {
             _exit(1); 
         }
 
-        // If we have an FD (third-party app), use fexecve to prevent TOCTOU
+        // If we have an FD (third-party app or AppImage), use it to prevent TOCTOU
         if (app_fd >= 0) {
-            fexecve(app_fd, args.data(), child_env.data());
+            if (req.target.ends_with(".AppImage")) {
+                // Remove O_CLOEXEC so the FD survives into tx-appimage
+                int flags = fcntl(app_fd, F_GETFD);
+                if (flags != -1) {
+                    fcntl(app_fd, F_SETFD, flags & ~FD_CLOEXEC);
+                }
+                std::string fd_path = "/proc/self/fd/" + std::to_string(app_fd);
+                execlp("tx-appimage", "tx-appimage", fd_path.c_str(), nullptr);
+            } else {
+                fexecve(app_fd, args.data(), child_env.data());
+            }
         } else {
             execve(req.target.c_str(), args.data(), child_env.data());
         }
@@ -209,7 +227,8 @@ pid_t LaunchAuthority::launch_app(const std::string& app_id, const std::string& 
     ActionRequest req;
     req.type = ActionType::AppLaunch;
     req.target = exec_cmd;
-    pid_t child_pid = execute_action(req, app_fd);
+    req.target_fd = app_fd;
+    pid_t child_pid = execute_action(req);
     
     // Close the FD in the parent process, since it was passed to execute_action and duped/execed in the child
     if (app_fd >= 0) {

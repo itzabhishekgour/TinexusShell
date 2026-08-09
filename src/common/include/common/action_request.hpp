@@ -20,6 +20,7 @@ enum class ActionType : uint8_t {
 struct ActionRequest {
     ActionType type{ActionType::AppLaunch};
     std::string target;
+    int target_fd{-1}; // Added for secure TOCTOU-free file passing
     std::vector<std::string> arguments;
     std::string working_dir;
     std::unordered_map<std::string, std::string> env;
