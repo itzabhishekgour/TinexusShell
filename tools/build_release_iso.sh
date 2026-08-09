@@ -278,6 +278,14 @@ EOF_UDEV_SEAT
         chmod +x "$ROOTFS_DIR/opt/AppImages/"*.AppImage 2>/dev/null || true
         success "Staged user-provided AppImages into /opt/AppImages/"
 
+        # Ensure secure permissions for Tinexus Apps and Trust Overrides directories
+        mkdir -p "$ROOTFS_DIR/opt/tinexus-apps"
+        mkdir -p "$ROOTFS_DIR/var/lib/tinexus"
+        # Note: Since fakeroot/iso builder runs as root during squashfs, these are implicitly root-owned
+        # but we enforce the directory modes explicitly.
+        chmod 0755 "$ROOTFS_DIR/opt/tinexus-apps"
+        chmod 0755 "$ROOTFS_DIR/var/lib/tinexus"
+
         # [Jugaad] Stage full desktop libraries required by heavy AppImages like Chrome
         info "[Jugaad] Staging Chrome/AppImage shared library dependencies (GTK, NSS, X11)..."
         CHROME_LIBS=(
