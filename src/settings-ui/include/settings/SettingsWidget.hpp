@@ -58,6 +58,16 @@ private:
     static constexpr txui::float64 SIDEBAR_W = 220.0;
     static constexpr txui::float64 ITEM_H    = 48.0;
     static constexpr txui::float64 ITEM_Y0   = 80.0; // below title
+
+    // System State
+    std::string m_os_version;
+    std::string m_mem_info;
+    std::string m_cpu_model;
+    
+    // Config State
+    int m_screen_timeout_min{5};
+    int m_sleep_after_min{15};
+    std::string m_power_profile{"Balanced"};
 };
 
 } // namespace tinexus::settings_ui

@@ -22,8 +22,11 @@ bool WindowManager::map_window(uint64_t surface_id, SceneGraph& scene_graph) {
 
     win->visible = true;
     win->opacity = 0.0f;
+    win->scale = 0.5f;
     win->m_opacity_anim = SpringAnimation(0.0, 1.0, 300.0, 25.0);
+    win->m_scale_anim = SpringAnimation(0.5, 1.0, 300.0, 25.0);
     win->m_opacity_anim.start();
+    win->m_scale_anim.start();
 
     scene_graph.add_node(win);
     log::info("WindowManager: Mapped window #{} into SceneGraph", surface_id);
@@ -51,6 +54,10 @@ void WindowManager::tick_animations(double dt) {
         if (win->m_opacity_anim.is_running()) {
             win->m_opacity_anim.tick_dt(dt);
             win->opacity = static_cast<float>(win->m_opacity_anim.current_value());
+        }
+        if (win->m_scale_anim.is_running()) {
+            win->m_scale_anim.tick_dt(dt);
+            win->scale = static_cast<float>(win->m_scale_anim.current_value());
         }
     }
 }

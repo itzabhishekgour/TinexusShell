@@ -63,9 +63,28 @@ void PixmanRenderer::compose_surface(RenderSurface& surface) {
         color.red = 0; color.green = 0; color.blue = 0;
         pixman_image_t* mask_img = pixman_image_create_solid_fill(&color);
 
+        int32_t dst_x = surface.x;
+        int32_t dst_y = surface.y;
+        int32_t draw_w = src_w;
+        int32_t draw_h = src_h;
+
+        if (surface.scale < 0.999f && surface.scale > 0.01f) {
+            pixman_transform_t transform;
+            pixman_transform_init_scale(&transform,
+                pixman_double_to_fixed(1.0 / surface.scale),
+                pixman_double_to_fixed(1.0 / surface.scale));
+            pixman_image_set_transform(src_img, &transform);
+            pixman_image_set_filter(src_img, PIXMAN_FILTER_BILINEAR, nullptr, 0);
+
+            draw_w = static_cast<int32_t>(src_w * surface.scale);
+            draw_h = static_cast<int32_t>(src_h * surface.scale);
+            dst_x += (src_w - draw_w) / 2;
+            dst_y += (src_h - draw_h) / 2;
+        }
+
         pixman_image_composite32(
             PIXMAN_OP_OVER, src_img, mask_img, dst_img,
-            0, 0, 0, 0, surface.x, surface.y, src_w, src_h);
+            0, 0, 0, 0, dst_x, dst_y, draw_w, draw_h);
 
         pixman_image_unref(src_img);
         pixman_image_unref(mask_img);

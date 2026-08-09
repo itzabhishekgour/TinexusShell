@@ -93,6 +93,7 @@ public:
     [[nodiscard]] uint64_t          current_surface_id()   const noexcept { return m_surface_id; }
     [[nodiscard]] const std::string& current_target_id()   const noexcept { return m_target_id; }
     [[nodiscard]] struct wlr_surface* pointer_surface()    const noexcept { return m_pointer_surface; }
+    [[nodiscard]] struct wlr_surface* keyboard_focus()     const noexcept { return m_keyboard_surface; }
 
 private:
     // wlroots handles (owned by the backend, held here as non-owning ptrs)

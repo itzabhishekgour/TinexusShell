@@ -50,6 +50,10 @@ constexpr txui::Color GLOW_BLUE    {107, 140, 239, 140};
 
 } // namespace
 
+#include <sys/utsname.h>
+#include <fstream>
+#include <sstream>
+
 namespace tinexus::settings_ui {
 
 using txui::float64;
@@ -57,6 +61,63 @@ using txui::uint8;
 
 SettingsWidget::SettingsWidget() {
     m_current_page = SettingsPage::Display;
+
+    // 1. Read OS Version
+    struct utsname name;
+    if (uname(&name) == 0) {
+        m_os_version = std::string(name.sysname) + " " + name.release;
+    } else {
+        m_os_version = "Unknown Linux";
+    }
+
+    // 2. Read CPU Model
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    while (std::getline(cpuinfo, line)) {
+        if (line.find("model name") == 0) {
+            auto colon = line.find(':');
+            if (colon != std::string::npos) {
+                m_cpu_model = line.substr(colon + 2);
+                break;
+            }
+        }
+    }
+    if (m_cpu_model.empty()) m_cpu_model = "Generic x86_64 Processor";
+
+    // 3. Read Memory
+    std::ifstream meminfo("/proc/meminfo");
+    while (std::getline(meminfo, line)) {
+        if (line.find("MemTotal:") == 0) {
+            long kb = 0;
+            std::stringstream ss(line.substr(10));
+            ss >> kb;
+            double gb = static_cast<double>(kb) / (1024.0 * 1024.0);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.1f GB", gb);
+            m_mem_info = buf;
+            break;
+        }
+    }
+    if (m_mem_info.empty()) m_mem_info = "Unknown RAM";
+
+    // 4. Parse TOML Config for System Tab
+    std::string config_path = std::string(getenv("HOME")) + "/.config/tinexus/tinexus-settings.toml";
+    std::ifstream toml(config_path);
+    while (std::getline(toml, line)) {
+        if (line.find("screen_timeout") != std::string::npos) {
+            auto eq = line.find('=');
+            if (eq != std::string::npos) m_screen_timeout_min = std::stoi(line.substr(eq + 1));
+        } else if (line.find("sleep_after") != std::string::npos) {
+            auto eq = line.find('=');
+            if (eq != std::string::npos) m_sleep_after_min = std::stoi(line.substr(eq + 1));
+        } else if (line.find("power_profile") != std::string::npos) {
+            auto start = line.find('"');
+            auto end = line.find('"', start + 1);
+            if (start != std::string::npos && end != std::string::npos) {
+                m_power_profile = line.substr(start + 1, end - start - 1);
+            }
+        }
+    }
 }
 
 void SettingsWidget::select_page(SettingsPage page) {
@@ -347,9 +408,9 @@ void SettingsWidget::paint_system_page(txui::Painter& painter, const txui::Rect&
     // Card 1: Power
     txui::Rect c1(x, y, cw, 112);
     draw_card(painter, c1, "Power");
-    draw_row(painter, c1, 52, "Screen Timeout",  "5 minutes");
-    draw_row(painter, c1, 74, "Sleep After",     "15 minutes");
-    draw_row(painter, c1, 96, "Power Profile",   "Balanced",   SUCCESS);
+    draw_row(painter, c1, 52, "Screen Timeout",  std::to_string(m_screen_timeout_min) + " minutes");
+    draw_row(painter, c1, 74, "Sleep After",     std::to_string(m_sleep_after_min) + " minutes");
+    draw_row(painter, c1, 96, "Power Profile",   m_power_profile,   SUCCESS);
     y += 122;
 
     // Card 2: Security
@@ -413,10 +474,10 @@ void SettingsWidget::paint_about_page(txui::Painter& painter, const txui::Rect& 
     // System info card
     txui::Rect c2(x, y, cw, 178);
     draw_card(painter, c2, "System Information");
-    draw_row(painter, c2,  52, "Compositor",    "tinexus-comp v0.1.0  (wlroots + Vulkan)");
-    draw_row(painter, c2,  74, "Session",       "tinexus-session v0.1.0");
-    draw_row(painter, c2,  96, "IPC Broker",    "tinexus-ipcd v0.1.0");
-    draw_row(painter, c2, 118, "Search Engine", "tinexus-searchd v0.1.0");
+    draw_row(painter, c2,  52, "OS Kernel",     m_os_version);
+    draw_row(painter, c2,  74, "Processor",     m_cpu_model);
+    draw_row(painter, c2,  96, "Memory (RAM)",  m_mem_info);
+    draw_row(painter, c2, 118, "Compositor",    "tinexus-comp v0.1.0 (wlroots + Vulkan)");
     draw_row(painter, c2, 140, "Architecture",  "x86_64  Wayland-native");
     draw_row(painter, c2, 162, "Build",         "Release  (GCC C++20)", SUCCESS);
 }

@@ -16,6 +16,7 @@ std::vector<RenderSurface> WindowNode::build_render_surfaces() const {
     surface.x = x;
     surface.y = y;
     surface.opacity = opacity;
+    surface.scale = scale;
     surface.buffer = render_buffer;
 
     // Apply backdrop blur based on application type (macOS / Windows glassmorphism)

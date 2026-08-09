@@ -269,6 +269,7 @@ private:
         struct wlr_scene_layer_surface_v1* scene_layer{nullptr};
         struct wl_listener destroy;
         struct wl_listener commit;
+        WlrootsBackend* backend{nullptr};
     };
 
     struct ToplevelWrapper {
@@ -293,6 +294,7 @@ private:
         int32_t saved_height{600};
     };
     std::vector<std::unique_ptr<ToplevelWrapper>> m_toplevels;
+    std::vector<LayerSurfaceWrapper*> m_layer_surfaces;
 
     static void handle_new_layer_surface(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_layer_surface_listener);
@@ -334,9 +336,19 @@ private:
         auto* wrapper = new LayerSurfaceWrapper();
         wrapper->layer_surface = layer_surface;
         wrapper->scene_layer = scene_layer;
+        wrapper->backend = self;
+        self->m_layer_surfaces.push_back(wrapper);
 
         wrapper->destroy.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, destroy);
+            
+            // Remove from tracking
+            WlrootsBackend* b = w->backend;
+            auto it = std::find(b->m_layer_surfaces.begin(), b->m_layer_surfaces.end(), w);
+            if (it != b->m_layer_surfaces.end()) {
+                b->m_layer_surfaces.erase(it);
+            }
+
             wl_list_remove(&w->destroy.link);
             wl_list_remove(&w->commit.link);
             delete w;
@@ -351,6 +363,33 @@ private:
             }
             struct wlr_box usable_area = full_area;
             wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+
+            log::info("[LayerShell] commit.notify! namespace={}, actual_height={}",
+                w->layer_surface->wl_namespace ? w->layer_surface->wl_namespace : "null",
+                w->layer_surface->surface->current.height);
+
+            // Auto-focus heuristic for the unified shell
+            if (w->layer_surface->wl_namespace && std::string(w->layer_surface->wl_namespace) == "tinexus-shell") {
+                if (w->layer_surface->surface->current.height > 100) {
+                    if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
+                        log::info("[LayerShell] Height > 100. Granting keyboard focus to Pulse.");
+                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                    }
+                } else {
+                    if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
+                        FocusManager::instance().set_keyboard_focus(nullptr);
+                        
+                        // Restore focus to top toplevel
+                        ToplevelWrapper* next_focus = nullptr;
+                        if (!w->backend->m_toplevels.empty()) {
+                            next_focus = w->backend->m_toplevels.back().get();
+                        }
+                        if (next_focus) {
+                            w->backend->focus_toplevel(next_focus);
+                        }
+                    }
+                }
+            }
         };
         wl_signal_add(&layer_surface->surface->events.commit, &wrapper->commit);
     }

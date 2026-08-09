@@ -20,8 +20,10 @@ public:
     int32_t height{600};
     bool visible{true};
     float opacity{0.0f};
+    float scale{0.5f};
 
     SpringAnimation m_opacity_anim{0.0, 1.0, 300.0, 25.0};
+    SpringAnimation m_scale_anim{0.5, 1.0, 300.0, 25.0};
 
     XdgToplevelNode toplevel;
     std::shared_ptr<RenderBuffer> render_buffer;

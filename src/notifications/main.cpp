@@ -96,24 +96,28 @@ int main() {
         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
     zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
 
+    // First commit: send layer-shell properties to compositor. Do NOT attach pixel content yet.
+    // The compositor will fire a configure event after positioning the surface correctly.
+    // We roundtrip to collect that configure before drawing anything — this prevents the
+    // 420×80 buffer from briefly appearing at (0,0) before the compositor positions it.
     wl_surface_commit(raw_surface);
     connection.flush();
-    connection.roundtrip();
+    connection.roundtrip(); // blocks until compositor sends configure + we ack it
 
-    // Render Toast Banner
+    // Render Toast Banner — now the surface is positioned correctly by the compositor.
     txui::CommandBuffer cmd_buf;
     txui::Painter painter(cmd_buf);
     txui::PixmanBackend backend;
 
     painter.begin_frame();
-    // Rounded toast container (#1E293B border, #0F172A body)
+    // Rounded toast container
     painter.fill_rounded_rect(txui::Rect(0, 0, w, h), 8.0, txui::Color(30, 41, 59, 240));
     painter.fill_rounded_rect(txui::Rect(2, 2, w - 4, h - 4), 6.0, txui::Color(15, 23, 42, 240));
     // Accent left stripe (#3B82F6)
     painter.fill_rounded_rect(txui::Rect(4, 4, 6, h - 8), 3.0, txui::Color(59, 130, 246, 255));
     // Notification Text
     painter.draw_text(txui::Point(18, 14), "Welcome to Tinexus OS", txui::Color::white(), 1.0);
-    painter.draw_text(txui::Point(18, 38), "Press Ctrl+K to open Launcher", txui::Color(148, 163, 184, 255), 1.0);
+    painter.draw_text(txui::Point(18, 38), "Press Ctrl+K to open Pulse", txui::Color(148, 163, 184, 255), 1.0);
     painter.end_frame();
 
     backend.execute(cmd_buf, *render_target);
@@ -122,6 +126,7 @@ int main() {
     connection.flush();
 
     log::info("[Notifications] Toast notification banner displayed at TOP-RIGHT.");
+
 
     // Display toast notification banner for 15 seconds, then hide
     auto start_time = std::chrono::steady_clock::now();

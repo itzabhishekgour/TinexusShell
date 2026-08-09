@@ -153,10 +153,18 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
                     );
                     zwlr_layer_surface_v1_add_listener(win->m_layer_surface, &layer_surface_listener, win.get());
                     zwlr_layer_surface_v1_set_size(win->m_layer_surface, width, height);
-                    zwlr_layer_surface_v1_set_anchor(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
-                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, 8, 0, 0, 0); // 8px top margin
-                    zwlr_layer_surface_v1_set_keyboard_interactivity(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
-                    zwlr_layer_surface_v1_set_exclusive_zone(win->m_layer_surface, height + 8);
+                    // Anchor TOP+LEFT+RIGHT: compositor stretches the exclusive zone bar across
+                    // the full width. We then set left/right margins to center the pill.
+                    // margin = (output_width - pill_width) / 2; we use 1920 as default output
+                    // until the configure event arrives with the real output dimensions.
+                    zwlr_layer_surface_v1_set_anchor(win->m_layer_surface,
+                        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+                    const int32_t side_margin = static_cast<int32_t>((1920 - static_cast<int32_t>(width)) / 2);
+                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, 12, side_margin, 0, side_margin);
+                    zwlr_layer_surface_v1_set_keyboard_interactivity(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+                    zwlr_layer_surface_v1_set_exclusive_zone(win->m_layer_surface, -1);
                 }
             } else {
                 if (win->m_connection->wm_base() != nullptr) {
@@ -285,6 +293,18 @@ void Window::on_configure(uint32 width, uint32 height) noexcept {
     if (width == 0 || height == 0) {
         return;
     }
+
+    // For layer surfaces anchored TOP|LEFT|RIGHT, the compositor sends the
+    // full output width as the configure width — use it to keep Aura centered.
+    if (m_layer_surface && width > m_width) {
+        m_output_width = static_cast<int32_t>(width);
+        const int32_t side_margin = (m_output_width - static_cast<int32_t>(m_width)) / 2;
+        const int32_t clamped = side_margin > 0 ? side_margin : 0;
+        zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
+        // Don't update m_width — our actual content width stays at m_width (pill size).
+        return;
+    }
+
     if (width != m_width || height != m_height) {
         m_width = width;
         m_height = height;
@@ -350,16 +370,22 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
         if (wayland_target->resize(width, height)) {
             if (m_layer_surface) {
                 zwlr_layer_surface_v1_set_size(m_layer_surface, width, height);
+                // Recompute centering margin after resize so Aura stays top-center.
+                // m_output_width defaults to 1920 until configure event updates it.
+                const int32_t side_margin = static_cast<int32_t>((m_output_width - static_cast<int32_t>(width)) / 2);
+                const int32_t clamped = side_margin > 0 ? side_margin : 0;
+                zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
                 wl_surface_commit(wayland_target->surface().surface());
             } else if (m_xdg_surface) {
-                // Resize for XDG surface requires configure event logic, but for simplicity here:
                 wl_surface_commit(wayland_target->surface().surface());
             }
         }
     }
-    // m_configured = false; // BUG: Do not clear this, or we drop frames waiting for compositor!
+    // Trigger full measure+layout+paint so widget tree adapts to new bounds.
     m_frame_ready = true;
     if (m_root_widget) {
+        m_root_widget->mark_needs_measure();
+        m_root_widget->mark_needs_layout();
         m_root_widget->mark_needs_paint();
     }
 }

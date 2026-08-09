@@ -49,6 +49,7 @@ private:
     xdg_toplevel* m_xdg_toplevel{nullptr};
     zwlr_layer_surface_v1* m_layer_surface{nullptr};
     wl_callback* m_frame_callback{nullptr};
+    int32_t m_output_width{1920}; ///< Compositor output width for centering (updated on configure)
 
     CommandBuffer m_command_buffer;
     std::unique_ptr<Painter> m_painter;
