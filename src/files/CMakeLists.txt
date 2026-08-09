@@ -4,6 +4,9 @@ add_executable(tinexus-files
     column_view_model.cpp
     trash_manager.cpp
     file_operations.cpp
+    ui/ColumnWidget.cpp
+    ui/ColumnBrowserWidget.cpp
+    ui/FilesWindow.cpp
 )
 
 target_include_directories(tinexus-files PRIVATE
@@ -13,6 +16,7 @@ target_include_directories(tinexus-files PRIVATE
 target_link_libraries(tinexus-files PRIVATE
     tinexus-sdk
     tinexus_common
+    txui
     tinexus_warnings
     tinexus_sanitizers
 )

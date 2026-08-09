@@ -82,6 +82,22 @@ public:
     void draw_text(const Point& pos, const std::string& text, const Color& color, double scale = 1.0) {
         m_buffer.push(DrawTextCommand{pos, text, color, scale});
     }
+
+    void push_clip(const Rect& rect) {
+        m_buffer.push(PushClipCommand{rect});
+    }
+
+    void pop_clip() {
+        m_buffer.push(PopClipCommand{});
+    }
+
+    void push_transform(double offset_x, double offset_y) {
+        m_buffer.push(PushTransformCommand{offset_x, offset_y});
+    }
+
+    void pop_transform() {
+        m_buffer.push(PopTransformCommand{});
+    }
 };
 
 } // namespace txui

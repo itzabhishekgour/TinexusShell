@@ -82,13 +82,24 @@ struct DrawCircleCommand {
 };
 
 struct DrawTextCommand {
-    Point position;
+    Point pos;
     std::string text;
     Color color;
-    double scale{1.0};
+    double scale;
 };
 
-// Phase 4.2.2+ : Solid + Rounded + Gradient + Circle + Text
+struct PushClipCommand {
+    Rect rect;
+};
+struct PopClipCommand {};
+
+struct PushTransformCommand {
+    double offset_x;
+    double offset_y;
+};
+struct PopTransformCommand {};
+
+// Phase 4.2.2+ : Solid + Rounded + Gradient + Circle + Text + Transform + Clip
 using Command = std::variant<
     BeginFrameCommand,
     EndFrameCommand,
@@ -99,7 +110,11 @@ using Command = std::variant<
     DrawGradientRoundedRectCommand,
     DrawCircleCommand,
     DrawTextCommand,
-    ClearCommand
+    ClearCommand,
+    PushClipCommand,
+    PopClipCommand,
+    PushTransformCommand,
+    PopTransformCommand
 >;
 
 [[nodiscard]] inline constexpr CommandType command_type(const Command& cmd) noexcept {
@@ -115,6 +130,10 @@ using Command = std::variant<
         else if constexpr (std::is_same_v<T, DrawCircleCommand>)              return CommandType::DrawCircle;
         else if constexpr (std::is_same_v<T, DrawTextCommand>)                return CommandType::DrawText;
         else if constexpr (std::is_same_v<T, ClearCommand>)                   return CommandType::Clear;
+        else if constexpr (std::is_same_v<T, PushClipCommand>)                return CommandType::PushClip;
+        else if constexpr (std::is_same_v<T, PopClipCommand>)                 return CommandType::PopClip;
+        else if constexpr (std::is_same_v<T, PushTransformCommand>)           return CommandType::PushTransform;
+        else if constexpr (std::is_same_v<T, PopTransformCommand>)            return CommandType::PopTransform;
     }, cmd);
 }
 

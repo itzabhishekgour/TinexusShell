@@ -41,15 +41,15 @@ namespace {
     return (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
 }
 
-void rasterize_solid_rect(RenderTarget& target, const Rect& rect, const Color& color) noexcept {
+void rasterize_solid_rect(RenderTarget& target, const Rect& rect, const Color& color), const Rect& clip noexcept {
     const int32 target_w = static_cast<int32>(target.width());
     const int32 target_h = static_cast<int32>(target.height());
 
     // Coordinate precision: geometry uses double (float64), rasterizer converts to int32
-    int32 left   = std::max(0, static_cast<int32>(std::floor(rect.left())));
-    int32 top    = std::max(0, static_cast<int32>(std::floor(rect.top())));
-    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(rect.right())));
-    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(rect.bottom())));
+    int32 left   = std::max({0, static_cast<int32>(std::floor(clip.left())), static_cast<int32>(std::floor(rect.left()))});
+    int32 top    = std::max({0, static_cast<int32>(std::floor(clip.top())), static_cast<int32>(std::floor(rect.top()))});
+    int32 right  = std::min({target_w, static_cast<int32>(std::ceil(clip.right())), static_cast<int32>(std::ceil(rect.right()))});
+    int32 bottom = std::min({target_h, static_cast<int32>(std::ceil(clip.bottom())), static_cast<int32>(std::ceil(rect.bottom()))});
 
     if (left >= right || top >= bottom) {
         return;
@@ -101,7 +101,7 @@ void rasterize_solid_rect(RenderTarget& target, const Rect& rect, const Color& c
     }
 }
 
-void rasterize_rounded_rect(RenderTarget& target, const Rect& rect, double radius, const Color& color) noexcept {
+void rasterize_rounded_rect(RenderTarget& target, const Rect& rect, double radius, const Color& color), const Rect& clip noexcept {
     const double max_rad = std::min(rect.width(), rect.height()) * 0.5;
     const double rad = std::clamp(radius, 0.0, max_rad);
 
@@ -113,10 +113,10 @@ void rasterize_rounded_rect(RenderTarget& target, const Rect& rect, double radiu
     const int32 target_w = static_cast<int32>(target.width());
     const int32 target_h = static_cast<int32>(target.height());
 
-    int32 left   = std::max(0, static_cast<int32>(std::floor(rect.left())));
-    int32 top    = std::max(0, static_cast<int32>(std::floor(rect.top())));
-    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(rect.right())));
-    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(rect.bottom())));
+    int32 left   = std::max({0, static_cast<int32>(std::floor(clip.left())), static_cast<int32>(std::floor(rect.left()))});
+    int32 top    = std::max({0, static_cast<int32>(std::floor(clip.top())), static_cast<int32>(std::floor(rect.top()))});
+    int32 right  = std::min({target_w, static_cast<int32>(std::ceil(clip.right())), static_cast<int32>(std::ceil(rect.right()))});
+    int32 bottom = std::min({target_h, static_cast<int32>(std::ceil(clip.bottom())), static_cast<int32>(std::ceil(rect.bottom()))});
 
     if (left >= right || top >= bottom) {
         return;
@@ -444,10 +444,10 @@ void rasterize_gradient_rect(RenderTarget& target, const Rect& rect,
     const int32 target_w = static_cast<int32>(target.width());
     const int32 target_h = static_cast<int32>(target.height());
 
-    int32 left   = std::max(0, static_cast<int32>(std::floor(rect.left())));
-    int32 top    = std::max(0, static_cast<int32>(std::floor(rect.top())));
-    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(rect.right())));
-    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(rect.bottom())));
+    int32 left   = std::max({0, static_cast<int32>(std::floor(clip.left())), static_cast<int32>(std::floor(rect.left()))});
+    int32 top    = std::max({0, static_cast<int32>(std::floor(clip.top())), static_cast<int32>(std::floor(rect.top()))});
+    int32 right  = std::min({target_w, static_cast<int32>(std::ceil(clip.right())), static_cast<int32>(std::ceil(rect.right()))});
+    int32 bottom = std::min({target_h, static_cast<int32>(std::ceil(clip.bottom())), static_cast<int32>(std::ceil(rect.bottom()))});
 
     if (left >= right || top >= bottom) return;
 
@@ -500,10 +500,10 @@ void rasterize_gradient_rounded_rect(RenderTarget& target, const Rect& rect, dou
     const int32 target_w = static_cast<int32>(target.width());
     const int32 target_h = static_cast<int32>(target.height());
 
-    int32 left   = std::max(0, static_cast<int32>(std::floor(rect.left())));
-    int32 top    = std::max(0, static_cast<int32>(std::floor(rect.top())));
-    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(rect.right())));
-    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(rect.bottom())));
+    int32 left   = std::max({0, static_cast<int32>(std::floor(clip.left())), static_cast<int32>(std::floor(rect.left()))});
+    int32 top    = std::max({0, static_cast<int32>(std::floor(clip.top())), static_cast<int32>(std::floor(rect.top()))});
+    int32 right  = std::min({target_w, static_cast<int32>(std::ceil(clip.right())), static_cast<int32>(std::ceil(rect.right()))});
+    int32 bottom = std::min({target_h, static_cast<int32>(std::ceil(clip.bottom())), static_cast<int32>(std::ceil(rect.bottom()))});
 
     if (left >= right || top >= bottom) return;
 
@@ -619,6 +619,8 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
 
     // Stateless renderer execution loop
     Color current_color = Color::white();
+    std::vector<Rect> clip_stack;
+    Rect current_clip(0, 0, target.width(), target.height());
 
     for (const auto& command : buffer.commands()) {
         std::visit([&](auto&& cmd) {
@@ -641,22 +643,34 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                     rect_color = solid.color();
                 }, cmd.brush);
 
-                rasterize_solid_rect(target, cmd.rect, rect_color);
+                rasterize_solid_rect(target, current_clip, cmd.rect, rect_color);
             } else if constexpr (std::is_same_v<T, DrawRoundedRectCommand>) {
                 Color rrect_color = current_color;
                 std::visit([&](const SolidBrush& solid) {
                     rrect_color = solid.color();
                 }, cmd.brush);
 
-                rasterize_rounded_rect(target, cmd.rect, cmd.radius, rrect_color);
+                rasterize_rounded_rect(target, current_clip, cmd.rect, cmd.radius, rrect_color);
             } else if constexpr (std::is_same_v<T, DrawGradientRectCommand>) {
-                rasterize_gradient_rect(target, cmd.rect, cmd.color_start, cmd.color_end, cmd.horizontal);
+                rasterize_gradient_rect(target, current_clip, cmd.rect, cmd.color_start, cmd.color_end, cmd.horizontal);
             } else if constexpr (std::is_same_v<T, DrawGradientRoundedRectCommand>) {
-                rasterize_gradient_rounded_rect(target, cmd.rect, cmd.radius, cmd.color_start, cmd.color_end, cmd.horizontal);
+                rasterize_gradient_rounded_rect(target, current_clip, cmd.rect, cmd.radius, cmd.color_start, cmd.color_end, cmd.horizontal);
             } else if constexpr (std::is_same_v<T, DrawCircleCommand>) {
-                rasterize_circle(target, cmd.center, cmd.radius, cmd.color, cmd.stroke_width);
+                rasterize_circle(target, current_clip, cmd.center, cmd.radius, cmd.color, cmd.stroke_width);
             } else if constexpr (std::is_same_v<T, DrawTextCommand>) {
-                rasterize_text(target, cmd.position, cmd.text, cmd.color, cmd.scale);
+                rasterize_text(target, cmd.pos, cmd.text, cmd.color, cmd.scale, current_clip);
+            } else if constexpr (std::is_same_v<T, PushClipCommand>) {
+                clip_stack.push_back(current_clip);
+                current_clip = current_clip.intersection(cmd.rect);
+            } else if constexpr (std::is_same_v<T, PopClipCommand>) {
+                if (!clip_stack.empty()) {
+                    current_clip = clip_stack.back();
+                    clip_stack.pop_back();
+                }
+            } else if constexpr (std::is_same_v<T, PushTransformCommand>) {
+                // Not needed for MVP, coordinates are absolute
+            } else if constexpr (std::is_same_v<T, PopTransformCommand>) {
+                // Not needed for MVP
             }
         }, command);
     }

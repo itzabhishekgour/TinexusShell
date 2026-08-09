@@ -1,5 +1,6 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
 
 add_library(txui STATIC
     core/Version.cpp
@@ -17,7 +18,11 @@ add_library(txui STATIC
     widgets/Widget.cpp
     widgets/TitleBarWidget.cpp
     widgets/ChromeWidget.cpp
+    widgets/ListView.cpp
+    widgets/Label.cpp
+    widgets/Icon.cpp
     layout/FlexLayout.cpp
+    layout/ScrollArea.cpp
     animation/KineticScroller.cpp
     animation/CursorAnimator.cpp
 )
@@ -35,6 +40,7 @@ target_include_directories(txui
 target_link_libraries(txui
     PUBLIC
         PkgConfig::WAYLAND_CLIENT
+        PkgConfig::FREETYPE
         tinexus_protocols_client
     PRIVATE
         tinexus_warnings
