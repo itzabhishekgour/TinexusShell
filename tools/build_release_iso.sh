@@ -106,6 +106,19 @@ EOF
     
     success "Staged $staged Tinexus ELF binaries and dependencies."
 
+    # Generate .desktop file for Tinexus App Installer so it appears in the Launcher
+    mkdir -p "$ROOTFS_DIR/usr/share/applications"
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-app-installer.desktop" << 'EOF'
+[Desktop Entry]
+Name=Tinexus App Installer
+Comment=Install .txapp packages
+Exec=/usr/bin/tinexus-app-installer
+Icon=system-software-install
+Terminal=false
+Type=Application
+Categories=System;
+EOF
+
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
     mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
@@ -236,6 +249,9 @@ EOF_UDEV_SEAT
     info "Staging locale data (C.UTF-8)..."
     mkdir -p "$ROOTFS_DIR/usr/share/locale"
     mkdir -p "$ROOTFS_DIR/usr/lib/locale"
+    if [ -f "/usr/lib/locale/locale-archive" ]; then
+        cp -L "/usr/lib/locale/locale-archive" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
+    fi
     mkdir -p "$ROOTFS_DIR/etc"
     echo "LANG=C.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
 

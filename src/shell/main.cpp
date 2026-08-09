@@ -221,6 +221,7 @@ static std::vector<AppItem> load_system_apps() {
     apps.push_back({"Tinexus Settings", "tinexus-settings-ui", "System Configuration", false, ""});
     apps.push_back({"Tinexus Package Manager", "tinexus-pkg", "Software Manager", false, ""});
     apps.push_back({"Tinexus Files", "tinexus-files", "File Manager", false, ""});
+    apps.push_back({"Tinexus App Installer", "tinexus-app-installer", "Install .txapp packages", false, ""});
 
     std::vector<fs::path> dirs = {"/usr/share/applications", "/usr/local/share/applications"};
     const char* home = std::getenv("HOME");
