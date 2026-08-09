@@ -3,6 +3,7 @@
 #include "common/logger.hpp"
 
 #include <unistd.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <regex>
@@ -158,6 +159,74 @@ bool InstallHandler::handle_install_request(const std::string& app_name, int pay
     }
 
     return success;
+}
+
+
+bool InstallHandler::handle_uninstall_request(const std::string& app_name) {
+    if (!is_valid_app_name(app_name)) {
+        log::error("InstallHandler: Rejected uninstall for invalid app name '{}'", app_name);
+        return false;
+    }
+
+    std::string base_path = "/opt/tinexus-apps/" + app_name;
+    std::string bin_path = base_path + ".txapp";
+    std::string sig_path = base_path + ".txapp.sig";
+    std::string desktop_path = "/usr/share/applications/tinexus-" + app_name + ".desktop";
+
+    // 1. Compute hash of the binary before deletion to clear trust overrides
+    int fd = open(bin_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(fd);
+        close(fd);
+
+        // Clear trust overrides cache
+        std::ifstream cache_in("/var/lib/tinexus/trust-overrides.conf");
+        if (cache_in.is_open()) {
+            std::vector<std::string> lines;
+            std::string line;
+            bool found = false;
+            while (std::getline(cache_in, line)) {
+                if (line == hash) {
+                    found = true;
+                } else {
+                    lines.push_back(line);
+                }
+            }
+            cache_in.close();
+            if (found) {
+                std::string tmp_cache = "/var/lib/tinexus/trust-overrides.conf.tmp";
+                std::ofstream cache_out(tmp_cache, std::ios::trunc);
+                if (cache_out.is_open()) {
+                    for (const auto& l : lines) {
+                        cache_out << l << "
+";
+                    }
+                    cache_out.close();
+                    rename(tmp_cache.c_str(), "/var/lib/tinexus/trust-overrides.conf");
+                    log::info("InstallHandler: Cleared hash {} from trust overrides cache", hash);
+                }
+            }
+        }
+    }
+
+    // 2. Remove files
+    unlink(bin_path.c_str());
+    unlink(sig_path.c_str());
+    unlink(desktop_path.c_str());
+
+    // 3. Update desktop database safely via fork/execlp
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child
+        execlp("update-desktop-database", "update-desktop-database", "/usr/share/applications", nullptr);
+        _exit(127);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+    }
+
+    log::info("InstallHandler: Successfully uninstalled app '{}'", app_name);
+    return true;
 }
 
 } // namespace tinexus::serviced

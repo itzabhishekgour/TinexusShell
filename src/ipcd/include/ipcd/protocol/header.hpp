@@ -35,8 +35,11 @@ enum class MessageType : uint16_t {
     SYS_INSTALL_REQUEST     = 6,
     SYS_INSTALL_OK          = 7,
     SYS_INSTALL_FAILED      = 8,
-    SYS_PING                = 10,
-    SYS_PONG                = 11,
+    SYS_UNINSTALL_REQUEST   = 9,
+    SYS_UNINSTALL_OK        = 10,
+    SYS_UNINSTALL_FAILED    = 11,
+    SYS_PING                = 12,
+    SYS_PONG                = 13,
     SYS_SHUTDOWN            = 999,
 
     // 1000-1999: Launcher & Input Shortcuts

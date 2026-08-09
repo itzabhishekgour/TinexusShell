@@ -131,9 +131,18 @@ bool ColumnBrowserWidget::handle_event(const txui::Event& event) noexcept {
     if (const auto* key = std::get_if<txui::KeyboardEvent>(&event)) {
         if (key->state == txui::ButtonState::Pressed && key->key == txui::Key::Delete) {
             auto path = get_selected_path();
-            if (!path.empty() && m_on_trash) {
-                m_on_trash(path);
-                return true;
+            if (!path.empty()) {
+                if (path.string().starts_with("/opt/tinexus-apps/")) {
+                    if (m_on_uninstall) {
+                        m_on_uninstall(path);
+                        return true;
+                    }
+                } else {
+                    if (m_on_trash) {
+                        m_on_trash(path);
+                        return true;
+                    }
+                }
             }
         }
     }

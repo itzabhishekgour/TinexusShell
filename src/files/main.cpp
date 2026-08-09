@@ -3,6 +3,10 @@
 #include "files/file_operations.hpp"
 #include "tinexus/client.hpp"
 #include "common/logger.hpp"
+#include <sys/socket.h>
+#include <sys/un.h>
+#include "ipcd/protocol/header.hpp"
+#include "ipcd/protocol/uninstall.hpp"
 #include <iostream>
 #include <csignal>
 #include <fcntl.h>
@@ -51,6 +55,70 @@ int main(int argc, char* argv[]) {
                 tinexus::log::error("Failed to launch file: {}", res.error().message());
             }
         }
+    });
+
+    
+    files_window->set_on_uninstall([&](const std::filesystem::path& path) {
+        std::string app_name = path.stem().string(); // "/opt/tinexus-apps/app.txapp" -> "app"
+        tinexus::log::info("Requesting uninstall of app '{}'", app_name);
+
+        int sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (sock < 0) {
+            tinexus::log::error("Failed to create socket for uninstall request");
+            return;
+        }
+
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        std::string sock_path = "/run/user/" + std::to_string(getuid()) + "/tinexus/ipc.sock";
+        strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+
+        if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            tinexus::log::error("Failed to connect to IPC broker for uninstall");
+            close(sock);
+            return;
+        }
+
+        // Prepare payload exactly like InstallerWidget
+        tinexus::ipcd::protocol::Header hdr = {0};
+        hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_REQUEST);
+        
+        tinexus::ipcd::protocol::UninstallRequestPayload req = {0}; // Ensure null initialization
+        strncpy(req.app_name, app_name.c_str(), sizeof(req.app_name) - 1);
+        req.app_name[sizeof(req.app_name) - 1] = '\0'; // Explicit null-termination
+
+        hdr.payload_len = sizeof(req);
+
+        // Send using sendmsg
+        struct msghdr msg = {0};
+        struct iovec iov[2];
+        iov[0].iov_base = &hdr;
+        iov[0].iov_len = sizeof(hdr);
+        iov[1].iov_base = &req;
+        iov[1].iov_len = sizeof(req);
+        
+        msg.msg_iov = iov;
+        msg.msg_iovlen = 2;
+
+        if (sendmsg(sock, &msg, 0) < 0) {
+            tinexus::log::error("Failed to send SYS_UNINSTALL_REQUEST");
+            close(sock);
+            return;
+        }
+        
+        // Wait for response
+        tinexus::ipcd::protocol::Header resp_hdr = {0};
+        if (recv(sock, &resp_hdr, sizeof(resp_hdr), 0) == sizeof(resp_hdr)) {
+            if (resp_hdr.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_OK)) {
+                tinexus::log::info("Uninstall successful");
+            } else {
+                tinexus::log::error("Uninstall failed");
+            }
+        }
+        close(sock);
     });
 
     files_window->set_on_trash([&](const std::filesystem::path& path) {

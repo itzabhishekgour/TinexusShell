@@ -22,6 +22,7 @@ private:
     ColumnViewModel m_model;
     std::function<void(const std::filesystem::path&)> m_on_execute;
     std::function<void(const std::filesystem::path&)> m_on_trash;
+    std::function<void(const std::filesystem::path&)> m_on_uninstall;
 
     void on_item_selected(size_t col_index, size_t item_index);
     void on_item_double_clicked(size_t col_index, size_t item_index);
@@ -38,6 +39,7 @@ public:
     void navigate_to(const std::filesystem::path& path);
     void set_on_execute(std::function<void(const std::filesystem::path&)> callback) { m_on_execute = std::move(callback); }
     void set_on_trash(std::function<void(const std::filesystem::path&)> callback) { m_on_trash = std::move(callback); }
+    void set_on_uninstall(std::function<void(const std::filesystem::path&)> callback) { m_on_uninstall = std::move(callback); }
 
     [[nodiscard]] std::filesystem::path get_selected_path() const;
 

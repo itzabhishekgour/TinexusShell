@@ -4,6 +4,7 @@
 #include "serviced/install_handler.hpp"
 #include "ipcd/protocol/header.hpp"
 #include "ipcd/protocol/install.hpp"
+#include "ipcd/protocol/uninstall.hpp"
 #include "ipcd/transport/fd_passing.hpp"
 #include "common/logger.hpp"
 
@@ -159,6 +160,21 @@ private:
                         } else {
                             log::error("[serviced-ipc] No FD received with INSTALL_REQUEST");
                             send_reply(hdr.sequence_id, tinexus::ipcd::protocol::MessageType::SYS_INSTALL_FAILED);
+                        }
+                    }
+                } else if (hdr.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_REQUEST)) {
+                    if (hdr.payload_len >= sizeof(tinexus::ipcd::protocol::UninstallRequestPayload)) {
+                        auto* req = reinterpret_cast<const tinexus::ipcd::protocol::UninstallRequestPayload*>(read_buf.data() + sizeof(hdr));
+                        // Ensure null termination safely
+                        char safe_name[65] = {0};
+                        std::strncpy(safe_name, req->app_name, 64);
+                        std::string app_name(safe_name);
+                        
+                        bool success = InstallHandler::instance().handle_uninstall_request(app_name);
+                        if (success) {
+                            send_reply(hdr.sequence_id, tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_OK);
+                        } else {
+                            send_reply(hdr.sequence_id, tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_FAILED);
                         }
                     }
                 }

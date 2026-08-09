@@ -24,6 +24,7 @@ public:
      * @return true if installation succeeds, false otherwise
      */
     bool handle_install_request(const std::string& app_name, int payload_fd, const std::vector<uint8_t>& signature_bytes);
+    bool handle_uninstall_request(const std::string& app_name);
 
 private:
     InstallHandler() = default;

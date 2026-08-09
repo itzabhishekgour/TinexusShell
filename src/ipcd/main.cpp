@@ -253,12 +253,18 @@ void dispatch_message(int sender_fd,
     // SYS_INSTALL_REQUEST — route to the registered "supervisor" service
     // Includes payload file descriptor via SCM_RIGHTS.
     // -----------------------------------------------------------------------
-    case MT::SYS_INSTALL_REQUEST: {
+    case MT::SYS_INSTALL_REQUEST:
+    case MT::SYS_UNINSTALL_REQUEST: {
         auto peer = tinexus::ipcd::security::PeerValidator::get_peer_identity(sender_fd);
-        if (!peer || peer->executable_path != "/usr/bin/tinexus-installer") {
-            tinexus::log::error("[ipcd] Rejected SYS_INSTALL_REQUEST: Unauthorized binary '{}'", 
-                                peer ? peer->executable_path : "unknown");
-            send_frame(sender_fd, MT::SYS_INSTALL_FAILED, hdr.sequence_id, nullptr, 0);
+        std::string expected_binary = (hdr.msg_type == static_cast<uint16_t>(MT::SYS_INSTALL_REQUEST)) 
+                                      ? "/usr/bin/tinexus-installer" 
+                                      : "/usr/bin/tinexus-files";
+        if (!peer || peer->executable_path != expected_binary) {
+            tinexus::log::error("[ipcd] Rejected MSG_TYPE {}: Unauthorized binary '{}'", 
+                                hdr.msg_type, peer ? peer->executable_path : "unknown");
+            MT err_type = (hdr.msg_type == static_cast<uint16_t>(MT::SYS_INSTALL_REQUEST)) 
+                          ? MT::SYS_INSTALL_FAILED : MT::SYS_UNINSTALL_FAILED;
+            send_frame(sender_fd, err_type, hdr.sequence_id, nullptr, 0);
             break;
         }
 
@@ -268,12 +274,14 @@ void dispatch_message(int sender_fd,
             tinexus::ipcd::protocol::Header fwd_hdr = hdr;
             fwd_hdr.flags = static_cast<uint16_t>(sender_fd & 0xFFFF);
             if (!send_frame(svc->provider_fd, static_cast<MT>(fwd_hdr.msg_type), fwd_hdr.sequence_id, payload.data(), payload.size(), fds)) {
-                tinexus::log::warn("[ipcd] Failed to forward SYS_INSTALL_REQUEST");
-                send_frame(sender_fd, MT::SYS_INSTALL_FAILED, hdr.sequence_id, nullptr, 0);
+                tinexus::log::warn("[ipcd] Failed to forward MSG_TYPE {}", hdr.msg_type);
+                MT err_type = (hdr.msg_type == static_cast<uint16_t>(MT::SYS_INSTALL_REQUEST)) ? MT::SYS_INSTALL_FAILED : MT::SYS_UNINSTALL_FAILED;
+                send_frame(sender_fd, err_type, hdr.sequence_id, nullptr, 0);
             }
         } else {
-            tinexus::log::warn("[ipcd] SYS_INSTALL_REQUEST received but 'supervisor' not registered");
-            send_frame(sender_fd, MT::SYS_INSTALL_FAILED, hdr.sequence_id, nullptr, 0);
+            tinexus::log::warn("[ipcd] MSG_TYPE {} received but 'supervisor' not registered", hdr.msg_type);
+            MT err_type = (hdr.msg_type == static_cast<uint16_t>(MT::SYS_INSTALL_REQUEST)) ? MT::SYS_INSTALL_FAILED : MT::SYS_UNINSTALL_FAILED;
+            send_frame(sender_fd, err_type, hdr.sequence_id, nullptr, 0);
         }
         break;
     }
