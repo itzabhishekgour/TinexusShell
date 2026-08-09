@@ -277,6 +277,37 @@ EOF_UDEV_SEAT
         cp -L "$PROJECT_DIR/Temp/"*.AppImage "$ROOTFS_DIR/opt/AppImages/" 2>/dev/null || true
         chmod +x "$ROOTFS_DIR/opt/AppImages/"*.AppImage 2>/dev/null || true
         success "Staged user-provided AppImages into /opt/AppImages/"
+
+        # [Jugaad] Stage full desktop libraries required by heavy AppImages like Chrome
+        info "[Jugaad] Staging Chrome/AppImage shared library dependencies (GTK, NSS, X11)..."
+        CHROME_LIBS=(
+            "libglib-2.0.so.0" "libgobject-2.0.so.0" "libnspr4.so" "libnss3.so" "libnssutil3.so"
+            "libsmime3.so" "libgio-2.0.so.0" "libatk-1.0.so.0" "libatk-bridge-2.0.so.0" "libdbus-1.so.3"
+            "libcups.so.2" "libexpat.so.1" "libfontconfig.so.1" "libX11.so.6" "libxcb.so.1"
+            "libxkbcommon.so.0" "libasound.so.2" "libgbm.so.1" "libXext.so.6" "libcairo.so.2"
+            "libpango-1.0.so.0" "libudev.so.1" "libXcomposite.so.1" "libXdamage.so.1" "libXfixes.so.3"
+            "libXrandr.so.2" "libatspi.so.0" "libm.so.6" "libgcc_s.so.1" "libc.so.6" "libatomic.so.1"
+            "libpcre2-8.so.0" "libffi.so.8" "libplc4.so" "libplds4.so" "libgmodule-2.0.so.0" "libz.so.1"
+            "libmount.so.1" "libselinux.so.1" "libsystemd.so.0" "libgssapi_krb5.so.2" "libavahi-common.so.3"
+            "libavahi-client.so.3" "libgnutls.so.30" "libfreetype.so.6" "libXau.so.6" "libXdmcp.so.6"
+            "libdrm.so.2" "libpng16.so.16" "libXrender.so.1" "libxcb-render.so.0" "libxcb-shm.so.0"
+            "libpixman-1.so.0" "libfribidi.so.0" "libthai.so.0" "libharfbuzz.so.0" "libXi.so.6"
+            "libXRes.so.1" "libblkid.so.1" "libkrb5.so.3" "libk5crypto.so.3" "libcom_err.so.2"
+            "libkrb5support.so.0" "libp11-kit.so.0" "libidn2.so.0" "libunistring.so.5" "libtasn1.so.6"
+            "libhogweed.so.6" "libnettle.so.8" "libgmp.so.10" "libbz2.so.1.0" "libbrotlidec.so.1"
+            "libdatrie.so.1" "libgraphite2.so.3" "libkeyutils.so.1" "libresolv.so.2" "libbrotlicommon.so.1"
+            "libwayland-client.so.0" "libwayland-cursor.so.0" "libwayland-egl.so.1" "libnssckbi.so"
+        )
+        for lib in "${CHROME_LIBS[@]}"; do
+            for search_dir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib /lib; do
+                if [ -f "$search_dir/$lib" ]; then
+                    mkdir -p "$ROOTFS_DIR$search_dir"
+                    cp -L "$search_dir/$lib" "$ROOTFS_DIR$search_dir/" 2>/dev/null || true
+                    break
+                fi
+            done
+        done
+        success "Staged 70+ Chrome library dependencies."
     fi
 
     # Locale — foot uses LC_ALL/LANG; stage minimal C.UTF-8
