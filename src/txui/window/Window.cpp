@@ -247,6 +247,18 @@ void Window::set_fullscreen(bool fullscreen) noexcept {
     }
 }
 
+void Window::start_interactive_move(uint32 serial) noexcept {
+    if (m_xdg_toplevel != nullptr && m_connection && m_connection->seat()) {
+        xdg_toplevel_move(m_xdg_toplevel, m_connection->seat(), serial);
+    }
+}
+
+void Window::start_interactive_resize(uint32 edges, uint32 serial) noexcept {
+    if (m_xdg_toplevel != nullptr && m_connection && m_connection->seat()) {
+        xdg_toplevel_resize(m_xdg_toplevel, m_connection->seat(), serial, edges);
+    }
+}
+
 void Window::set_keyboard_interactivity(bool enable) noexcept {
     if (m_layer_surface != nullptr) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(m_layer_surface, enable ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);

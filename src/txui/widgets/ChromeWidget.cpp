@@ -17,13 +17,15 @@ ChromeWidget::ChromeWidget(
     Ref<Widget> content,
     std::function<void()> on_close,
     std::function<void()> on_minimize,
-    std::function<void()> on_maximize
+    std::function<void()> on_maximize,
+    std::function<void(uint32_t)> on_move
 ) noexcept {
     m_title_bar = make_ref<TitleBarWidget>(
         title,
         std::move(on_close),
         std::move(on_minimize),
-        std::move(on_maximize)
+        std::move(on_maximize),
+        std::move(on_move)
     );
 
     // Wrap content in FlexItem (flex=1, expanded) so it fills the remaining height

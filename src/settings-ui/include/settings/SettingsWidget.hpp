@@ -32,6 +32,8 @@ public:
 
     void select_page(SettingsPage page);
 
+    bool handle_event(const txui::Event& event) noexcept override;
+
 protected:
     txui::Size measure_override(const txui::Constraints& constraints) noexcept override;
     void layout_override(const txui::Rect& frame) noexcept override;
@@ -39,6 +41,7 @@ protected:
 
 private:
     SettingsPage m_current_page{SettingsPage::Display};
+    int m_hovered_tab{-1};
 
     // Sidebar
     void paint_sidebar(txui::Painter& painter) const noexcept;

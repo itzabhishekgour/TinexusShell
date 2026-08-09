@@ -48,6 +48,9 @@ public:
     [[nodiscard]] wl_pointer* pointer() const noexcept { return m_pointer; }
     [[nodiscard]] bool is_valid() const noexcept { return m_seat != nullptr; }
 
+    [[nodiscard]] double pointer_x() const noexcept { return m_pointer_x; }
+    [[nodiscard]] double pointer_y() const noexcept { return m_pointer_y; }
+
     // Internal Wayland protocol callbacks
     void bind_capabilities(uint32 caps) noexcept;
     void set_pointer_coords(double x, double y) noexcept { m_pointer_x = x; m_pointer_y = y; }

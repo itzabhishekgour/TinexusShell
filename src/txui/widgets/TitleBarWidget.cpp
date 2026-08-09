@@ -28,13 +28,14 @@ TitleBarWidget::TitleBarWidget(
     std::string_view title,
     std::function<void()> on_close,
     std::function<void()> on_minimize,
-    std::function<void()> on_maximize
+    std::function<void()> on_maximize,
+    MoveCallback on_move
 ) noexcept
-    : m_title(title)
-    , m_on_close(std::move(on_close))
-    , m_on_minimize(std::move(on_minimize))
-    , m_on_maximize(std::move(on_maximize))
-{}
+    : m_title(title),
+      m_on_close(std::move(on_close)),
+      m_on_minimize(std::move(on_minimize)),
+      m_on_maximize(std::move(on_maximize)),
+      m_on_move(std::move(on_move)) {}
 
 Rect TitleBarWidget::button_rect(int index) const noexcept {
     double y = (frame().height() - (BUTTON_RADIUS * 2.0)) / 2.0;
@@ -101,6 +102,22 @@ bool TitleBarWidget::handle_event(const Event& event) noexcept {
         }
     } else if (event.type == EventType::PointerButtonPress
                && event.pointer.button == MouseButton::Left) {
+        // Only process click if it's within the TitleBar's bounds
+        double px = event.pointer.x;
+        double py = event.pointer.y;
+        if (px < frame().left() || px > frame().right() || py < frame().top() || py > frame().bottom()) {
+            return Widget::handle_event(event);
+        }
+
+        int hit_index = m_hovered_button;
+        if (hit_index >= 0) {
+            // Ignore drags on buttons
+        } else if (m_on_move) {
+            // Clicked on the title bar background -> trigger move grab
+            m_on_move(event.pointer.serial);
+            return true;
+        }
+
         if (m_hovered_button == 0) {
             // ── Close ────────────────────────────────────────────────────────
             if (m_on_close) m_on_close();

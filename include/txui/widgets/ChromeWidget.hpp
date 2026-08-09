@@ -27,7 +27,8 @@ public:
         Ref<Widget> content,
         std::function<void()> on_close,
         std::function<void()> on_minimize = {},
-        std::function<void()> on_maximize = {}
+        std::function<void()> on_maximize = {},
+        std::function<void(uint32_t)> on_move = {}
     ) noexcept;
 
     ~ChromeWidget() override = default;

@@ -10,11 +10,16 @@
 namespace txui {
 
 class TitleBarWidget : public Widget {
+public:
+    using Callback = std::function<void()>;
+    using MoveCallback = std::function<void(uint32_t)>;
+
 private:
     std::string m_title;
-    std::function<void()> m_on_close;
-    std::function<void()> m_on_minimize;
-    std::function<void()> m_on_maximize;
+    Callback m_on_close;
+    Callback m_on_minimize;
+    Callback m_on_maximize;
+    MoveCallback m_on_move;
 
     // UI state
     int m_hovered_button{-1}; // 0: close, 1: minimize, 2: maximize, -1: none
@@ -36,7 +41,8 @@ public:
         std::string_view title,
         std::function<void()> on_close,
         std::function<void()> on_minimize = {},
-        std::function<void()> on_maximize = {}
+        std::function<void()> on_maximize = {},
+        MoveCallback on_move = {}
     ) noexcept;
 
     ~TitleBarWidget() override = default;

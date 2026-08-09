@@ -79,6 +79,7 @@ struct KeyboardEvent {
     Key key;
     KeyModifier modifiers;
     bool is_repeat;
+    uint32 serial;
 };
 
 struct PointerEvent {
@@ -87,6 +88,7 @@ struct PointerEvent {
     MouseButton button;
     double scroll_delta_x;
     double scroll_delta_y;
+    uint32 serial;
 };
 
 struct ResizeEvent {

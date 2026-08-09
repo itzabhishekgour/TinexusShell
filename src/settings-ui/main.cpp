@@ -34,6 +34,10 @@ int main(int /*argc*/, char** /*argv*/) {
         // ── Maximize: toggle maximize/restore ─────────────────────────────────
         [w = window.get()]() {
             w->set_maximized(!w->is_maximized());
+        },
+        // ── Move: initiate interactive drag via xdg_toplevel.move ─────────────
+        [w = window.get()](uint32_t serial) {
+            w->start_interactive_move(serial);
         }
     );
     window->set_root_widget(chrome);

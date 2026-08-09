@@ -89,6 +89,10 @@ public:
     // Set the window to fullscreen mode
     void set_fullscreen(bool fullscreen) noexcept;
 
+    // Window interaction
+    void start_interactive_move(uint32 serial) noexcept;
+    void start_interactive_resize(uint32 edges, uint32 serial) noexcept;
+
     // Enable or disable keyboard interactivity for layer shell surfaces
     void set_keyboard_interactivity(bool enable) noexcept;
 

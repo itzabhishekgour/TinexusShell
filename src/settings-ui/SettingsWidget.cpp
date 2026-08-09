@@ -129,6 +129,34 @@ txui::Size SettingsWidget::measure_override(const txui::Constraints& c) noexcept
     return c.constrain(txui::Size(c.max_width, c.max_height));
 }
 
+bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
+    if (event.type == txui::EventType::PointerMove) {
+        double px = event.pointer.x;
+        double py = event.pointer.y;
+
+        int new_hover = -1;
+        if (px >= m_sidebar_rect.x() && px <= m_sidebar_rect.right()) {
+            if (py >= ITEM_Y0 && py <= ITEM_Y0 + ITEM_H) new_hover = 0;
+            else if (py >= ITEM_Y0 + ITEM_H + 4 && py <= ITEM_Y0 + (ITEM_H + 4) * 2 - 4) new_hover = 1;
+            else if (py >= ITEM_Y0 + (ITEM_H + 4) * 2 && py <= ITEM_Y0 + (ITEM_H + 4) * 3 - 4) new_hover = 2;
+            else if (py >= ITEM_Y0 + (ITEM_H + 4) * 3 && py <= ITEM_Y0 + (ITEM_H + 4) * 4 - 4) new_hover = 3;
+        }
+
+        if (new_hover != m_hovered_tab) {
+            m_hovered_tab = new_hover;
+            mark_needs_paint();
+        }
+        return false;
+    } else if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
+        if (m_hovered_tab == 0) { select_page(SettingsPage::Display); return true; }
+        else if (m_hovered_tab == 1) { select_page(SettingsPage::Personalization); return true; }
+        else if (m_hovered_tab == 2) { select_page(SettingsPage::System); return true; }
+        else if (m_hovered_tab == 3) { select_page(SettingsPage::About); return true; }
+        return false;
+    }
+    return false;
+}
+
 void SettingsWidget::layout_override(const txui::Rect& f) noexcept {
     // 20px padding around content area for macOS-like generous whitespace
     constexpr double CONTENT_PADDING = 20.0;
@@ -230,6 +258,21 @@ void SettingsWidget::paint_sidebar_item(txui::Painter& painter, const std::strin
             1.5,
             ACCENT, txui::Color(80, 110, 220, 140)
         );
+    } else {
+        // Hover state
+        int tab_idx = -1;
+        if (page == SettingsPage::Display) tab_idx = 0;
+        else if (page == SettingsPage::Personalization) tab_idx = 1;
+        else if (page == SettingsPage::System) tab_idx = 2;
+        else if (page == SettingsPage::About) tab_idx = 3;
+
+        if (m_hovered_tab == tab_idx) {
+            painter.fill_rounded_rect(
+                txui::Rect(x, y + 2, iw, ITEM_H - 4),
+                10.0,
+                txui::Color(255, 255, 255, 10)
+            );
+        }
     }
 
     // Icon circle
@@ -472,9 +515,9 @@ void SettingsWidget::paint_about_page(txui::Painter& painter, const txui::Rect& 
 
     // TINEXUS wordmark
     painter.draw_glow(txui::Point(x + 40 + 35, y + 32), 14, 50, GLOW_BLUE);
-    painter.draw_text(txui::Point(x + 28, y + 22), "TINEXUS", ACCENT, 3.0);
+    painter.draw_text(txui::Point(x + 28, y + 22), "TINEXUS DESKTOP", ACCENT, 3.0);
     painter.draw_text(txui::Point(x + 28, y + 66), "Version 0.1.0  \"Horizon\"",    TXT_PRI, 1.0);
-    painter.draw_text(txui::Point(x + 28, y + 86), "A next-generation Wayland desktop platform", TXT_SEC, 1.0);
+    painter.draw_text(txui::Point(x + 28, y + 86), "Build with Linux & Wayland", TXT_SEC, 1.0);
     painter.draw_text(txui::Point(x + 28, y + 106),"GPL-2.0-or-later  |  SDK Apache-2.0",       TXT_DIM, 1.0);
     y += 140;
 

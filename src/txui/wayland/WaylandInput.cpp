@@ -25,13 +25,14 @@ void keyboard_handle_leave(void* /*data*/, struct wl_keyboard* /*keyboard*/, uin
     // Focus left window
 }
 
-void keyboard_handle_key(void* data, struct wl_keyboard* /*keyboard*/, uint32_t /*serial*/, uint32_t time, uint32_t key, uint32_t state) {
+void keyboard_handle_key(void* data, struct wl_keyboard* /*keyboard*/, uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
     auto* input = static_cast<WaylandInput*>(data);
     Event event;
     event.type = (state == WL_KEYBOARD_KEY_STATE_PRESSED) ? EventType::KeyDown : EventType::KeyUp;
     event.timestamp_ns = static_cast<uint64>(time) * 1000000ULL;
     event.keyboard.key = translate_linux_keycode(key);
     event.keyboard.is_repeat = false;
+    event.keyboard.serial = serial;
     input->emit_event(event);
 }
 
@@ -53,7 +54,7 @@ const struct wl_keyboard_listener keyboard_listener = {
     .repeat_info = keyboard_handle_repeat_info
 };
 
-void pointer_handle_enter(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial*/, struct wl_surface* /*surface*/, wl_fixed_t sx, wl_fixed_t sy) {
+void pointer_handle_enter(void* data, struct wl_pointer* /*pointer*/, uint32_t serial, struct wl_surface* /*surface*/, wl_fixed_t sx, wl_fixed_t sy) {
     auto* input = static_cast<WaylandInput*>(data);
     double x = wl_fixed_to_double(sx);
     double y = wl_fixed_to_double(sy);
@@ -63,6 +64,7 @@ void pointer_handle_enter(void* data, struct wl_pointer* /*pointer*/, uint32_t /
     event.type = EventType::PointerEnter;
     event.pointer.x = x;
     event.pointer.y = y;
+    event.pointer.serial = serial;
     input->emit_event(event);
 }
 
@@ -87,12 +89,15 @@ void pointer_handle_motion(void* data, struct wl_pointer* /*pointer*/, uint32_t 
     input->emit_event(event);
 }
 
-void pointer_handle_button(void* data, struct wl_pointer* /*pointer*/, uint32_t /*serial*/, uint32_t time, uint32_t button, uint32_t state) {
+void pointer_handle_button(void* data, struct wl_pointer* /*pointer*/, uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
     auto* input = static_cast<WaylandInput*>(data);
     Event event;
     event.type = (state == WL_POINTER_BUTTON_STATE_PRESSED) ? EventType::PointerButtonPress : EventType::PointerButtonRelease;
     event.timestamp_ns = static_cast<uint64>(time) * 1000000ULL;
+    event.pointer.x = input->pointer_x();
+    event.pointer.y = input->pointer_y();
     event.pointer.button = translate_linux_button(button);
+    event.pointer.serial = serial;
     input->emit_event(event);
 }
 

@@ -275,7 +275,14 @@ private:
     // Tracks the Wayland socket name so child processes inherit WAYLAND_DISPLAY
     std::string m_wayland_socket{};
 
-
+    enum class CursorMode { Passthrough, Move, Resize };
+    CursorMode m_cursor_mode{CursorMode::Passthrough};
+    ToplevelWrapper* m_grabbed_toplevel{nullptr};
+    double m_grab_x{0.0};
+    double m_grab_y{0.0};
+    int m_grab_geo_x{0};
+    int m_grab_geo_y{0};
+    struct wlr_box m_grab_geobox{};
     struct LayerSurfaceWrapper {
         struct wlr_layer_surface_v1* layer_surface{nullptr};
         struct wlr_scene_layer_surface_v1* scene_layer{nullptr};
@@ -293,6 +300,8 @@ private:
         struct wl_listener request_maximize;
         struct wl_listener request_fullscreen;
         struct wl_listener request_minimize;
+        struct wl_listener request_move;
+        struct wl_listener request_resize;
         WlrootsBackend* backend{nullptr};
 
         // Window states
@@ -584,6 +593,36 @@ private:
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
+    void begin_interactive_move(ToplevelWrapper* wrapper) {
+        m_cursor_mode = CursorMode::Move;
+        m_grabbed_toplevel = wrapper;
+        m_grab_x = m_cursor->x;
+        m_grab_y = m_cursor->y;
+        m_grab_geo_x = wrapper->scene_tree->node.x;
+        m_grab_geo_y = wrapper->scene_tree->node.y;
+        log::info("[Window] Started interactive move grab");
+    }
+
+    void begin_interactive_resize(ToplevelWrapper* wrapper, uint32_t edges) {
+        m_cursor_mode = CursorMode::Resize;
+        m_grabbed_toplevel = wrapper;
+        m_grab_x = m_cursor->x;
+        m_grab_y = m_cursor->y;
+        m_grab_geobox = wrapper->toplevel->base->current.geometry;
+        log::info("[Window] Started interactive resize grab (edges={})", edges);
+    }
+
+    static void handle_toplevel_request_move(struct wl_listener* listener, void* data) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_move);
+        wrapper->backend->begin_interactive_move(wrapper);
+    }
+
+    static void handle_toplevel_request_resize(struct wl_listener* listener, void* data) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_resize);
+        auto* event = static_cast<struct wlr_xdg_toplevel_resize_event*>(data);
+        wrapper->backend->begin_interactive_resize(wrapper, event->edges);
+    }
+
     static void handle_new_xdg_toplevel(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_xdg_surface_listener);
         auto* xdg_toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
@@ -622,6 +661,12 @@ private:
 
         wrapper->request_minimize.notify = handle_toplevel_request_minimize;
         wl_signal_add(&xdg_toplevel->events.request_minimize, &wrapper->request_minimize);
+
+        wrapper->request_move.notify = handle_toplevel_request_move;
+        wl_signal_add(&xdg_toplevel->events.request_move, &wrapper->request_move);
+
+        wrapper->request_resize.notify = handle_toplevel_request_resize;
+        wl_signal_add(&xdg_toplevel->events.request_resize, &wrapper->request_resize);
 
         self->m_toplevels.push_back(std::move(wrapper));
     }
@@ -706,6 +751,8 @@ private:
         wl_list_remove(&wrapper->request_maximize.link);
         wl_list_remove(&wrapper->request_fullscreen.link);
         wl_list_remove(&wrapper->request_minimize.link);
+        wl_list_remove(&wrapper->request_move.link);
+        wl_list_remove(&wrapper->request_resize.link);
 
         // Remove from list
         for (auto it = backend->m_toplevels.begin(); it != backend->m_toplevels.end(); ++it) {
@@ -893,6 +940,20 @@ private:
         // [3D.2] Cursor image — keep hardware cursor visible
         wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, "default");
 
+        if (m_cursor_mode == CursorMode::Move && m_grabbed_toplevel != nullptr) {
+            int new_x = m_grab_geo_x + static_cast<int>(m_cursor->x - m_grab_x);
+            int new_y = m_grab_geo_y + static_cast<int>(m_cursor->y - m_grab_y);
+            wlr_scene_node_set_position(&m_grabbed_toplevel->scene_tree->node, new_x, new_y);
+            return;
+        } else if (m_cursor_mode == CursorMode::Resize && m_grabbed_toplevel != nullptr) {
+            // Simplified resize: just update width/height
+            // Edge logic would normally be more complex (adjusting position for left/top edges)
+            int new_width = m_grab_geobox.width + static_cast<int>(m_cursor->x - m_grab_x);
+            int new_height = m_grab_geobox.height + static_cast<int>(m_cursor->y - m_grab_y);
+            wlr_xdg_toplevel_set_size(m_grabbed_toplevel->toplevel, new_width, new_height);
+            return;
+        }
+
         // [3D.3] Scene-graph hit-test → FocusManager handles everything:
         //        wlr_scene_node_at  →  notify_enter / notify_motion / clear_focus
         const PickResult pick = FocusManager::instance().pick_surface(
@@ -917,6 +978,12 @@ private:
                 if (clicked_wrapper != nullptr) {
                     self->focus_toplevel(clicked_wrapper);
                 }
+            }
+        } else if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+            if (self->m_cursor_mode != CursorMode::Passthrough) {
+                log::info("[Window] Ended grab");
+                self->m_cursor_mode = CursorMode::Passthrough;
+                self->m_grabbed_toplevel = nullptr;
             }
         }
 
