@@ -19,6 +19,7 @@ extern "C" {
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_data_device.h>
 #define namespace wl_namespace
 #include <wlr/types/wlr_layer_shell_v1.h>
 #define static
@@ -152,6 +153,16 @@ public:
         m_cursor_frame_listener.notify = handle_cursor_frame;
         wl_signal_add(&m_cursor->events.frame, &m_cursor_frame_listener);
 
+        // Create wl_data_device_manager so Wayland clients (foot, etc.) can bind
+        // clipboard / drag-and-drop protocol. Without this, clients report
+        // "no clipboard available" even though the global appears in registry.
+        m_data_device_manager = wlr_data_device_manager_create(m_display);
+        if (!m_data_device_manager) {
+            log::warn("[Backend] wlr_data_device_manager_create failed — clipboard unavailable.");
+        } else {
+            log::info("[Backend] wl_data_device_manager created (clipboard enabled).");
+        }
+
         return true;
     }
 
@@ -218,6 +229,7 @@ private:
     struct wlr_allocator* m_wlr_allocator{nullptr};
     struct wlr_compositor* m_wlr_compositor{nullptr};
     struct wlr_shm* m_wlr_shm{nullptr};
+    struct wlr_data_device_manager* m_data_device_manager{nullptr};
 
     struct wlr_output_layout* m_output_layout{nullptr};
     struct wlr_seat* m_seat{nullptr};
@@ -292,6 +304,11 @@ private:
         int32_t saved_y{100};
         int32_t saved_width{800};
         int32_t saved_height{600};
+
+        // Fade out on close
+        bool is_closing{false};
+        double opacity{1.0};
+        struct wl_event_source* fade_timer{nullptr};
     };
     std::vector<std::unique_ptr<ToplevelWrapper>> m_toplevels;
     std::vector<LayerSurfaceWrapper*> m_layer_surfaces;
@@ -344,6 +361,12 @@ private:
             
             // Remove from tracking
             WlrootsBackend* b = w->backend;
+            
+            // Defend against memory reuse bug: clear focus if this was the focused surface
+            if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
+                FocusManager::instance().set_keyboard_focus(nullptr);
+            }
+
             auto it = std::find(b->m_layer_surfaces.begin(), b->m_layer_surfaces.end(), w);
             if (it != b->m_layer_surfaces.end()) {
                 b->m_layer_surfaces.erase(it);
@@ -364,7 +387,7 @@ private:
             struct wlr_box usable_area = full_area;
             wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
 
-            log::info("[LayerShell] commit.notify! namespace={}, actual_height={}",
+            log::debug("[LayerShell] commit.notify! namespace={}, actual_height={}",
                 w->layer_surface->wl_namespace ? w->layer_surface->wl_namespace : "null",
                 w->layer_surface->surface->current.height);
 
@@ -434,6 +457,15 @@ private:
         }
     }
 
+    void focus_app(const std::string& app_id) noexcept override {
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel->app_id && std::string(w->toplevel->app_id) == app_id) {
+                focus_toplevel(w.get());
+                break;
+            }
+        }
+    }
+
     void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
         if (wrapper->is_maximized == maximize) {
             wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
@@ -469,6 +501,47 @@ private:
             wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+    }
+
+    static void set_buffer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+        double opacity = *static_cast<double*>(user_data);
+        wlr_scene_buffer_set_opacity(buffer, opacity);
+    }
+
+    static int handle_fade_out(void* data) {
+        auto* wrapper = static_cast<ToplevelWrapper*>(data);
+        if (!wrapper->is_closing) return 0;
+        
+        wrapper->opacity -= 0.15; // 100ms total roughly
+        if (wrapper->opacity <= 0.0) {
+            wrapper->opacity = 0.0;
+            wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+            wlr_xdg_toplevel_send_close(wrapper->toplevel);
+            
+            if (wrapper->fade_timer) {
+                wl_event_source_remove(wrapper->fade_timer);
+                wrapper->fade_timer = nullptr;
+            }
+            return 0;
+        }
+        
+        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+        wl_event_source_timer_update(wrapper->fade_timer, 15);
+        return 0;
+    }
+
+    void close_active_window() noexcept override {
+        if (!m_active_toplevel || m_active_toplevel->is_closing) {
+            return;
+        }
+        m_active_toplevel->is_closing = true;
+        m_active_toplevel->fade_timer = wl_event_loop_add_timer(
+            wl_display_get_event_loop(m_display),
+            handle_fade_out,
+            m_active_toplevel
+        );
+        wl_event_source_timer_update(m_active_toplevel->fade_timer, 15);
+        log::info("[Window] Initiating fade-out for window close");
     }
 
     void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
@@ -597,7 +670,12 @@ private:
     static void handle_toplevel_request_minimize(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
-        log::info("[XDGShell] Request minimize (not implemented) - acknowledging");
+        // Minimize = hide the scene node. There is no dock/taskbar yet, so this
+        // is a "hide-only" minimize. The user can re-open from Pulse.
+        if (wrapper->scene_tree) {
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+            log::info("[XDGShell] Minimized (hidden) — no dock restore path yet.");
+        }
         wlr_xdg_surface_schedule_configure(toplevel->base);
     }
 
@@ -615,6 +693,11 @@ private:
 
         if (backend->m_active_toplevel == wrapper) {
             backend->m_active_toplevel = nullptr;
+        }
+
+        // Defend against memory reuse bug: clear focus if this was the focused surface
+        if (FocusManager::instance().keyboard_focus() == surface) {
+            FocusManager::instance().set_keyboard_focus(nullptr);
         }
 
         wl_list_remove(&wrapper->map.link);

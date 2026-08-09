@@ -107,6 +107,11 @@ int main(int argc, char** argv) {
     setenv("PATH", "/usr/bin:/usr/sbin:/bin:/sbin", 1);
     setenv("XDG_RUNTIME_DIR", "/run/user/0", 1);
     setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/bus", 1);
+    // C.UTF-8 is a POSIX-standard locale requiring NO locale-gen and NO locale
+    // archive — it enables full UTF-8 encoding on top of the C locale.
+    // foot and other terminal apps require a UTF-8 locale or they refuse to start.
+    setenv("LANG",   "C.UTF-8", 1);
+    setenv("LC_ALL", "C.UTF-8", 1);
 
     // Wlroots compositor environment
     // WLR_DRM_NO_ATOMIC: Disable DRM atomic commits — virtio-gpu (QEMU) does not

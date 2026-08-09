@@ -57,6 +57,33 @@ struct AppItem {
 static std::vector<AppItem> g_recent_launches;
 constexpr size_t MAX_RECENT = 5;
 
+#include <filesystem>
+#include <fstream>
+#include <cctype>
+#include <fcntl.h>
+
+// ---------------------------------------------------------------------------
+// is_process_running
+// ---------------------------------------------------------------------------
+static bool is_process_running(const std::string& comm_name) {
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator("/proc", ec)) {
+        if (!entry.is_directory()) continue;
+        std::string pid_str = entry.path().filename().string();
+        if (pid_str.empty() || !std::isdigit(static_cast<unsigned char>(pid_str[0]))) continue;
+
+        std::ifstream comm_file(entry.path() / "comm");
+        if (comm_file.is_open()) {
+            std::string name;
+            std::getline(comm_file, name);
+            if (name == comm_name) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // spawn_app
 // ---------------------------------------------------------------------------
@@ -68,14 +95,33 @@ static pid_t spawn_app(const AppItem& item) {
             pid_t pid = fork();
             if (pid == 0) { setsid(); execlp("tinexus-lock", "tinexus-lock", nullptr); _exit(127); }
             return pid;
-        } else if (cmd == "shutdown") { ::system("systemctl poweroff"); return -1; } // NOLINT
-        else if (cmd == "reboot")   { ::system("systemctl reboot");   return -1; } // NOLINT
-        else if (cmd == "sleep")    { ::system("systemctl suspend");  return -1; } // NOLINT
-        else if (cmd == "logout")   { ::system("loginctl terminate-session ''"); return -1; } // NOLINT
+        } else if (cmd == "shutdown") { if (::system("systemctl poweroff") == -1) {}; return -1; } // NOLINT
+        else if (cmd == "reboot")   { if (::system("systemctl reboot") == -1) {};   return -1; } // NOLINT
+        else if (cmd == "sleep")    { if (::system("systemctl suspend") == -1) {};  return -1; } // NOLINT
+        else if (cmd == "logout")   { if (::system("loginctl terminate-session ''") == -1) {}; return -1; } // NOLINT
         return -1;
     }
     std::string clean_exec = indexer::DesktopParser::sanitize_exec(item.exec);
     if (clean_exec.empty()) return -1;
+
+    // Single-instance handling for settings and monitor
+    if (clean_exec == "tinexus-settings-ui" || clean_exec == "tinexus-monitor") {
+        if (is_process_running(clean_exec)) {
+            log::info("[Pulse] App {} is already running — sending focus request to compositor", clean_exec);
+            const char* xdg_runtime = getenv("XDG_RUNTIME_DIR");
+            if (xdg_runtime) {
+                std::string fifo_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
+                int fd = open(fifo_path.c_str(), O_WRONLY | O_NONBLOCK);
+                if (fd >= 0) {
+                    std::string app_id = (clean_exec == "tinexus-settings-ui") ? "tinexus-settings" : clean_exec;
+                    std::string cmd = "focus " + app_id + "\n";
+                    write(fd, cmd.c_str(), cmd.size());
+                    close(fd);
+                }
+            }
+            return -1;
+        }
+    }
 
     auto it = std::find_if(g_recent_launches.begin(), g_recent_launches.end(),
         [&](const AppItem& a) { return a.exec == item.exec; });
@@ -330,6 +376,8 @@ public:
 // ─────────────────────────────────────────────────────────────────────────────
 class PulseWidget : public txui::Widget {
 public:
+    int                  hovered_index{-1};
+    txui::Point          mouse_pos{-100, -100};
     std::string          query;
     std::vector<AppItem> results;
     size_t               selected_index{0};
@@ -343,6 +391,9 @@ public:
     void paint_override(txui::Painter& painter) const noexcept override {
         using namespace pulse_ui;
         const double SW = frame().width(), SH = frame().height();
+
+        // Must clear wayland SHM buffer fully before drawing transparent scrim
+        painter.clear(txui::Color(0, 0, 0, 0));
 
         // ── 1. Fullscreen scrim ───────────────────────────────────────
         painter.fill_rect(txui::Rect(0, 0, SW, SH), SCRIM);
@@ -410,6 +461,9 @@ public:
                         txui::Color(cat.r(), cat.g(), cat.b(), 52), txui::Color(cat.r(), cat.g(), cat.b(), 22));
                     painter.fill_gradient_rounded_rect(txui::Rect(px + 10, ry + 8, 3, ROW_H - 16), 1.5,
                         cat, txui::Color(cat.r(), cat.g(), cat.b(), 110));
+                } else if (static_cast<int>(i) == hovered_index) {
+                    painter.fill_gradient_rounded_rect(txui::Rect(px + 8, ry + 1, CARD_W - 16, ROW_H - 2), 10.0,
+                        txui::Color(255, 255, 255, 15), txui::Color(255, 255, 255, 5));
                 }
                 const double icx = px + 34.0, icy = ry + ROW_H * 0.5;
                 if (sel) {
@@ -580,10 +634,12 @@ int main(int argc, char** argv) {
                 // Swap root widget to Pulse (fullscreen overlay with scrim)
                 window->set_root_widget(txui::Ref<txui::Widget>(pulse_widget.get()));
                 target_w = PULSE_W; target_h = PULSE_H;
+                window->set_keyboard_interactivity(true);
             } else {
                 log::info("[Shell] Collapsing to Aura pill mode");
                 window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
                 target_w = AURA_W; target_h = AURA_H;
+                window->set_keyboard_interactivity(false);
             }
             animating = true;
             needs_redraw = true;
@@ -593,9 +649,12 @@ int main(int argc, char** argv) {
         if (animating) {
             double dw = target_w - current_w;
             double dh = target_h - current_h;
-            current_w += dw * 0.4;
-            current_h += dh * 0.4;
-            if (std::abs(dw) < 1.0 && std::abs(dh) < 1.0) {
+            
+            // Ease-out tuning: fast start, gentle stop (premium feel)
+            // Increased multiplier for faster start, but check for small delta for stop
+            current_w += dw * 0.28;
+            current_h += dh * 0.28;
+            if (std::abs(dw) < 0.5 && std::abs(dh) < 0.5) {
                 current_w = target_w; current_h = target_h;
                 if (!launch_animating) animating = false;
             }
@@ -606,7 +665,17 @@ int main(int argc, char** argv) {
                     target_w = 400.0; target_h = 240.0;
                 } else if (launch_flipped && std::abs(dw) < 2.0 && std::abs(dh) < 2.0) {
                     spawn_app(pulse_widget->launch_app);
-                    running = false;
+                    // Smoothly collapse instead of exiting
+                    launch_animating = false;
+                    launch_flipped = false;
+                    pulse_widget->is_launching = false;
+                    pulse_active = false;
+                    query = ""; selected_index = 0;
+                    sync_pulse();
+                    window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
+                    target_w = AURA_W; target_h = AURA_H;
+                    window->set_keyboard_interactivity(false);
+                    animating = true;
                 }
             }
             if (current_w > 0.0 && current_h > 0.0) {
@@ -620,6 +689,55 @@ int main(int argc, char** argv) {
         while (window->poll_event(event)) {
             if (event.type == txui::EventType::WindowClose) {
                 running = false;
+            } else if (event.type == txui::EventType::PointerMove) {
+                pulse_widget->mouse_pos = txui::Point(event.pointer.x, event.pointer.y);
+                if (pulse_active && !launch_animating) {
+                    const double SW = PULSE_W;
+                    const double SH = PULSE_H;
+                    const double SEARCH_H = 58.0;
+                    const double ROW_H = 44.0;
+                    const double ROW_GAP = 8.0;
+                    const double rows_n = static_cast<double>(std::min(pulse_widget->results.size(), size_t{7}));
+                    const double card_h = SEARCH_H + rows_n * (ROW_H + ROW_GAP) + 20.0;
+                    const double px = (SW - 680.0) * 0.5;
+                    const double py = SH * 0.38 - card_h * 0.5;
+                    const double rows_y = py + SEARCH_H + 8.0;
+                    
+                    int new_hover = -1;
+                    if (event.pointer.x >= px && event.pointer.x <= px + 680.0 && event.pointer.y >= rows_y && event.pointer.y <= rows_y + rows_n * (ROW_H + ROW_GAP)) {
+                        new_hover = static_cast<int>((event.pointer.y - rows_y) / (ROW_H + ROW_GAP));
+                    }
+                    if (pulse_widget->hovered_index != new_hover) {
+                        pulse_widget->hovered_index = new_hover;
+                        needs_redraw = true;
+                    }
+                }
+            } else if (event.type == txui::EventType::PointerButtonPress && !launch_animating) {
+                if (event.pointer.button == txui::MouseButton::Left && pulse_active) {
+                    const double SW = PULSE_W;
+                    const double SH = PULSE_H;
+                    const double SEARCH_H = 58.0;
+                    const double ROW_H = 44.0;
+                    const double ROW_GAP = 8.0;
+                    const double rows_n = static_cast<double>(std::min(pulse_widget->results.size(), size_t{7}));
+                    const double card_h = SEARCH_H + rows_n * (ROW_H + ROW_GAP) + 20.0;
+                    const double px = (SW - 680.0) * 0.5;
+                    const double py = SH * 0.38 - card_h * 0.5;
+                    
+                    if (event.pointer.x < px || event.pointer.x > px + 680.0 || event.pointer.y < py || event.pointer.y > py + card_h) {
+                        pulse_active = false;
+                        query = ""; selected_index = 0; sync_pulse();
+                        window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
+                        target_w = AURA_W; target_h = AURA_H;
+                        window->set_keyboard_interactivity(false);
+                        animating = true;
+                        needs_redraw = true;
+                    } else if (pulse_widget->hovered_index >= 0 && pulse_widget->hovered_index < static_cast<int>(pulse_widget->results.size())) {
+                        pulse_widget->launch_app = pulse_widget->results[static_cast<size_t>(pulse_widget->hovered_index)];
+                        launch_animating = true; animating = true; target_w = 2.0;
+                        needs_redraw = true;
+                    }
+                }
             } else if (event.type == txui::EventType::KeyDown && !launch_animating) {
                 needs_redraw = true;
                 const bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
@@ -631,6 +749,7 @@ int main(int argc, char** argv) {
                         query = ""; selected_index = 0;
                         window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
                         target_w = AURA_W; target_h = AURA_H;
+                        window->set_keyboard_interactivity(false);
                         animating = true;
                     } else if (event.keyboard.key == txui::Key::Enter) {
                         if (!current_results.empty() && selected_index < current_results.size()) {
@@ -652,7 +771,15 @@ int main(int argc, char** argv) {
                         if (!query.empty()) { query.pop_back(); selected_index = 0; sync_pulse(); }
                     } else if (ctrl && event.keyboard.key >= txui::Key::N1 && event.keyboard.key <= txui::Key::N9) {
                         size_t j = static_cast<size_t>(static_cast<int>(event.keyboard.key) - static_cast<int>(txui::Key::N1));
-                        if (j < current_results.size()) { spawn_app(current_results[j]); running = false; }
+                        if (j < current_results.size()) {
+                            spawn_app(current_results[j]);
+                            pulse_active = false;
+                            query = ""; selected_index = 0; sync_pulse();
+                            window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
+                            target_w = AURA_W; target_h = AURA_H; 
+                            window->set_keyboard_interactivity(false);
+                            animating = true;
+                        }
                     } else {
                         char ch = key_to_char(event.keyboard.key, shift);
                         if (ch != '\0') { query += ch; selected_index = 0; sync_pulse(); }

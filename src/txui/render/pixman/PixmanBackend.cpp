@@ -631,6 +631,10 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                 std::visit([&](const SolidBrush& solid) {
                     current_color = solid.color();
                 }, cmd.brush);
+            } else if constexpr (std::is_same_v<T, ClearCommand>) {
+                uint32 argb = cmd.color.to_argb32_premultiplied();
+                uint32* buffer = target.data();
+                std::fill_n(buffer, target.width() * target.height(), argb);
             } else if constexpr (std::is_same_v<T, DrawRectCommand>) {
                 Color rect_color = current_color;
                 std::visit([&](const SolidBrush& solid) {

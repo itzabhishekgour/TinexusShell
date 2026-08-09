@@ -124,6 +124,16 @@ void Widget::paint_children(Painter& painter) const noexcept {
     }
 }
 
+bool Widget::handle_event(const Event& event) noexcept {
+    // Propagate to children backwards (top-most first)
+    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
+        if ((*it)->handle_event(event)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Widget::layout_override(const Rect& frame) noexcept {
     // Default layout_override just positions children at the top-left with their desired size
     for (auto& child : m_children) {

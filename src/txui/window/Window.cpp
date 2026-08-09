@@ -136,6 +136,10 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
         if (win->m_input != nullptr) {
             win->m_input->set_event_sink(win.get(), handle_input_event, win_id);
         }
+        
+        // CRITICAL FIX: Ensure wl_seat capabilities are fully resolved so wl_keyboard
+        // is bound *before* we map the window and the compositor sends keyboard.enter.
+        win->m_connection->roundtrip();
 
         auto target_opt = WaylandRenderTarget::create(*win->m_connection, width, height);
         if (target_opt.has_value()) {
@@ -243,6 +247,18 @@ void Window::set_fullscreen(bool fullscreen) noexcept {
     }
 }
 
+void Window::set_keyboard_interactivity(bool enable) noexcept {
+    if (m_layer_surface != nullptr) {
+        zwlr_layer_surface_v1_set_keyboard_interactivity(m_layer_surface, enable ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+        if (m_connection.has_value()) {
+            auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
+            if (wayland_target && wayland_target->surface().surface()) {
+                wl_surface_commit(wayland_target->surface().surface());
+            }
+        }
+    }
+}
+
 void Window::present(const Rect& damage) noexcept {
     if (!m_render_target || !m_configured) {
         m_command_buffer.clear();
@@ -257,6 +273,7 @@ void Window::present(const Rect& damage) noexcept {
             m_root_widget->layout(Rect(0.0, 0.0, static_cast<float64>(m_width), static_cast<float64>(m_height)));
         }
         
+        m_render_target->clear();
         m_command_buffer.clear();
         Painter painter(m_command_buffer);
         painter.begin_frame();
@@ -375,10 +392,13 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
                 const int32_t side_margin = static_cast<int32_t>((m_output_width - static_cast<int32_t>(width)) / 2);
                 const int32_t clamped = side_margin > 0 ? side_margin : 0;
                 zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
-                wl_surface_commit(wayland_target->surface().surface());
-            } else if (m_xdg_surface) {
-                wl_surface_commit(wayland_target->surface().surface());
+                // NOTE: Do NOT commit here. The size/margin changes are Wayland
+                // pending state that will be atomically applied with the next pixel
+                // buffer commit in Window::present(). Committing here causes a
+                // duplicate commit per animation frame (double commit.notify in logs)
+                // and wastes compositor work on an empty/old buffer.
             }
+            // xdg_toplevel resize is driven by compositor configure events, not client commits.
         }
     }
     // Trigger full measure+layout+paint so widget tree adapts to new bounds.
@@ -387,6 +407,27 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
         m_root_widget->mark_needs_measure();
         m_root_widget->mark_needs_layout();
         m_root_widget->mark_needs_paint();
+    }
+}
+
+void Window::set_maximized(bool maximized) noexcept {
+    if (m_xdg_toplevel == nullptr) return;
+    if (maximized) {
+        xdg_toplevel_set_maximized(m_xdg_toplevel);
+    } else {
+        xdg_toplevel_unset_maximized(m_xdg_toplevel);
+    }
+    m_is_maximized = maximized;
+    if (m_connection.has_value()) {
+        m_connection->flush();
+    }
+}
+
+void Window::minimize() noexcept {
+    if (m_xdg_toplevel == nullptr) return;
+    xdg_toplevel_set_minimized(m_xdg_toplevel);
+    if (m_connection.has_value()) {
+        m_connection->flush();
     }
 }
 

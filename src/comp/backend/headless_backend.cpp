@@ -26,6 +26,8 @@ public:
         log::info("HeadlessBackend: Shutting down");
     }
 
+    void close_active_window() noexcept override {}
+
     struct wl_display* display() override {
         return nullptr;
     }

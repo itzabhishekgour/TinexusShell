@@ -130,10 +130,17 @@ txui::Size SettingsWidget::measure_override(const txui::Constraints& c) noexcept
 }
 
 void SettingsWidget::layout_override(const txui::Rect& f) noexcept {
+    // 20px padding around content area for macOS-like generous whitespace
+    constexpr double CONTENT_PADDING = 20.0;
     m_sidebar_rect = txui::Rect(f.x(), f.y(), SIDEBAR_W, f.height());
-    m_content_rect = txui::Rect(f.x() + SIDEBAR_W, f.y(),
-                                f.width() - SIDEBAR_W, f.height());
+    m_content_rect = txui::Rect(
+        f.x() + SIDEBAR_W + CONTENT_PADDING,
+        f.y() + CONTENT_PADDING,
+        f.width() - SIDEBAR_W - CONTENT_PADDING * 2.0,
+        f.height() - CONTENT_PADDING * 2.0
+    );
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Paint root

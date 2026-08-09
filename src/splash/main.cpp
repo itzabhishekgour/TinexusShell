@@ -122,14 +122,16 @@ int main() {
 
     // Load logo — initialize to 0 to avoid UB if stbi_load fails
     int img_w = 0, img_h = 0, img_channels = 0;
-    uint8_t* img_data = stbi_load("/tinexus-logo.png", &img_w, &img_h, &img_channels, 0);
+    uint8_t* img_data = stbi_load("/tinexus-logo.png", &img_w, &img_h, &img_channels, 4);
     if (img_data) {
         int x = (static_cast<int>(vinfo.xres) - img_w) / 2;
         int y = (static_cast<int>(vinfo.yres) - img_h) / 2 - 50; // Shift up slightly for progress bar
-        draw_image(fbp, vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, x, y, img_data, img_w, img_h, img_channels);
+        draw_image(fbp, vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, x, y, img_data, img_w, img_h, 4);
         stbi_image_free(img_data);
     } else {
         std::cerr << "Warning: Could not load /tinexus-logo.png" << std::endl;
+        FILE* f = fopen("/dev/ttyS0", "w");
+        if (f) { fprintf(f, "SPLASH: Could not load /tinexus-logo.png\\n"); fclose(f); }
     }
 
     // Progress bar geometry — safe even if img_h is 0 (logo failed to load)

@@ -6,6 +6,7 @@
 #include <txui/math/Size.hpp>
 #include <txui/layout/Constraints.hpp>
 #include <txui/render/Painter.hpp>
+#include <txui/input/Event.hpp>
 #include <vector>
 
 namespace txui {
@@ -57,6 +58,9 @@ public:
     void measure(const Constraints& constraints) noexcept;
     void layout(const Rect& frame) noexcept;
     void paint(Painter& painter) const noexcept;
+
+    // Event Handling
+    virtual bool handle_event(const Event& event) noexcept;
 
 protected:
     void paint_children(Painter& painter) const noexcept;

@@ -16,9 +16,30 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <csignal>
-
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #include <wayland-server-core.h>
+
+static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
+    if (mask & WL_EVENT_READABLE) {
+        auto* backend = static_cast<tinexus::comp::Backend*>(data);
+        char buf[256];
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            std::string cmd(buf);
+            if (cmd.starts_with("focus ")) {
+                std::string app_id = cmd.substr(6);
+                while (!app_id.empty() && (app_id.back() == '\n' || app_id.back() == '\r')) {
+                    app_id.pop_back();
+                }
+                backend->focus_app(app_id);
+            }
+        }
+    }
+    return 1;
+}
 
 namespace tinexus::comp {
 
@@ -65,6 +86,18 @@ bool TinexusServer::initialize() {
     if (!m_backend->initialize()) {
         log::error("TinexusServer: Failed to initialize backend.");
         return false;
+    }
+
+    // Initialize FIFO command socket for simple IPC (e.g., focus requests)
+    const char* xdg_runtime = getenv("XDG_RUNTIME_DIR");
+    if (xdg_runtime) {
+        std::string fifo_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
+        unlink(fifo_path.c_str());
+        mkfifo(fifo_path.c_str(), 0600);
+        int fifo_fd = open(fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+        if (fifo_fd >= 0) {
+            wl_event_loop_add_fd(m_wl_loop, fifo_fd, WL_EVENT_READABLE, handle_cmd_fifo, m_backend.get());
+        }
     }
 
     // 3. Add Wayland socket
@@ -199,7 +232,8 @@ bool TinexusServer::initialize() {
                 return;
             }
             if (shortcut_name == "close_window") {
-                log::info("[Server] close_window — (Phase B)");
+                log::info("[Server] close_window — closing focused window");
+                m_backend->close_active_window();
                 return;
             }
 

@@ -15,6 +15,8 @@ add_library(txui STATIC
     window/Window.cpp
     window/WindowDecorator.cpp
     widgets/Widget.cpp
+    widgets/TitleBarWidget.cpp
+    widgets/ChromeWidget.cpp
     layout/FlexLayout.cpp
     animation/KineticScroller.cpp
     animation/CursorAnimator.cpp

@@ -34,6 +34,7 @@ private:
     std::string m_title;
     WindowState m_state{WindowState::Creating};
     bool m_should_close{false};
+    bool m_is_maximized{false};
 
     Ref<Widget> m_root_widget{nullptr};
     bool m_frame_ready{true};
@@ -88,6 +89,9 @@ public:
     // Set the window to fullscreen mode
     void set_fullscreen(bool fullscreen) noexcept;
 
+    // Enable or disable keyboard interactivity for layer shell surfaces
+    void set_keyboard_interactivity(bool enable) noexcept;
+
     // Exposes Painter API for rendering commands.
     [[nodiscard]] Painter& painter() noexcept { return *m_painter; }
 
@@ -110,6 +114,15 @@ public:
     [[nodiscard]] Ref<Widget> root_widget() const noexcept { return m_root_widget; }
 
     [[nodiscard]] bool is_wayland_connected() const noexcept { return m_connection.has_value() && m_connection->is_valid(); }
+
+    // Set or unset maximized state (sends xdg_toplevel request to compositor)
+    void set_maximized(bool maximized) noexcept;
+
+    // Minimize (hide) the window. No restore path until a dock exists.
+    void minimize() noexcept;
+
+    // Returns true if the window is currently in maximized state.
+    [[nodiscard]] bool is_maximized() const noexcept { return m_is_maximized; }
 
     void close() noexcept;
 

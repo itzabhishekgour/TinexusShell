@@ -30,11 +30,16 @@ enum class CommandType : uint16 {
     PopClip,
 
     PushTransform,
-    PopTransform
+    PopTransform,
+    
+    Clear
 };
 
 struct BeginFrameCommand {};
 struct EndFrameCommand {};
+struct ClearCommand {
+    Color color;
+};
 
 struct SetBrushCommand {
     Brush brush;
@@ -93,7 +98,8 @@ using Command = std::variant<
     DrawGradientRectCommand,
     DrawGradientRoundedRectCommand,
     DrawCircleCommand,
-    DrawTextCommand
+    DrawTextCommand,
+    ClearCommand
 >;
 
 [[nodiscard]] inline constexpr CommandType command_type(const Command& cmd) noexcept {
@@ -108,6 +114,7 @@ using Command = std::variant<
         else if constexpr (std::is_same_v<T, DrawGradientRoundedRectCommand>) return CommandType::DrawGradientRoundedRect;
         else if constexpr (std::is_same_v<T, DrawCircleCommand>)              return CommandType::DrawCircle;
         else if constexpr (std::is_same_v<T, DrawTextCommand>)                return CommandType::DrawText;
+        else if constexpr (std::is_same_v<T, ClearCommand>)                   return CommandType::Clear;
     }, cmd);
 }
 

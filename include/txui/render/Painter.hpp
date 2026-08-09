@@ -23,6 +23,10 @@ public:
         m_buffer.push(SetBrushCommand{brush});
     }
 
+    void clear(const Color& color) {
+        m_buffer.push(ClearCommand{color});
+    }
+
     void fill_rect(const Rect& rect, const Brush& brush) {
         m_buffer.push(DrawRectCommand{rect, brush});
     }
