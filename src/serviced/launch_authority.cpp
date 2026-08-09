@@ -82,6 +82,18 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
             log::error("LaunchAuthority: Rejected OpenFile for non-executable type: {}", req.target);
             return -1;
         }
+        if (req.target.ends_with(".txapp")) {
+            std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(app_fd);
+            if (!check_override_cache(hash)) {
+                std::string sig_path = req.target + ".sig";
+                auto sig_bytes = read_sig_file(sig_path);
+                if (sig_bytes.empty() || !tinexus::guard::CryptoValidator::verify_signature_fd(app_fd, sig_bytes, "/etc/tinexus/keys/root.pub")) {
+                    log::error("LaunchAuthority: Cryptographic signature verification failed for OpenFile target {}", req.target);
+                    return -1;
+                }
+            }
+        }
+
     }
 
     pid_t pid = fork();
@@ -150,7 +162,15 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
 #ifdef __linux__
 #include <linux/close_range.h>
 #include <sys/syscall.h>
-        if (syscall(__NR_close_range, 3, ~0U, 0) != 0) {
+        int sys_ret = -1;
+        if (app_fd >= 3) {
+            int r1 = (app_fd > 3) ? syscall(__NR_close_range, 3, app_fd - 1, 0) : 0;
+            int r2 = syscall(__NR_close_range, app_fd + 1, ~0U, 0);
+            sys_ret = (r1 == 0 && r2 == 0) ? 0 : -1;
+        } else {
+            sys_ret = syscall(__NR_close_range, 3, ~0U, 0);
+        }
+        if (sys_ret != 0) {
 #endif
             // Fallback for older kernels or if close_range fails
             DIR* dir = opendir("/proc/self/fd");
