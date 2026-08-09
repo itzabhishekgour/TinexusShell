@@ -273,10 +273,10 @@ EOF_UDEV_SEAT
     # Stage any AppImages provided by the user in Temp/
     info "Checking for 3rd-party AppImages in Temp/..."
     if ls "$PROJECT_DIR/Temp/"*.AppImage 1> /dev/null 2>&1; then
-        mkdir -p "$ROOTFS_DIR/root/Downloads"
-        cp -L "$PROJECT_DIR/Temp/"*.AppImage "$ROOTFS_DIR/root/Downloads/" 2>/dev/null || true
-        chmod +x "$ROOTFS_DIR/root/Downloads/"*.AppImage 2>/dev/null || true
-        success "Staged user-provided AppImages into /root/Downloads/"
+        mkdir -p "$ROOTFS_DIR/opt/AppImages"
+        cp -L "$PROJECT_DIR/Temp/"*.AppImage "$ROOTFS_DIR/opt/AppImages/" 2>/dev/null || true
+        chmod +x "$ROOTFS_DIR/opt/AppImages/"*.AppImage 2>/dev/null || true
+        success "Staged user-provided AppImages into /opt/AppImages/"
     fi
 
     # Locale — foot uses LC_ALL/LANG; stage minimal C.UTF-8
