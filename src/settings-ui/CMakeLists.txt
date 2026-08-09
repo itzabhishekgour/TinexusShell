@@ -11,6 +11,7 @@ target_include_directories(tinexus-settings-ui PRIVATE include)
 target_link_libraries(tinexus-settings-ui PRIVATE
     tinexus_common
     tinexus_warnings
+    tinexus-guard
     txui
     PkgConfig::WAYLAND_CLIENT
 )

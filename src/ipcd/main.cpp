@@ -2,6 +2,7 @@
 #include "common/version.hpp"
 #include "ipcd/transport/unix_socket.hpp"
 #include "ipcd/transport/epoll_loop.hpp"
+#include "ipcd/transport/fd_passing.hpp"
 #include "ipcd/security/peer_validator.hpp"
 #include "ipcd/registry/service_registry.hpp"
 #include "ipcd/broker/pubsub_broker.hpp"
@@ -26,6 +27,7 @@ struct ClientState {
     std::vector<uint8_t> read_buf;  // accumulates bytes until a full message arrives
     bool header_complete{false};
     tinexus::ipcd::protocol::Header hdr{};
+    std::vector<int> pending_fds;   // accumulates fds received via SCM_RIGHTS
 };
 
 std::unordered_map<int, ClientState> g_client_states;
@@ -43,7 +45,8 @@ bool send_frame(int fd,
                 tinexus::ipcd::protocol::MessageType type,
                 uint32_t sequence_id,
                 const uint8_t* payload,
-                uint32_t payload_len) {
+                uint32_t payload_len,
+                const std::vector<int>& fds = {}) {
     using namespace tinexus::ipcd::protocol;
     Header out_hdr{};
     out_hdr.magic       = TINEXUS_IPC_MAGIC;
@@ -54,15 +57,15 @@ bool send_frame(int fd,
     out_hdr.payload_len = payload_len;
     out_hdr.checksum    = 0; // CRC32 reserved for v1.1
 
-    // Write header
-    if (write(fd, &out_hdr, sizeof(out_hdr)) != static_cast<ssize_t>(sizeof(out_hdr))) {
-        return false;
-    }
-    // Write payload
+    std::vector<uint8_t> buffer;
+    buffer.resize(sizeof(out_hdr) + payload_len);
+    std::memcpy(buffer.data(), &out_hdr, sizeof(out_hdr));
     if (payload_len > 0 && payload != nullptr) {
-        if (write(fd, payload, payload_len) != static_cast<ssize_t>(payload_len)) {
-            return false;
-        }
+        std::memcpy(buffer.data() + sizeof(out_hdr), payload, payload_len);
+    }
+
+    if (tinexus::ipcd::transport::sendmsg_with_fds(fd, buffer.data(), buffer.size(), fds) != static_cast<ssize_t>(buffer.size())) {
+        return false;
     }
     return true;
 }
@@ -73,7 +76,8 @@ bool send_frame(int fd,
 // ---------------------------------------------------------------------------
 void dispatch_message(int sender_fd,
                       const tinexus::ipcd::protocol::Header& hdr,
-                      const std::vector<uint8_t>& payload) {
+                      const std::vector<uint8_t>& payload,
+                      const std::vector<int>& fds) {
     using namespace tinexus::ipcd;
     using MT = protocol::MessageType;
     auto msg_type = static_cast<MT>(hdr.msg_type);
@@ -246,6 +250,35 @@ void dispatch_message(int sender_fd,
     }
 
     // -----------------------------------------------------------------------
+    // SYS_INSTALL_REQUEST — route to the registered "supervisor" service
+    // Includes payload file descriptor via SCM_RIGHTS.
+    // -----------------------------------------------------------------------
+    case MT::SYS_INSTALL_REQUEST: {
+        auto peer = tinexus::ipcd::security::PeerValidator::get_peer_identity(sender_fd);
+        if (!peer || peer->executable_path != "/usr/bin/tinexus-installer") {
+            tinexus::log::error("[ipcd] Rejected SYS_INSTALL_REQUEST: Unauthorized binary '{}'", 
+                                peer ? peer->executable_path : "unknown");
+            send_frame(sender_fd, MT::SYS_INSTALL_FAILED, hdr.sequence_id, nullptr, 0);
+            break;
+        }
+
+        auto svc = registry::ServiceRegistry::instance().lookup_service("supervisor");
+        if (svc.has_value() && svc->provider_fd != -1) {
+            // Forward verbatim
+            tinexus::ipcd::protocol::Header fwd_hdr = hdr;
+            fwd_hdr.flags = static_cast<uint16_t>(sender_fd & 0xFFFF);
+            if (!send_frame(svc->provider_fd, static_cast<MT>(fwd_hdr.msg_type), fwd_hdr.sequence_id, payload.data(), payload.size(), fds)) {
+                tinexus::log::warn("[ipcd] Failed to forward SYS_INSTALL_REQUEST");
+                send_frame(sender_fd, MT::SYS_INSTALL_FAILED, hdr.sequence_id, nullptr, 0);
+            }
+        } else {
+            tinexus::log::warn("[ipcd] SYS_INSTALL_REQUEST received but 'supervisor' not registered");
+            send_frame(sender_fd, MT::SYS_INSTALL_FAILED, hdr.sequence_id, nullptr, 0);
+        }
+        break;
+    }
+
+    // -----------------------------------------------------------------------
     // SYS_SHUTDOWN — graceful shutdown signal
     // -----------------------------------------------------------------------
     case MT::SYS_SHUTDOWN:
@@ -271,20 +304,23 @@ void handle_client_data(int fd,
 
     // Edge-triggered: read until EAGAIN
     while (true) {
-        uint8_t tmp[4096];
-        ssize_t n = read(fd, tmp, sizeof(tmp));
-        if (n > 0) {
-            state.read_buf.insert(state.read_buf.end(), tmp, tmp + n);
-        } else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+        ssize_t n = tinexus::ipcd::transport::recvmsg_with_fds(fd, state.read_buf, state.pending_fds);
+        if (n == 0 || (n == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
             // Connection closed or error
             tinexus::log::debug("[ipcd] Client fd={} disconnected", fd);
             tinexus::ipcd::registry::ServiceRegistry::instance().unregister_by_fd(fd);
             tinexus::ipcd::broker::PubSubBroker::instance().unsubscribe_all(fd);
             loop.unregister_fd(fd);
+            
+            // Close any leaked FDs in the buffer
+            for (int pfd : state.pending_fds) {
+                close(pfd);
+            }
+            
             g_client_states.erase(fd);
             close(fd);
             return;
-        } else {
+        } else if (n == -1) {
             break; // EAGAIN — no more data
         }
     }
@@ -322,16 +358,28 @@ void handle_client_data(int fd,
         }
 
         // Wait for full payload
-        if (state.read_buf.size() < state.hdr.payload_len) break;
+        uint32_t payload_len = state.hdr.payload_len;
+        if (state.read_buf.size() < payload_len) break;
 
-        std::vector<uint8_t> payload(state.read_buf.begin(),
-                                     state.read_buf.begin() + state.hdr.payload_len);
+        std::vector<uint8_t> payload_vec;
+        if (payload_len > 0) {
+            payload_vec.assign(state.read_buf.begin(),
+                               state.read_buf.begin() + payload_len);
+        }
+
+        dispatch_message(fd, state.hdr, payload_vec, state.pending_fds);
+
+        // Clear FDs after dispatching (they have been forwarded or discarded)
+        for (int pfd : state.pending_fds) {
+            // If it was forwarded, sendmsg_with_fds duplicated it in the kernel for the receiver,
+            // but we still need to close our local reference.
+            close(pfd);
+        }
+        state.pending_fds.clear();
+
         state.read_buf.erase(state.read_buf.begin(),
-                             state.read_buf.begin() + state.hdr.payload_len);
+                             state.read_buf.begin() + payload_len);
         state.header_complete = false;
-
-        // Dispatch outside the lock to avoid deadlocks if dispatch sends back
-        dispatch_message(fd, state.hdr, payload);
     }
 }
 

@@ -296,6 +296,9 @@ Key translate_linux_keycode(uint32 keycode) noexcept {
         case KEY_DOWN: return Key::Down;
         case KEY_LEFT: return Key::Left;
         case KEY_RIGHT: return Key::Right;
+        case KEY_SLASH: return Key::Slash;
+        case KEY_DOT: return Key::Period;
+        case KEY_MINUS: return Key::Minus;
         case KEY_F1: return Key::F1;
         case KEY_F2: return Key::F2;
         case KEY_F3: return Key::F3;

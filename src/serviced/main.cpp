@@ -5,6 +5,7 @@
 #include "serviced/process_manager.hpp"
 #include "serviced/runtime_socket.hpp"
 #include "serviced/heartbeat_watchdog.hpp"
+#include "serviced/ipcd_client.hpp"
 #include <iostream>
 #include <csignal>
 #include <cstdlib>
@@ -87,6 +88,7 @@ void signal_handler(int signal) {
     } else if (g_socket) {
         tinexus::log::info("Received signal {}, stopping tinexus-serviced...", signal);
         g_socket->stop();
+        tinexus::serviced::IpcdClient::instance().stop();
     }
 }
 } // namespace
@@ -177,10 +179,12 @@ int main(int argc, char** argv) {
     tinexus::serviced::ProcessManager pm(graph);
     g_pm = &pm;
 
-    tinexus::serviced::RuntimeControlSocket socket(pm);
-    g_socket = &socket;
+    tinexus::serviced::RuntimeControlSocket runtime_sock(pm);
+    g_socket = &runtime_sock;
 
-    if (!socket.start()) {
+    tinexus::serviced::IpcdClient::instance().start();
+
+    if (!runtime_sock.start()) {
         tinexus::log::error("Failed to start Runtime Control Socket");
         if (splash_pid > 0) kill(splash_pid, SIGTERM);
         return 1;
@@ -210,7 +214,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    socket.run_accept_loop();
+    runtime_sock.run_accept_loop();
     return 0;
 }
-

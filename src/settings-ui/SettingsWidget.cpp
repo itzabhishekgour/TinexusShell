@@ -10,6 +10,9 @@
 #include <string>
 #include <ctime>
 #include <cmath>
+#include <filesystem>
+#include <fcntl.h>
+#include "guard/crypto_validator.hpp"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design Token Palette — matches docs/05_UI_UX_GUIDELINES.md
@@ -118,6 +121,8 @@ SettingsWidget::SettingsWidget() {
             }
         }
     }
+    
+    refresh_unverified_apps();
 }
 
 void SettingsWidget::select_page(SettingsPage page) {
@@ -140,19 +145,51 @@ bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
             else if (py >= ITEM_Y0 + ITEM_H + 4 && py <= ITEM_Y0 + (ITEM_H + 4) * 2 - 4) new_hover = 1;
             else if (py >= ITEM_Y0 + (ITEM_H + 4) * 2 && py <= ITEM_Y0 + (ITEM_H + 4) * 3 - 4) new_hover = 2;
             else if (py >= ITEM_Y0 + (ITEM_H + 4) * 3 && py <= ITEM_Y0 + (ITEM_H + 4) * 4 - 4) new_hover = 3;
+            else if (py >= ITEM_Y0 + (ITEM_H + 4) * 4 && py <= ITEM_Y0 + (ITEM_H + 4) * 5 - 4) new_hover = 4;
         }
 
         if (new_hover != m_hovered_tab) {
             m_hovered_tab = new_hover;
             mark_needs_paint();
         }
+        
+        if (m_current_page == SettingsPage::PrivacySecurity) {
+            bool needs_paint = false;
+            for (auto& app : m_unverified_apps) {
+                bool hover = (px >= app.btn_rect.x() && px <= app.btn_rect.right() &&
+                              py >= app.btn_rect.y() && py <= app.btn_rect.bottom());
+                if (app.is_hovered != hover) {
+                    app.is_hovered = hover;
+                    needs_paint = true;
+                }
+            }
+            if (needs_paint) mark_needs_paint();
+        }
+        
         return false;
     } else if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
         if (m_hovered_tab == 0) { select_page(SettingsPage::Display); return true; }
         else if (m_hovered_tab == 1) { select_page(SettingsPage::Personalization); return true; }
         else if (m_hovered_tab == 2) { select_page(SettingsPage::System); return true; }
-        else if (m_hovered_tab == 3) { select_page(SettingsPage::About); return true; }
+        else if (m_hovered_tab == 3) { select_page(SettingsPage::PrivacySecurity); return true; }
+        else if (m_hovered_tab == 4) { select_page(SettingsPage::About); return true; }
         return false;
+    }
+    
+    // Pass event to PrivacySecurity page if active
+    if (m_current_page == SettingsPage::PrivacySecurity && event.type == txui::EventType::PointerButtonPress) {
+        if (event.pointer.button == txui::MouseButton::Left) {
+            double px = event.pointer.x;
+            double py = event.pointer.y;
+            for (auto& app : m_unverified_apps) {
+                if (px >= app.btn_rect.x() && px <= app.btn_rect.right() &&
+                    py >= app.btn_rect.y() && py <= app.btn_rect.bottom()) {
+                    trust_app(app.hash);
+                    mark_needs_paint();
+                    return true;
+                }
+            }
+        }
     }
     return false;
 }
@@ -225,6 +262,7 @@ void SettingsWidget::paint_override(txui::Painter& painter) const noexcept {
         case SettingsPage::Display:         paint_display_page(painter, m_content_rect);         break;
         case SettingsPage::Personalization: paint_personalization_page(painter, m_content_rect); break;
         case SettingsPage::System:          paint_system_page(painter, m_content_rect);          break;
+        case SettingsPage::PrivacySecurity: paint_privacy_security_page(painter, m_content_rect);break;
         case SettingsPage::About:           paint_about_page(painter, m_content_rect);           break;
     }
 }
@@ -236,7 +274,8 @@ void SettingsWidget::paint_sidebar(txui::Painter& painter) const noexcept {
     paint_sidebar_item(painter, "Display",         SettingsPage::Display,         ITEM_Y0);
     paint_sidebar_item(painter, "Personalization", SettingsPage::Personalization, ITEM_Y0 + ITEM_H + 4);
     paint_sidebar_item(painter, "System",          SettingsPage::System,          ITEM_Y0 + (ITEM_H + 4) * 2);
-    paint_sidebar_item(painter, "About",           SettingsPage::About,           ITEM_Y0 + (ITEM_H + 4) * 3);
+    paint_sidebar_item(painter, "Privacy",         SettingsPage::PrivacySecurity, ITEM_Y0 + (ITEM_H + 4) * 3);
+    paint_sidebar_item(painter, "About",           SettingsPage::About,           ITEM_Y0 + (ITEM_H + 4) * 4);
 }
 
 void SettingsWidget::paint_sidebar_item(txui::Painter& painter, const std::string& label,
@@ -264,7 +303,8 @@ void SettingsWidget::paint_sidebar_item(txui::Painter& painter, const std::strin
         if (page == SettingsPage::Display) tab_idx = 0;
         else if (page == SettingsPage::Personalization) tab_idx = 1;
         else if (page == SettingsPage::System) tab_idx = 2;
-        else if (page == SettingsPage::About) tab_idx = 3;
+        else if (page == SettingsPage::PrivacySecurity) tab_idx = 3;
+        else if (page == SettingsPage::About) tab_idx = 4;
 
         if (m_hovered_tab == tab_idx) {
             painter.fill_rounded_rect(
@@ -486,6 +526,99 @@ void SettingsWidget::paint_system_page(txui::Painter& painter, const txui::Rect&
         );
         painter.draw_text(txui::Point(bx + 14, c3.y() + 55), actions[i],
                           danger ? txui::Color(255, 180, 180, 240) : TXT_PRI, 1.0);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page: Privacy & Security
+// ─────────────────────────────────────────────────────────────────────────────
+void SettingsWidget::refresh_unverified_apps() {
+    m_unverified_apps.clear();
+    std::string apps_dir = "/opt/tinexus-apps";
+    if (!std::filesystem::exists(apps_dir)) return;
+
+    for (const auto& entry : std::filesystem::directory_iterator(apps_dir)) {
+        if (!entry.is_regular_file()) continue;
+        std::string path = entry.path().string();
+        if (path.ends_with(".sig")) continue;
+
+        int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+
+        std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(fd);
+        
+        bool trusted = false;
+        std::ifstream overrides("/var/lib/tinexus/trust-overrides.conf");
+        if (overrides.is_open()) {
+            std::string line;
+            while (std::getline(overrides, line)) {
+                if (line == hash) { trusted = true; break; }
+            }
+        }
+        
+        if (trusted) {
+            close(fd);
+            continue;
+        }
+
+        std::string sig_path = path + ".sig";
+        std::vector<uint8_t> sig_bytes;
+        std::ifstream sig_file(sig_path, std::ios::binary);
+        if (sig_file.is_open()) {
+            sig_bytes = std::vector<uint8_t>((std::istreambuf_iterator<char>(sig_file)), std::istreambuf_iterator<char>());
+        }
+
+        if (sig_bytes.empty() || !tinexus::guard::CryptoValidator::verify_signature_fd(fd, sig_bytes, "/etc/tinexus/keys/root.pub")) {
+            UnverifiedApp app;
+            app.name = entry.path().filename().string();
+            app.path = path;
+            app.hash = hash;
+            m_unverified_apps.push_back(app);
+        }
+        close(fd);
+    }
+}
+
+void SettingsWidget::trust_app(const std::string& hash) {
+    std::ofstream overrides("/var/lib/tinexus/trust-overrides.conf", std::ios::app);
+    if (overrides.is_open()) {
+        overrides << hash << "\n";
+    }
+    refresh_unverified_apps();
+}
+
+void SettingsWidget::paint_privacy_security_page(txui::Painter& painter, const txui::Rect& area) const noexcept {
+    const float64 x  = area.x() + 40;
+    float64 y         = area.y() + 32;
+    const float64 cw  = area.width() - 80;
+
+    painter.draw_text(txui::Point(x, y), "Privacy & Security", TXT_PRI, 2.0);
+    y += 52;
+
+    // Card 1: Gatekeeper
+    txui::Rect c1(x, y, cw, 120 + m_unverified_apps.size() * 50);
+    draw_card(painter, c1, "Security");
+    
+    painter.draw_text(txui::Point(x + 20, y + 46), "Allow applications downloaded from:", TXT_SEC, 1.0);
+    painter.draw_text(txui::Point(x + 30, y + 66), "• Tinexus Verified Developers", TXT_PRI, 1.0);
+    
+    y += 90;
+
+    if (!m_unverified_apps.empty()) {
+        painter.fill_rect(txui::Rect(x + 20, y, cw - 40, 1), DIVIDER);
+        y += 15;
+        
+        for (auto& app : const_cast<SettingsWidget*>(this)->m_unverified_apps) {
+            painter.draw_text(txui::Point(x + 20, y + 16), "\"" + app.name + "\" was blocked because it is not from an identified developer.", TXT_SEC, 1.0);
+            
+            app.btn_rect = txui::Rect(x + cw - 130, y + 4, 110, 28);
+            painter.fill_gradient_rounded_rect(app.btn_rect, 6.0, 
+                app.is_hovered ? txui::Color(100, 100, 120, 200) : txui::Color(60, 60, 80, 200),
+                app.is_hovered ? txui::Color(80, 80, 100, 180) : txui::Color(40, 40, 60, 180));
+            painter.draw_text(txui::Point(app.btn_rect.x() + 16, app.btn_rect.y() + 8), "Open Anyway", TXT_PRI, 1.0);
+            
+            y += 40;
+        }
     }
 }
 

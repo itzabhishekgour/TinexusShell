@@ -10,6 +10,7 @@ enum class SettingsPage {
     Display,
     Personalization,
     System,
+    PrivacySecurity,
     About
 };
 
@@ -52,6 +53,7 @@ private:
     void paint_display_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
     void paint_personalization_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
     void paint_system_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
+    void paint_privacy_security_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
     void paint_about_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
 
     // Rects updated by layout
@@ -71,6 +73,18 @@ private:
     int m_screen_timeout_min{5};
     int m_sleep_after_min{15};
     std::string m_power_profile{"Balanced"};
+
+    // Privacy & Security State
+    struct UnverifiedApp {
+        std::string name;
+        std::string path;
+        std::string hash;
+        bool is_hovered{false};
+        txui::Rect btn_rect;
+    };
+    std::vector<UnverifiedApp> m_unverified_apps;
+    void refresh_unverified_apps();
+    void trust_app(const std::string& hash);
 };
 
 } // namespace tinexus::settings_ui

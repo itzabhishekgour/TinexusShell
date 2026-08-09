@@ -6,15 +6,18 @@ add_executable(tinexus-serviced
     process_manager.cpp
     runtime_socket.cpp
     launch_authority.cpp
+    install_handler.cpp
     main.cpp
 )
 
 target_include_directories(tinexus-serviced PRIVATE
     include
+    ../ipcd/include
 )
 
 target_link_libraries(tinexus-serviced PRIVATE
     tinexus_common
+    tinexus-guard
     tinexus_warnings
     tinexus_sanitizers
 )

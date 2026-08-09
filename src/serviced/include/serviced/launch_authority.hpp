@@ -14,9 +14,13 @@ public:
     LaunchAuthority() = default;
     ~LaunchAuthority() = default;
 
-    pid_t execute_action(const ActionRequest& req);
+    pid_t execute_action(const ActionRequest& req, int app_fd = -1);
     pid_t launch_app(const std::string& app_id, const std::string& exec_cmd);
-    bool is_valid_executable(const std::string& exec_cmd) const;
+    
+    // Returns a valid file descriptor (>0) if it's a secured app, 
+    // -2 if it's a base system binary (no validation needed),
+    // and -1 if validation failed.
+    int validate_and_get_fd(const std::string& exec_cmd) const;
 };
 
 } // namespace tinexus::serviced
