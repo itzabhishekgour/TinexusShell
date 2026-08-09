@@ -150,6 +150,32 @@ EOF
         ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
             [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
         done
+        done
+    fi
+
+    info "Staging AppImage support (FUSE3 and tx-appimage)..."
+    if [ -f "/usr/bin/fusermount3" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/bin"
+        cp -L "/usr/bin/fusermount3" "$ROOTFS_DIR/usr/bin/"
+        # FUSE relies on setuid or proper permissions, but inside our session it's often user-mounted.
+        chmod +s "$ROOTFS_DIR/usr/bin/fusermount3" 2>/dev/null || true
+        
+        # Pull in libfuse3.so.3
+        ldd "/usr/bin/fusermount3" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+        done
+        ldd "/usr/bin/fusermount3" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+        done
+    else
+        warn "fusermount3 not found on host. AppImages will rely solely on extraction fallback."
+    fi
+
+    # Stage the tx-appimage wrapper script
+    if [ -f "$PROJECT_DIR/tools/tinexus-appimage-runner.sh" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/bin"
+        cp -L "$PROJECT_DIR/tools/tinexus-appimage-runner.sh" "$ROOTFS_DIR/usr/bin/tx-appimage"
+        chmod +x "$ROOTFS_DIR/usr/bin/tx-appimage"
     fi
 
     info "Staging udevd and udevadm for input device detection (libinput requirement)..."

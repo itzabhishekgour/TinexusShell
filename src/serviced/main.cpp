@@ -134,6 +134,25 @@ int main(int argc, char** argv) {
         tinexus::log::error("Failed to create /run/user/0: {}", e.what());
     }
 
+    // ── Phase 1.5 AppImage Cleanup Sweep ──
+    // If tinexus-serviced crashed or a third-party app was SIGKILLed, its temporary
+    // AppImage extraction directory might have been left behind. We sweep them on boot
+    // from common tmpfs locations to prevent OOM leaks over time.
+    try {
+        for (const auto& path : {"/tmp", "/run/user/0", "/run/user/1000"}) {
+            if (std::filesystem::exists(path)) {
+                for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                    if (entry.is_directory() && entry.path().filename().string().starts_with("appimage_extract_")) {
+                        tinexus::log::warn("Sweeping stale AppImage extract dir: {}", entry.path().string());
+                        std::filesystem::remove_all(entry.path());
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        tinexus::log::error("Failed AppImage sweep: {}", e.what());
+    }
+
     // ── Launch splash screen immediately — fills the framebuffer before Wayland ──
     // Splash runs on /dev/fb0 independently of the compositor. We kill it with
     // SIGTERM once wayland-0 is up so the compositor's first frame takes over.
