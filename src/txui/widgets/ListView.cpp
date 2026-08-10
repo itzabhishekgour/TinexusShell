@@ -61,13 +61,18 @@ void ListView::paint_override(Painter& painter) const noexcept {
     int32 i = 0;
     for (const auto& child : m_content_layout->children()) {
         Rect item_frame = child->frame();
-        // The child frame is relative to m_content_layout, but since m_scroll_area is root child, 
-        // its actual screen position is what child->frame() contains after layout!
         
         if (i == m_selected_index) {
-            painter.fill_rounded_rect(item_frame, 4.0, Color(0, 100, 255, 255)); // Mac Blue
+            // Selected row inset and custom color
+            Rect inset_frame(item_frame.left() + 4.0, item_frame.top() + 2.0, 
+                             std::max(0.0, item_frame.width() - 8.0), std::max(0.0, item_frame.height() - 4.0));
+            
+            painter.fill_rounded_rect(inset_frame, 4.0, Color(42, 48, 56, 255));
         } else if (i == m_hover_index) {
-            painter.fill_rounded_rect(item_frame, 4.0, Color(255, 255, 255, 30));
+            // Hover row inset and subtle color
+            Rect inset_frame(item_frame.left() + 4.0, item_frame.top() + 2.0, 
+                             std::max(0.0, item_frame.width() - 8.0), std::max(0.0, item_frame.height() - 4.0));
+            painter.fill_rounded_rect(inset_frame, 4.0, Color(255, 255, 255, 30));
         }
         i++;
     }

@@ -2,6 +2,7 @@
 #include <txui/widgets/Icon.hpp>
 #include <txui/widgets/Label.hpp>
 #include <txui/layout/FlexLayout.hpp>
+#include <txui/layout/Padding.hpp>
 
 namespace tinexus::files::ui {
 
@@ -46,10 +47,16 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         auto label = txui::make_ref<txui::Label>(item.name);
         label->set_font_size(14.0);
         
+        // Add 8px padding before the label to separate it from the icon
+        auto padded_label = txui::make_ref<txui::Padding>(txui::Insets(0, 0, 0, 8.0), label);
+
         row->add_child(icon);
-        row->add_child(label);
+        row->add_child(padded_label);
         
-        m_list_view->add_item(row);
+        // Add 12px horizontal and 6px vertical padding to the entire row
+        auto padded_row = txui::make_ref<txui::Padding>(txui::Insets(6.0, 12.0), row);
+        
+        m_list_view->add_item(padded_row);
     }
     
     if (m_model->selected_index >= 0) {
