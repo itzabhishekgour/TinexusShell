@@ -30,20 +30,6 @@ public:
         uid_t uid = getuid();
         m_socket_path = "/run/user/" + std::to_string(uid) + "/tinexus/ipc.sock";
 
-        m_fd = connect_to_ipcd(m_socket_path);
-        if (m_fd == -1) {
-            log::warn("[serviced-ipc] ipcd not available at {} — running without IPC", m_socket_path);
-            return false;
-        }
-
-        if (!register_service("supervisor")) {
-            log::error("[serviced-ipc] Failed to register with ipcd");
-            close(m_fd);
-            m_fd = -1;
-            return false;
-        }
-
-        log::info("[serviced-ipc] Registered as 'supervisor' with tinexus-ipcd");
         m_running = true;
         m_thread = std::thread(&IpcdClient::run_loop, this);
         return true;
@@ -111,6 +97,23 @@ private:
     }
 
     void run_loop() {
+        m_fd = connect_to_ipcd(m_socket_path);
+        if (m_fd == -1) {
+            log::warn("[serviced-ipc] ipcd not available at {} — running without IPC", m_socket_path);
+            m_running = false;
+            return;
+        }
+
+        if (!register_service("supervisor")) {
+            log::error("[serviced-ipc] Failed to register with ipcd");
+            close(m_fd);
+            m_fd = -1;
+            m_running = false;
+            return;
+        }
+
+        log::info("[serviced-ipc] Registered as 'supervisor' with tinexus-ipcd");
+
         std::vector<uint8_t> read_buf;
         
         while (m_running) {

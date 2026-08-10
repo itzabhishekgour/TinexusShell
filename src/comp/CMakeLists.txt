@@ -72,6 +72,7 @@ target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/animation/include
     ${CMAKE_CURRENT_SOURCE_DIR}/input/include
     ${CMAKE_CURRENT_SOURCE_DIR}/surface/include
+    ../ipcd/include
 )
 
 add_compile_definitions(WLR_USE_UNSTABLE=1)

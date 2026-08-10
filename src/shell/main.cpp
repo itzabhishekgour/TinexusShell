@@ -61,6 +61,7 @@ constexpr size_t MAX_RECENT = 5;
 #include <fstream>
 #include <cctype>
 #include <fcntl.h>
+#include "ipcd/protocol/header.hpp"
 
 // ---------------------------------------------------------------------------
 // is_process_running
@@ -534,7 +535,7 @@ void ipc_listener_thread() {
     static_assert(sizeof(Hdr) == 22, "");
 
     uint16_t topic = 1000;
-    Hdr sh; sh.msg_type = 2; sh.payload_len = sizeof(topic);
+    Hdr sh; sh.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC); sh.payload_len = sizeof(topic);
     send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
     send(fd, &topic, sizeof(topic), MSG_NOSIGNAL);
     log::info("[Shell] Subscribed to LAUNCHER_OPEN (1000) via ipcd");

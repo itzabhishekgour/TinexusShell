@@ -18,6 +18,9 @@
 #include <csignal>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <poll.h>
+
+#include "ipcd/protocol/header.hpp"
 
 #include <wayland-server-core.h>
 
@@ -161,16 +164,22 @@ bool TinexusServer::initialize() {
                         };
 #pragma pack(pop)
                         IpcHeader msg1;
-                        msg1.msg_type = 1005; // SHORTCUT_ACTIVATED
+                        msg1.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED);
                         send(sock, &msg1, sizeof(msg1), MSG_NOSIGNAL);
 
                         IpcHeader msg2;
-                        msg2.msg_type = 10; // SYS_PING
+                        msg2.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_PING);
                         send(sock, &msg2, sizeof(msg2), MSG_NOSIGNAL);
 
-                        // Block until we get PONG to ensure ipcd read the queue
-                        IpcHeader rx;
-                        recv(sock, &rx, sizeof(rx), 0);
+                        // Use poll() with a bounded timeout to prevent the compositor
+                        // from freezing if ipcd is slow, crashed, or unresponsive.
+                        struct pollfd pfd = {sock, POLLIN, 0};
+                        if (poll(&pfd, 1, 100) > 0 && (pfd.revents & POLLIN)) {
+                            IpcHeader rx;
+                            recv(sock, &rx, sizeof(rx), 0);
+                        } else {
+                            log::warn("[Server] Ctrl+K: ipcd did not respond to SYS_PING within 100ms");
+                        }
                     }
                     close(sock);
                 }

@@ -6,6 +6,7 @@ add_executable(tinexus-shell
 target_include_directories(tinexus-shell PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/indexer/include
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
 )
 
 target_link_libraries(tinexus-shell PRIVATE
