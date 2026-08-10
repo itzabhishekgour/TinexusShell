@@ -15,7 +15,8 @@ Tinexus Platform tracks component maturity transparently across three tiers:
 
 | Subsystem Component | Implementation Tier | Verified Technical Highlights |
 |---|---|---|
-| **Terminal Emulator (`tinexus-terminal`)** | 🟢 **REAL SYSTEM APIs** | POSIX `posix_openpt()`, `grantpt()`, `unlockpt()`, `ptsname()`, `fork()`, `execvp()`, `dup2()`, `ioctl(TIOCSWINSZ)` PTY master/slave engine. |
+| **Terminal Emulator (`foot`)** | 🟢 **BUNDLED THIRD-PARTY** | Fast Wayland terminal bundled via ISO (`C.UTF-8` locale + clipboard enabled). Default terminal. |
+| **Native Terminal (`tinexus-terminal`)** | 🟡 **STUB / NOT INTEGRATED** | Native PTY engine skeleton; currently exits immediately. Not default. |
 | **System Monitor (`tinexus-monitor`)** | 🟢 **REAL SYSTEM APIs** | Direct Linux `/proc/stat` reader, per-core delta usage parser, `/proc/meminfo`, `/proc/diskstats`, `/proc/net/dev`, `/proc/[pid]/stat`. |
 | **Platform Supervisor (`tinexus-serviced`)** | 🟢 **REAL SYSTEM APIs** | POSIX `fork()`, `execvp()`, `kill()`, `waitpid()`, supervision watchdog, Unix sockets (`/tmp/tinexus-serviced.sock`). |
 | **IPC Broker (`tinexus-ipcd`) & SDK** | 🟢 **REAL SYSTEM APIs** | Real Unix domain socket broker, IPC packet framing, payload serialization, `libtinexus-sdk.so` client library. |

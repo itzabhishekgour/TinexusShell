@@ -49,6 +49,12 @@ private:
     void paint_sidebar_item(txui::Painter& painter, const std::string& label,
                             SettingsPage page, txui::float64 y) const noexcept;
 
+    void draw_icon_display(txui::Painter& painter, txui::float64 cx, txui::float64 cy) const noexcept;
+    void draw_icon_personalization(txui::Painter& painter, txui::float64 cx, txui::float64 cy) const noexcept;
+    void draw_icon_system(txui::Painter& painter, txui::float64 cx, txui::float64 cy) const noexcept;
+    void draw_icon_privacy(txui::Painter& painter, txui::float64 cx, txui::float64 cy) const noexcept;
+    void draw_icon_about(txui::Painter& painter, txui::float64 cx, txui::float64 cy) const noexcept;
+
     // Content pages
     void paint_display_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
     void paint_personalization_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
@@ -62,7 +68,7 @@ private:
 
     static constexpr txui::float64 SIDEBAR_W = 220.0;
     static constexpr txui::float64 ITEM_H    = 48.0;
-    static constexpr txui::float64 ITEM_Y0   = 80.0; // below title
+    static constexpr txui::float64 ITEM_Y0   = 124.0; // below title and search bar
 
     // System State
     std::string m_os_version;

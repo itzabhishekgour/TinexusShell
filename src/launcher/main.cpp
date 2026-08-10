@@ -249,8 +249,6 @@ static std::vector<AppItem> load_system_apps() {
 
     // Built-in system defaults
     apps.push_back({"Foot Terminal", "foot", "Fast Wayland Terminal Emulator", true, "utilities-terminal"});
-    apps.push_back({"Weston Terminal", "weston-terminal", "Wayland Demo Terminal", true, "utilities-terminal"});
-    apps.push_back({"Alacritty", "alacritty", "GPU Accelerated Terminal", true, "utilities-terminal"});
     apps.push_back({"Tinexus System Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor"});
     apps.push_back({"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", false, "preferences-desktop"});
     apps.push_back({"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", false, "system-software-install"});

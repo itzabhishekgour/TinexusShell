@@ -271,11 +271,35 @@ void SettingsWidget::paint_override(txui::Painter& painter) const noexcept {
 // Sidebar
 // ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::paint_sidebar(txui::Painter& painter) const noexcept {
-    paint_sidebar_item(painter, "Display",         SettingsPage::Display,         ITEM_Y0);
-    paint_sidebar_item(painter, "Personalization", SettingsPage::Personalization, ITEM_Y0 + ITEM_H + 4);
-    paint_sidebar_item(painter, "System",          SettingsPage::System,          ITEM_Y0 + (ITEM_H + 4) * 2);
-    paint_sidebar_item(painter, "Privacy",         SettingsPage::PrivacySecurity, ITEM_Y0 + (ITEM_H + 4) * 3);
-    paint_sidebar_item(painter, "About",           SettingsPage::About,           ITEM_Y0 + (ITEM_H + 4) * 4);
+    const float64 sy = m_sidebar_rect.y();
+    
+    // ── Search Bar
+    // Title is drawn at sy + 22. The text (size 2.0) has descenders reaching ~sy + 36.
+    // Placing search bar at sy + 90 guarantees a massive >50px visual gap.
+    const float64 search_y = sy + 90.0;
+    const float64 search_x = m_sidebar_rect.x() + 10;
+    const float64 search_w = SIDEBAR_W - 20;
+    // Base dark layer
+    painter.fill_rounded_rect(txui::Rect(search_x, search_y, search_w, 32.0), 8.0, txui::Color(255, 255, 255, 12));
+    // Inner slightly darker layer to create a 1px border effect
+    painter.fill_rounded_rect(txui::Rect(search_x + 1, search_y + 1, search_w - 2, 30.0), 7.0, txui::Color(0, 0, 0, 80));
+    
+    // Search icon (magnifying glass)
+    const float64 icon_cx = search_x + 16.0;
+    const float64 icon_cy = search_y + 16.0;
+    painter.draw_circle(txui::Point(icon_cx, icon_cy), 5.0, 1.5, TXT_SEC);
+    painter.fill_rect(txui::Rect(icon_cx + 3.0, icon_cy + 3.0, 4.0, 1.5), TXT_SEC); // simple handle
+
+    painter.draw_text(txui::Point(search_x + 32, search_y + 8), "Search", TXT_SEC, 1.0);
+
+    // ── Sidebar Items
+    const float64 items_start_y = search_y + 48.0;
+    
+    paint_sidebar_item(painter, "Display",         SettingsPage::Display,         items_start_y);
+    paint_sidebar_item(painter, "Personalization", SettingsPage::Personalization, items_start_y + ITEM_H + 4);
+    paint_sidebar_item(painter, "System",          SettingsPage::System,          items_start_y + (ITEM_H + 4) * 2);
+    paint_sidebar_item(painter, "Privacy",         SettingsPage::PrivacySecurity, items_start_y + (ITEM_H + 4) * 3);
+    paint_sidebar_item(painter, "About",           SettingsPage::About,           items_start_y + (ITEM_H + 4) * 4);
 }
 
 void SettingsWidget::paint_sidebar_item(txui::Painter& painter, const std::string& label,
@@ -315,32 +339,116 @@ void SettingsWidget::paint_sidebar_item(txui::Painter& painter, const std::strin
         }
     }
 
-    // Icon circle
-    const float64 icon_cx = x + 16;
-    const float64 icon_cy = y + ITEM_H * 0.5;
-    if (active) {
-        painter.fill_circle(txui::Point(icon_cx, icon_cy), 9.0, ACCENT_LOW);
-        painter.draw_circle(txui::Point(icon_cx, icon_cy), 9.0, 1.0, ACCENT_MID);
-    } else {
-        painter.draw_circle(txui::Point(icon_cx, icon_cy), 8.0, 1.0,
-                            txui::Color(100, 100, 140, 80));
+    // Icon Tile
+    const float64 tile_x = x + 10;
+    const float64 tile_y = y + ITEM_H * 0.5 - 14.0;
+    txui::Rect tile_rect(tile_x, tile_y, 28, 28);
+
+    if (page == SettingsPage::Display) {
+        painter.fill_gradient_rounded_rect(tile_rect, 6.0, txui::Color(80, 150, 255, 255), txui::Color(40, 100, 240, 255));
+        draw_icon_display(painter, tile_x, tile_y);
+    } else if (page == SettingsPage::Personalization) {
+        painter.fill_gradient_rounded_rect(tile_rect, 6.0, txui::Color(255, 80, 150, 255), txui::Color(240, 40, 100, 255));
+        draw_icon_personalization(painter, tile_x, tile_y);
+    } else if (page == SettingsPage::System) {
+        painter.fill_gradient_rounded_rect(tile_rect, 6.0, txui::Color(140, 140, 150, 255), txui::Color(100, 100, 110, 255));
+        draw_icon_system(painter, tile_x, tile_y);
+    } else if (page == SettingsPage::PrivacySecurity) {
+        painter.fill_gradient_rounded_rect(tile_rect, 6.0, txui::Color(255, 180, 50, 255), txui::Color(240, 140, 30, 255));
+        draw_icon_privacy(painter, tile_x, tile_y);
+    } else if (page == SettingsPage::About) {
+        painter.fill_gradient_rounded_rect(tile_rect, 6.0, txui::Color(50, 200, 180, 255), txui::Color(30, 160, 140, 255));
+        draw_icon_about(painter, tile_x, tile_y);
     }
 
     // Label
     const txui::Color col = active ? TXT_PRI : TXT_SEC;
-    painter.draw_text(txui::Point(x + 30, y + ITEM_H * 0.5 - 7), label, col, 1.0);
+    painter.draw_text(txui::Point(x + 48, y + ITEM_H * 0.5 - 7), label, col, 1.0);
+}
+
+void SettingsWidget::draw_icon_display(txui::Painter& painter, txui::float64 tx, txui::float64 ty) const noexcept {
+    // Monitor frame (outer solid)
+    painter.fill_rounded_rect(txui::Rect(tx+5, ty+6, 18, 12), 2.0, txui::Color(255, 255, 255, 255));
+    // Screen (inner, matches tile color)
+    painter.fill_rect(txui::Rect(tx+7, ty+8, 14, 8), txui::Color(80, 150, 255, 255));
+    // Stand
+    painter.fill_rect(txui::Rect(tx+12, ty+18, 4, 3), txui::Color(255, 255, 255, 255));
+    // Base
+    painter.fill_rect(txui::Rect(tx+8, ty+21, 12, 2.0), txui::Color(255, 255, 255, 255));
+}
+
+void SettingsWidget::draw_icon_personalization(txui::Painter& painter, txui::float64 tx, txui::float64 ty) const noexcept {
+    // Palette body
+    painter.fill_circle(txui::Point(tx+14, ty+14), 8.0, txui::Color(255, 255, 255, 255));
+    // Thumb hole
+    painter.fill_circle(txui::Point(tx+18, ty+15), 2.5, txui::Color(240, 60, 90, 255));
+    // Paint dots
+    painter.fill_circle(txui::Point(tx+10, ty+11), 1.5, txui::Color(240, 60, 90, 255));
+    painter.fill_circle(txui::Point(tx+10, ty+17), 1.5, txui::Color(240, 60, 90, 255));
+    painter.fill_circle(txui::Point(tx+14, ty+9), 1.5, txui::Color(240, 60, 90, 255));
+}
+
+void SettingsWidget::draw_icon_system(txui::Painter& painter, txui::float64 tx, txui::float64 ty) const noexcept {
+    // Chip body
+    painter.fill_rounded_rect(txui::Rect(tx+7, ty+7, 14, 14), 2.0, txui::Color(255, 255, 255, 255));
+    // Inner core
+    painter.fill_rect(txui::Rect(tx+10, ty+10, 8, 8), txui::Color(110, 110, 120, 255));
+    // Pins top/bottom
+    painter.fill_rect(txui::Rect(tx+9, ty+4, 2, 3), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+13, ty+4, 2, 3), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+17, ty+4, 2, 3), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+9, ty+21, 2, 3), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+13, ty+21, 2, 3), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+17, ty+21, 2, 3), txui::Color(255, 255, 255, 255));
+    // Pins left/right
+    painter.fill_rect(txui::Rect(tx+4, ty+9, 3, 2), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+4, ty+13, 3, 2), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+4, ty+17, 3, 2), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+21, ty+9, 3, 2), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+21, ty+13, 3, 2), txui::Color(255, 255, 255, 255));
+    painter.fill_rect(txui::Rect(tx+21, ty+17, 3, 2), txui::Color(255, 255, 255, 255));
+}
+
+void SettingsWidget::draw_icon_privacy(txui::Painter& painter, txui::float64 tx, txui::float64 ty) const noexcept {
+    // left leg
+    painter.fill_rect(txui::Rect(tx+9, ty+6, 2, 6), txui::Color(255, 255, 255, 255));
+    // right leg
+    painter.fill_rect(txui::Rect(tx+17, ty+6, 2, 6), txui::Color(255, 255, 255, 255));
+    // top bar
+    painter.fill_rounded_rect(txui::Rect(tx+9, ty+4, 10, 4), 1.5, txui::Color(255, 255, 255, 255));
+    // inner transparent part of shackle (if top bar is too thick, this creates the U shape)
+    painter.fill_rect(txui::Rect(tx+11, ty+6, 6, 6), txui::Color(240, 160, 40, 255));
+    // Lock body
+    painter.fill_rounded_rect(txui::Rect(tx+7, ty+12, 14, 10), 2.0, txui::Color(255, 255, 255, 255));
+    // Keyhole
+    painter.fill_circle(txui::Point(tx+14, ty+16), 1.5, txui::Color(240, 160, 40, 255));
+    painter.fill_rect(txui::Rect(tx+13, ty+17, 2, 3), txui::Color(240, 160, 40, 255));
+}
+
+void SettingsWidget::draw_icon_about(txui::Painter& painter, txui::float64 tx, txui::float64 ty) const noexcept {
+    painter.fill_circle(txui::Point(tx+14, ty+14), 8.0, txui::Color(255, 255, 255, 255));
+    // "i" dot
+    painter.fill_rect(txui::Rect(tx+13, ty+9, 2, 2), txui::Color(40, 180, 160, 255));
+    // "i" body
+    painter.fill_rect(txui::Rect(tx+13, ty+12, 2, 5), txui::Color(40, 180, 160, 255));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Card helpers
 // ─────────────────────────────────────────────────────────────────────────────
 static void draw_card(txui::Painter& painter, const txui::Rect& r, const std::string& title) {
+    // ── Translucent Material Simulation (Drop shadow behind the card)
+    painter.fill_rounded_rect(
+        txui::Rect(r.x() - 2, r.y() + 4, r.width() + 4, r.height() + 4),
+        16.0, txui::Color(0, 0, 0, 180)
+    );
+    
     // Gradient card background
     painter.fill_gradient_rounded_rect(r, 14.0, CARD_TOP, CARD_BOT);
     // Subtle top highlight
     painter.fill_rounded_rect(
         txui::Rect(r.x() + 1, r.y() + 1, r.width() - 2, 1),
-        0.5, txui::Color(255, 255, 255, 12)
+        0.5, txui::Color(255, 255, 255, 30)
     );
     // Title
     painter.draw_text(txui::Point(r.x() + 20, r.y() + 16), title, TXT_PRI, 1.0);
@@ -407,12 +515,12 @@ void SettingsWidget::paint_display_page(txui::Painter& painter, const txui::Rect
     y += 98;
 
     // Card 3: Night Light
-    txui::Rect c3(x, y, cw, 68);
+    txui::Rect c3(x, y, cw, 72);
     draw_card(painter, c3, "Night Light");
-    painter.draw_text(txui::Point(x + 20, c3.y() + 50), "Reduce blue light after sunset",
+    painter.draw_text(txui::Point(x + 20, c3.y() + 52), "Reduce blue light after sunset",
                       TXT_SEC, 1.0);
-    draw_toggle(painter, x + cw - 58, c3.y() + 44, false);
-    y += 78;
+    draw_toggle(painter, x + cw - 58, c3.y() + 38, false);
+    y += 82;
 
     // Card 4: VRR
     txui::Rect c4(x, y, cw, 68);
@@ -504,13 +612,13 @@ void SettingsWidget::paint_system_page(txui::Painter& painter, const txui::Rect&
     y += 122;
 
     // Card 2: Security
-    txui::Rect c2(x, y, cw, 94);
+    txui::Rect c2(x, y, cw, 112);
     draw_card(painter, c2, "Security & Privacy");
     painter.draw_text(txui::Point(x + 20, c2.y() + 52), "Lock screen on sleep", TXT_SEC, 1.0);
-    draw_toggle(painter, x + cw - 58, c2.y() + 46, true);
-    painter.draw_text(txui::Point(x + 20, c2.y() + 76), "PAM authentication",   TXT_SEC, 1.0);
-    draw_toggle(painter, x + cw - 58, c2.y() + 70, true);
-    y += 104;
+    draw_toggle(painter, x + cw - 58, c2.y() + 38, true);
+    painter.draw_text(txui::Point(x + 20, c2.y() + 88), "PAM authentication",   TXT_SEC, 1.0);
+    draw_toggle(painter, x + cw - 58, c2.y() + 74, true);
+    y += 122;
 
     // Card 3: Session actions
     txui::Rect c3(x, y, cw, 80);
@@ -596,11 +704,11 @@ void SettingsWidget::paint_privacy_security_page(txui::Painter& painter, const t
     y += 52;
 
     // Card 1: Gatekeeper
-    txui::Rect c1(x, y, cw, 120 + m_unverified_apps.size() * 50);
+    txui::Rect c1(x, y, cw, 120.0 + static_cast<double>(m_unverified_apps.size()) * 50.0);
     draw_card(painter, c1, "Security");
     
     painter.draw_text(txui::Point(x + 20, y + 46), "Allow applications downloaded from:", TXT_SEC, 1.0);
-    painter.draw_text(txui::Point(x + 30, y + 66), "• Tinexus Verified Developers", TXT_PRI, 1.0);
+    painter.draw_text(txui::Point(x + 30, y + 66), "- Tinexus Verified Developers", TXT_PRI, 1.0);
     
     y += 90;
 
