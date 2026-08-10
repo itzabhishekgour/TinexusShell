@@ -12,6 +12,7 @@ private:
     txui::Ref<txui::ListView> m_list_view;
     const ColumnLevel* m_model{nullptr};
     size_t m_col_index{0};
+    bool m_is_last_column{false};
 
     std::function<void(size_t, size_t)> m_on_item_selected;
     std::function<void(size_t, size_t)> m_on_item_double_clicked;
@@ -22,7 +23,7 @@ protected:
     void paint_override(txui::Painter& painter) const noexcept override;
 
 public:
-    ColumnWidget(const ColumnLevel& level, size_t col_index);
+    ColumnWidget(const ColumnLevel& level, size_t col_index, bool is_last = false);
     ~ColumnWidget() override = default;
 
     void set_on_item_selected(std::function<void(size_t, size_t)> callback) { m_on_item_selected = std::move(callback); }

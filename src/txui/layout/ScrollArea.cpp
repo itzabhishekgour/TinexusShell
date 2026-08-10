@@ -29,10 +29,8 @@ Size ScrollArea::measure_override(const Constraints& constraints) noexcept {
     Constraints child_constraints(0, INF, 0, INF);
     
     // Pass width constraints if we only want vertical scrolling, etc.
-    // But for a generic ScrollArea, we provide infinite bounds and see what the child wants.
-    // For Tinexus files, we might want to constrain width to max_width if we only scroll vertically.
-    // We'll provide max_width constraint but allow infinite width, but recommend max_width.
-    child_constraints.max_width = INF;
+    // For Tinexus files, we constrain width to max_width since we only scroll vertically.
+    child_constraints.max_width = constraints.max_width;
     child_constraints.max_height = INF;
 
     auto& child = children().front();

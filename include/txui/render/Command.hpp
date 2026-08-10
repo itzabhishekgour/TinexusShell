@@ -99,7 +99,14 @@ struct PushTransformCommand {
 };
 struct PopTransformCommand {};
 
-// Phase 4.2.2+ : Solid + Rounded + Gradient + Circle + Text + Transform + Clip
+struct DrawLineCommand {
+    Point p1;
+    Point p2;
+    double thickness;
+    Color color;
+};
+
+// Phase 4.2.2+ : Solid + Rounded + Gradient + Circle + Text + Transform + Clip + Line
 using Command = std::variant<
     BeginFrameCommand,
     EndFrameCommand,
@@ -110,6 +117,7 @@ using Command = std::variant<
     DrawGradientRoundedRectCommand,
     DrawCircleCommand,
     DrawTextCommand,
+    DrawLineCommand,
     ClearCommand,
     PushClipCommand,
     PopClipCommand,
@@ -129,6 +137,7 @@ using Command = std::variant<
         else if constexpr (std::is_same_v<T, DrawGradientRoundedRectCommand>) return CommandType::DrawGradientRoundedRect;
         else if constexpr (std::is_same_v<T, DrawCircleCommand>)              return CommandType::DrawCircle;
         else if constexpr (std::is_same_v<T, DrawTextCommand>)                return CommandType::DrawText;
+        else if constexpr (std::is_same_v<T, DrawLineCommand>)                return CommandType::DrawLine;
         else if constexpr (std::is_same_v<T, ClearCommand>)                   return CommandType::Clear;
         else if constexpr (std::is_same_v<T, PushClipCommand>)                return CommandType::PushClip;
         else if constexpr (std::is_same_v<T, PopClipCommand>)                 return CommandType::PopClip;

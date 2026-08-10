@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <txui/window/Window.hpp>
 #include <txui/input/Event.hpp>
+#include <txui/widgets/ChromeWidget.hpp>
 #include "ui/ColumnBrowserWidget.hpp"
 
 
@@ -36,6 +37,29 @@ int main(int argc, char* argv[]) {
     }
 
     auto files_window = txui::make_ref<tinexus::files::ui::ColumnBrowserWidget>();
+    // Wrap in ChromeWidget — provides macOS-style window chrome with
+    // fully functional close, minimize, and maximize buttons.
+    auto chrome = txui::make_ref<txui::ChromeWidget>(
+        "Tinexus Files",
+        files_window,
+        // ── Close: request application exit ──────────────────────────────────
+        [w = window.get()]() {
+            w->on_close_request();
+        },
+        // ── Minimize: hide window via xdg_toplevel.minimize request ──────────
+        // Compositor will hide the scene node. No restore until dock exists.
+        [w = window.get()]() {
+            w->minimize();
+        },
+        // ── Maximize: toggle maximize/restore ─────────────────────────────────
+        [w = window.get()]() {
+            w->set_maximized(!w->is_maximized());
+        },
+        // ── Move: initiate interactive drag via xdg_toplevel.move ─────────────
+        [w = window.get()](uint32_t serial) {
+            w->start_interactive_move(serial);
+        }
+    );
     files_window->set_on_execute([&](const std::filesystem::path& path) {
         if (sdk_client.is_connected()) {
             tinexus::log::info("Launching {} via SDK", path.string());
@@ -129,7 +153,7 @@ int main(int argc, char* argv[]) {
         // Note: We need to trigger a refresh on the parent directory, but for MVP it's just logging.
     });
 
-    window->set_root_widget(files_window);
+    window->set_root_widget(chrome);
     files_window->navigate_to(target_path);
 
     window->present();
@@ -142,13 +166,13 @@ int main(int argc, char* argv[]) {
             if (event.type == txui::EventType::WindowClose) {
                 running = false;
             } else {
-                if (files_window->handle_event(event)) {
+                if (chrome->handle_event(event)) {
                     needs_redraw = true;
                 }
             }
         }
         
-        if (files_window->needs_paint() || files_window->needs_layout()) {
+        if (chrome->needs_paint() || chrome->needs_layout()) {
             needs_redraw = true;
         }
 

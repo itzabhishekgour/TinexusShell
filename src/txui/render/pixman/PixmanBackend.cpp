@@ -768,6 +768,27 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                 rasterize_circle(target, current_clip, cmd.center, cmd.radius, cmd.color, cmd.stroke_width);
             } else if constexpr (::std::is_same_v<T, DrawTextCommand>) {
                 rasterize_text(target, cmd.pos, cmd.text, cmd.color, cmd.scale, current_clip);
+            } else if constexpr (::std::is_same_v<T, DrawLineCommand>) {
+                if (cmd.p1.x == cmd.p2.x) {
+                    // Vertical line
+                    double y1 = std::min(cmd.p1.y, cmd.p2.y);
+                    double y2 = std::max(cmd.p1.y, cmd.p2.y);
+                    double half_w = cmd.thickness * 0.5;
+                    rasterize_solid_rect(target, Rect(cmd.p1.x - half_w, y1, cmd.thickness, y2 - y1), cmd.color, current_clip);
+                } else if (cmd.p1.y == cmd.p2.y) {
+                    // Horizontal line
+                    double x1 = std::min(cmd.p1.x, cmd.p2.x);
+                    double x2 = std::max(cmd.p1.x, cmd.p2.x);
+                    double half_w = cmd.thickness * 0.5;
+                    rasterize_solid_rect(target, Rect(x1, cmd.p1.y - half_w, x2 - x1, cmd.thickness), cmd.color, current_clip);
+                } else {
+                    // Fallback to bounding box for arbitrary lines (only axis-aligned are fully supported in MVP)
+                    double x1 = std::min(cmd.p1.x, cmd.p2.x);
+                    double x2 = std::max(cmd.p1.x, cmd.p2.x);
+                    double y1 = std::min(cmd.p1.y, cmd.p2.y);
+                    double y2 = std::max(cmd.p1.y, cmd.p2.y);
+                    rasterize_solid_rect(target, Rect(x1, y1, x2 - x1, y2 - y1), cmd.color, current_clip);
+                }
             } else if constexpr (::std::is_same_v<T, PushClipCommand>) {
                 clip_stack.push_back(current_clip);
                 // Compute intersection of two Rects manually (Rect has no intersection() method)

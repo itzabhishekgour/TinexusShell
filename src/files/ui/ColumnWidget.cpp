@@ -6,8 +6,8 @@
 
 namespace tinexus::files::ui {
 
-ColumnWidget::ColumnWidget(const ColumnLevel& level, size_t col_index) 
-    : m_model(&level), m_col_index(col_index) {
+ColumnWidget::ColumnWidget(const ColumnLevel& level, size_t col_index, bool is_last) 
+    : m_model(&level), m_col_index(col_index), m_is_last_column(is_last) {
     m_list_view = txui::make_ref<txui::ListView>();
     
     m_list_view->set_on_selected([this](txui::int32 index) {
@@ -53,6 +53,18 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         row->add_child(icon);
         row->add_child(padded_label);
         
+        if (item.type == FileType::Directory) {
+            auto spacer = txui::FlexItem::Expanded(nullptr, 1);
+            auto chevron = txui::make_ref<txui::Label>(">");
+            chevron->set_font_size(14.0);
+            chevron->set_color(txui::Color(150, 150, 150, 255));
+            // Add right padding to the chevron so it doesn't touch the edge
+            auto padded_chevron = txui::make_ref<txui::Padding>(txui::Insets(0, 8.0, 0, 0), chevron);
+            
+            row->add_child(spacer);
+            row->add_child(padded_chevron);
+        }
+        
         // Add 12px horizontal and 6px vertical padding to the entire row
         auto padded_row = txui::make_ref<txui::Padding>(txui::Insets(6.0, 12.0), row);
         
@@ -76,9 +88,14 @@ void ColumnWidget::layout_override(const txui::Rect& frame) noexcept {
 }
 
 void ColumnWidget::paint_override(txui::Painter& painter) const noexcept {
-    // Draw column border
-    painter.fill_rect(txui::Rect(frame().right() - 1.0, frame().top(), 1.0, frame().height()), txui::Color(30, 30, 30, 255));
     m_list_view->paint(painter);
+    
+    // Draw column border on the right edge, unless this is the deepest column
+    if (!m_is_last_column) {
+        txui::Point p1(frame().right(), frame().top());
+        txui::Point p2(frame().right(), frame().bottom());
+        painter.draw_line(p1, p2, 1.0, txui::Color(60, 60, 60, 255));
+    }
 }
 
 bool ColumnWidget::handle_event(const txui::Event& event) noexcept {

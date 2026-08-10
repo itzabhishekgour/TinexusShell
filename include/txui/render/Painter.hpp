@@ -83,6 +83,10 @@ public:
         m_buffer.push(DrawTextCommand{pos, text, color, scale});
     }
 
+    void draw_line(const Point& p1, const Point& p2, double thickness, const Color& color) {
+        m_buffer.push(DrawLineCommand{p1, p2, thickness, color});
+    }
+
     void push_clip(const Rect& rect) {
         m_buffer.push(PushClipCommand{rect});
     }

@@ -11,9 +11,18 @@ namespace tinexus::files::ui {
 
 class ColumnBrowserWidget : public txui::Widget {
 private:
-    txui::Ref<txui::FlexLayout> m_root_layout;
     txui::Ref<txui::ScrollArea> m_scroll_area;
     txui::Ref<txui::FlexLayout> m_columns_layout;
+    
+    // Sidebar
+    txui::Ref<txui::FlexLayout> m_sidebar;
+    txui::Ref<txui::Widget> m_sidebar_home;
+    txui::Ref<txui::Widget> m_sidebar_downloads;
+    txui::Ref<txui::Widget> m_sidebar_apps;
+    txui::Ref<txui::Widget> m_sidebar_trash;
+    
+    // Path Bar
+    txui::Ref<txui::Label> m_path_label;
     
     // Preview Panel
     txui::Ref<txui::FlexLayout> m_preview_panel;

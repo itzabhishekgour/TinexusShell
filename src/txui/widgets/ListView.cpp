@@ -64,14 +64,16 @@ void ListView::paint_override(Painter& painter) const noexcept {
         
         if (i == m_selected_index) {
             // Selected row inset and custom color
+            double draw_w = (item_frame.width() >= 999999.0) ? frame().width() : item_frame.width();
             Rect inset_frame(item_frame.left() + 4.0, item_frame.top() + 2.0, 
-                             std::max(0.0, item_frame.width() - 8.0), std::max(0.0, item_frame.height() - 4.0));
+                             std::max(0.0, draw_w - 8.0), std::max(0.0, item_frame.height() - 4.0));
             
-            painter.fill_rounded_rect(inset_frame, 4.0, Color(42, 48, 56, 255));
+            painter.fill_rounded_rect(inset_frame, 4.0, Color(0, 102, 204, 255));
         } else if (i == m_hover_index) {
             // Hover row inset and subtle color
+            double draw_w = (item_frame.width() >= 999999.0) ? frame().width() : item_frame.width();
             Rect inset_frame(item_frame.left() + 4.0, item_frame.top() + 2.0, 
-                             std::max(0.0, item_frame.width() - 8.0), std::max(0.0, item_frame.height() - 4.0));
+                             std::max(0.0, draw_w - 8.0), std::max(0.0, item_frame.height() - 4.0));
             painter.fill_rounded_rect(inset_frame, 4.0, Color(255, 255, 255, 30));
         }
         i++;
