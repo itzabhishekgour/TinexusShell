@@ -7,15 +7,15 @@ namespace tinexus::files::ui {
 
 ColumnWidget::ColumnWidget(const ColumnLevel& level, size_t col_index) 
     : m_model(&level), m_col_index(col_index) {
-    m_list_view = std::make_shared<txui::ListView>();
+    m_list_view = txui::make_ref<txui::ListView>();
     
-    m_list_view->set_on_selected([this](int32 index) {
+    m_list_view->set_on_selected([this](txui::int32 index) {
         if (m_on_item_selected && index >= 0) {
             m_on_item_selected(m_col_index, static_cast<size_t>(index));
         }
     });
 
-    m_list_view->set_on_double_clicked([this](int32 index) {
+    m_list_view->set_on_double_clicked([this](txui::int32 index) {
         if (m_on_item_double_clicked && index >= 0) {
             m_on_item_double_clicked(m_col_index, static_cast<size_t>(index));
         }
@@ -30,7 +30,10 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
     m_list_view->clear_items();
     
     for (const auto& item : m_model->items) {
-        auto row = std::make_shared<txui::FlexLayout>(txui::FlexDirection::Row, txui::FlexAlignment::Start, txui::CrossAxisAlignment::Center);
+        auto row = txui::make_ref<txui::FlexLayout>();
+        row->set_direction(txui::FlexDirection::Row);
+        row->set_main_axis_alignment(txui::MainAxisAlignment::Start);
+        row->set_cross_axis_alignment(txui::CrossAxisAlignment::Center);
         // Fixed height for list item
         // Wait, FlexLayout doesn't force height unless constrained, but we can set constraints later.
         
@@ -39,8 +42,8 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         else if (item.is_executable) icon_type = txui::IconType::Executable;
         // Archive/Image matching can be added later by mime_type
 
-        auto icon = std::make_shared<txui::Icon>(icon_type, 16.0);
-        auto label = std::make_shared<txui::Label>(item.name);
+        auto icon = txui::make_ref<txui::Icon>(icon_type, 16.0);
+        auto label = txui::make_ref<txui::Label>(item.name);
         label->set_font_size(14.0);
         
         row->add_child(icon);

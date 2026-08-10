@@ -6,11 +6,11 @@ add_executable(tinexus-files
     file_operations.cpp
     ui/ColumnWidget.cpp
     ui/ColumnBrowserWidget.cpp
-    ui/FilesWindow.cpp
 )
 
 target_include_directories(tinexus-files PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ipcd/include
 )
 
 target_link_libraries(tinexus-files PRIVATE

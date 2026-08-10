@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pwd.h>
 #include <vector>
 #include <filesystem>
 
@@ -214,7 +215,6 @@ int main(int argc, char** argv) {
     tinexus::serviced::RuntimeControlSocket runtime_sock(pm);
     g_socket = &runtime_sock;
 
-    tinexus::serviced::IpcdClient::instance().start();
 
     if (!runtime_sock.start()) {
         tinexus::log::error("Failed to start Runtime Control Socket");
@@ -245,6 +245,8 @@ int main(int argc, char** argv) {
             tinexus::log::info("Splash screen dismissed.");
         }
     }
+
+    tinexus::serviced::IpcdClient::instance().start();
 
     runtime_sock.run_accept_loop();
     return 0;

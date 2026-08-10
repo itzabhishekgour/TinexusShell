@@ -87,16 +87,17 @@ bool ScrollArea::handle_event(const Event& event) noexcept {
         return true;
     }
 
-    if (const auto* wheel = std::get_if<PointerScrollEvent>(&event)) {
-        if (frame().contains(wheel->position)) {
+    if (event.type == EventType::PointerScroll) {
+        Point position(event.pointer.x, event.pointer.y);
+        if (frame().contains(position)) {
             // Scroll vertical
-            if (wheel->dy != 0.0 && m_max_scroll_y > 0.0) {
-                set_scroll_y(m_scroll_y + wheel->dy * 30.0);
+            if (event.pointer.scroll_delta_y != 0.0 && m_max_scroll_y > 0.0) {
+                set_scroll_y(m_scroll_y + event.pointer.scroll_delta_y * 30.0);
                 return true;
             }
             // Scroll horizontal
-            if (wheel->dx != 0.0 && m_max_scroll_x > 0.0) {
-                set_scroll_x(m_scroll_x + wheel->dx * 30.0);
+            if (event.pointer.scroll_delta_x != 0.0 && m_max_scroll_x > 0.0) {
+                set_scroll_x(m_scroll_x + event.pointer.scroll_delta_x * 30.0);
                 return true;
             }
         }

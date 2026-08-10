@@ -80,6 +80,45 @@ EOF
     echo "tinexus-live" > "$ROOTFS_DIR/etc/hostname"
     echo "tmpfs   /tmp    tmpfs   defaults,nosuid,nodev   0 0" > "$ROOTFS_DIR/etc/fstab"
 
+    # Create minimal users and groups for Tinexus
+    cat > "$ROOTFS_DIR/etc/passwd" << 'EOF'
+root:x:0:0:root:/root:/bin/sh
+tinexus:x:1000:1000:Tinexus User:/home/tinexus:/bin/sh
+EOF
+    cat > "$ROOTFS_DIR/etc/group" << 'EOF'
+root:x:0:
+tinexus:x:1000:
+tty:x:5:
+audio:x:29:tinexus
+video:x:44:tinexus
+input:x:104:tinexus
+render:x:110:tinexus
+EOF
+    cat > "$ROOTFS_DIR/etc/shadow" << 'EOF'
+root::10933:0:99999:7:::
+tinexus::10933:0:99999:7:::
+EOF
+    mkdir -p "$ROOTFS_DIR/home/tinexus"
+    # chown won't work correctly without fakeroot/sudo unless we're root, but we can try or let init do it.
+    # We will let init handle the runtime ownership if needed, or just set it to 1000:1000
+    chown 1000:1000 "$ROOTFS_DIR/home/tinexus" || true
+
+    # Create nsswitch.conf and pull in glibc NSS libraries so getpwuid() can actually read /etc/passwd
+    cat > "$ROOTFS_DIR/etc/nsswitch.conf" << 'EOF'
+passwd:         files
+group:          files
+shadow:         files
+hosts:          files dns
+networks:       files
+protocols:      files
+services:       files
+ethers:         files
+rpc:            files
+EOF
+    mkdir -p "$ROOTFS_DIR/lib/x86_64-linux-gnu/"
+    cp -P /lib/x86_64-linux-gnu/libnss_files.so* "$ROOTFS_DIR/lib/x86_64-linux-gnu/" 2>/dev/null || true
+    cp -P /lib/x86_64-linux-gnu/libnss_compat.so* "$ROOTFS_DIR/lib/x86_64-linux-gnu/" 2>/dev/null || true
+
     local staged=0
     while IFS= read -r -d '' candidate; do
         if [[ "$candidate" == *"/debug/"* ]] || [[ "$candidate" == *"/txui_verify/"* ]]; then continue; fi
@@ -117,6 +156,18 @@ Icon=system-software-install
 Terminal=false
 Type=Application
 Categories=System;
+EOF
+
+    # Generate .desktop file for Tinexus Files (Miller Column Browser)
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-files.desktop" << 'EOF'
+[Desktop Entry]
+Name=Files
+Comment=Tinexus File Manager (Phase 2)
+Exec=/usr/bin/tinexus-files
+Icon=system-file-manager
+Terminal=false
+Type=Application
+Categories=System;Utility;Core;
 EOF
 
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
@@ -360,10 +411,8 @@ EOF_PAM
     for f in common-auth common-account common-session; do
         [ -f "/etc/pam.d/$f" ] && cp "/etc/pam.d/$f" "$ROOTFS_DIR/etc/pam.d/$f" 2>/dev/null || true
     done
-    # /etc/passwd and /etc/shadow needed for pam_unix
-    [ -f /etc/passwd ] && cp /etc/passwd "$ROOTFS_DIR/etc/passwd" 2>/dev/null || true
-    [ -f /etc/group ]  && cp /etc/group  "$ROOTFS_DIR/etc/group"  2>/dev/null || true
-    [ -f /etc/shadow ] && cp /etc/shadow "$ROOTFS_DIR/etc/shadow" 2>/dev/null || true
+    # We previously generated custom /etc/passwd, /etc/group, and /etc/shadow.
+    # Do NOT copy the host's files, as they will overwrite the custom ones!
 
     info "Staging minimal kernel modules into rootfs for runtime hardware support..."
     mkdir -p "$ROOTFS_DIR/lib/modules"

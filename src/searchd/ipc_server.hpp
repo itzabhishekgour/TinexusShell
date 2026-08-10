@@ -227,8 +227,8 @@ private:
                 size_t total_needed = sizeof(hdr) + hdr.payload_len;
                 if (buf.size() < total_needed) break; // wait for more data
 
-                std::vector<uint8_t> payload(buf.begin() + sizeof(hdr),
-                                             buf.begin() + total_needed);
+                std::vector<uint8_t> payload(buf.begin() + static_cast<ptrdiff_t>(sizeof(hdr)),
+                                             buf.begin() + static_cast<ptrdiff_t>(total_needed));
                 buf.erase(buf.begin(), buf.begin() + static_cast<ptrdiff_t>(total_needed));
 
                 handle_message(hdr, payload);

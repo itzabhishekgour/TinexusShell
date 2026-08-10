@@ -49,3 +49,4 @@ integration_test_*
 boot_logs.txt
 artifacts/
 .cache/
+Temp/

@@ -5,22 +5,31 @@
 namespace tinexus::files::ui {
 
 ColumnBrowserWidget::ColumnBrowserWidget() {
-    m_root_layout = std::make_shared<txui::FlexLayout>(txui::FlexDirection::Row, txui::FlexAlignment::Start, txui::CrossAxisAlignment::Stretch);
+    m_root_layout = txui::make_ref<txui::FlexLayout>();
+    m_root_layout->set_direction(txui::FlexDirection::Row);
+    m_root_layout->set_main_axis_alignment(txui::MainAxisAlignment::Start);
+    m_root_layout->set_cross_axis_alignment(txui::CrossAxisAlignment::Stretch);
 
-    m_scroll_area = std::make_shared<txui::ScrollArea>();
-    m_columns_layout = std::make_shared<txui::FlexLayout>(txui::FlexDirection::Row, txui::FlexAlignment::Start, txui::CrossAxisAlignment::Stretch);
+    m_scroll_area = txui::make_ref<txui::ScrollArea>();
+    m_columns_layout = txui::make_ref<txui::FlexLayout>();
+    m_columns_layout->set_direction(txui::FlexDirection::Row);
+    m_columns_layout->set_main_axis_alignment(txui::MainAxisAlignment::Start);
+    m_columns_layout->set_cross_axis_alignment(txui::CrossAxisAlignment::Stretch);
     m_scroll_area->add_child(m_columns_layout);
 
-    m_preview_panel = std::make_shared<txui::FlexLayout>(txui::FlexDirection::Column, txui::FlexAlignment::Center, txui::CrossAxisAlignment::Center);
+    m_preview_panel = txui::make_ref<txui::FlexLayout>();
+    m_preview_panel->set_direction(txui::FlexDirection::Column);
+    m_preview_panel->set_main_axis_alignment(txui::MainAxisAlignment::Center);
+    m_preview_panel->set_cross_axis_alignment(txui::CrossAxisAlignment::Center);
     
-    m_preview_name = std::make_shared<txui::Label>("No file selected");
+    m_preview_name = txui::make_ref<txui::Label>("No file selected");
     m_preview_name->set_font_size(18.0);
     
-    m_preview_type = std::make_shared<txui::Label>("");
+    m_preview_type = txui::make_ref<txui::Label>("");
     m_preview_type->set_font_size(14.0);
     m_preview_type->set_color(txui::Color(150, 150, 150, 255));
     
-    m_preview_size = std::make_shared<txui::Label>("");
+    m_preview_size = txui::make_ref<txui::Label>("");
     m_preview_size->set_font_size(14.0);
     m_preview_size->set_color(txui::Color(150, 150, 150, 255));
 
@@ -40,7 +49,7 @@ void ColumnBrowserWidget::navigate_to(const std::filesystem::path& path) {
     
     size_t col_index = 0;
     for (const auto& level : m_model.columns()) {
-        auto col_widget = std::make_shared<ColumnWidget>(level, col_index);
+        auto col_widget = txui::make_ref<ColumnWidget>(level, col_index);
         col_widget->set_on_item_selected([this](size_t c, size_t i) { on_item_selected(c, i); });
         col_widget->set_on_item_double_clicked([this](size_t c, size_t i) { on_item_double_clicked(c, i); });
         m_columns_layout->add_child(col_widget);
@@ -55,7 +64,7 @@ void ColumnBrowserWidget::on_item_selected(size_t col_index, size_t item_index) 
         m_columns_layout->remove_all_children();
         size_t c = 0;
         for (const auto& level : m_model.columns()) {
-            auto col_widget = std::make_shared<ColumnWidget>(level, c);
+            auto col_widget = txui::make_ref<ColumnWidget>(level, c);
             col_widget->set_on_item_selected([this](size_t c_idx, size_t i_idx) { on_item_selected(c_idx, i_idx); });
             col_widget->set_on_item_double_clicked([this](size_t c_idx, size_t i_idx) { on_item_double_clicked(c_idx, i_idx); });
             m_columns_layout->add_child(col_widget);
@@ -96,7 +105,7 @@ std::filesystem::path ColumnBrowserWidget::get_selected_path() const {
     if (m_model.columns().empty()) return "";
     const auto& last_col = m_model.columns().back();
     if (last_col.selected_index >= 0 && last_col.selected_index < (int)last_col.items.size()) {
-        return last_col.items[last_col.selected_index].path;
+        return last_col.items[static_cast<size_t>(last_col.selected_index)].path;
     }
     return last_col.directory_path;
 }
@@ -128,8 +137,8 @@ void ColumnBrowserWidget::paint_override(txui::Painter& painter) const noexcept 
 }
 
 bool ColumnBrowserWidget::handle_event(const txui::Event& event) noexcept {
-    if (const auto* key = std::get_if<txui::KeyboardEvent>(&event)) {
-        if (key->state == txui::ButtonState::Pressed && key->key == txui::Key::Delete) {
+    if (event.type == txui::EventType::KeyDown) {
+        if (event.keyboard.key == txui::Key::Backspace) {
             auto path = get_selected_path();
             if (!path.empty()) {
                 if (path.string().starts_with("/opt/tinexus-apps/")) {

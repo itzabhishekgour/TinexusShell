@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <pwd.h>
 #include <grp.h>
+#include <dirent.h>
+#include <unordered_set>
 #include "guard/crypto_validator.hpp"
 
 extern char **environ;
@@ -164,11 +166,11 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
 #include <sys/syscall.h>
         int sys_ret = -1;
         if (app_fd >= 3) {
-            int r1 = (app_fd > 3) ? syscall(__NR_close_range, 3, app_fd - 1, 0) : 0;
-            int r2 = syscall(__NR_close_range, app_fd + 1, ~0U, 0);
+            int r1 = (app_fd > 3) ? static_cast<int>(syscall(__NR_close_range, 3, app_fd - 1, 0)) : 0;
+            int r2 = static_cast<int>(syscall(__NR_close_range, app_fd + 1, ~0U, 0));
             sys_ret = (r1 == 0 && r2 == 0) ? 0 : -1;
         } else {
-            sys_ret = syscall(__NR_close_range, 3, ~0U, 0);
+            sys_ret = static_cast<int>(syscall(__NR_close_range, 3, ~0U, 0));
         }
         if (sys_ret != 0) {
 #endif

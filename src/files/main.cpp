@@ -11,8 +11,10 @@
 #include <csignal>
 #include <fcntl.h>
 #include <unistd.h>
-#include "ui/FilesWindow.hpp"
-#include "tinexus_protocols_client.h"
+#include <txui/window/Window.hpp>
+#include <txui/input/Event.hpp>
+#include "ui/ColumnBrowserWidget.hpp"
+
 
 int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("files");
@@ -33,7 +35,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto files_window = std::make_shared<tinexus::files::ui::ColumnBrowserWidget>();
+    auto files_window = txui::make_ref<tinexus::files::ui::ColumnBrowserWidget>();
     files_window->set_on_execute([&](const std::filesystem::path& path) {
         if (sdk_client.is_connected()) {
             tinexus::log::info("Launching {} via SDK", path.string());
@@ -52,7 +54,7 @@ int main(int argc, char* argv[]) {
             if (fd >= 0) close(fd); // Cleanup after IPC dispatch
 
             if (!res.is_ok()) {
-                tinexus::log::error("Failed to launch file: {}", res.error().message());
+                tinexus::log::error("Failed to launch file: {}", res.error().message);
             }
         }
     });
@@ -123,7 +125,7 @@ int main(int argc, char* argv[]) {
 
     files_window->set_on_trash([&](const std::filesystem::path& path) {
         tinexus::log::info("Moving {} to trash", path.string());
-        tinexus::files::TrashManager::move_to_trash(path);
+        tinexus::files::TrashManager::instance().move_to_trash(path);
         // Note: We need to trigger a refresh on the parent directory, but for MVP it's just logging.
     });
 

@@ -1,10 +1,16 @@
 #include <txui/widgets/ListView.hpp>
+#include <txui/input/Event.hpp>
+#include <memory>
+#include <chrono>
 
 namespace txui {
 
 ListView::ListView() noexcept {
-    m_scroll_area = std::make_shared<ScrollArea>();
-    m_content_layout = std::make_shared<FlexLayout>(FlexDirection::Column, FlexAlignment::Start, CrossAxisAlignment::Stretch);
+    m_scroll_area = make_ref<ScrollArea>();
+    m_content_layout = make_ref<FlexLayout>();
+    m_content_layout->set_direction(FlexDirection::Column);
+    m_content_layout->set_main_axis_alignment(MainAxisAlignment::Start);
+    m_content_layout->set_cross_axis_alignment(CrossAxisAlignment::Stretch);
     
     m_scroll_area->add_child(m_content_layout);
     add_child(m_scroll_area);
@@ -72,12 +78,13 @@ void ListView::paint_override(Painter& painter) const noexcept {
 }
 
 bool ListView::handle_event(const Event& event) noexcept {
-    if (const auto* ptr = std::get_if<PointerMoveEvent>(&event)) {
-        if (frame().contains(ptr->position)) {
+    if (event.type == EventType::PointerMove) {
+        Point position(event.pointer.x, event.pointer.y);
+        if (frame().contains(position)) {
             int32 i = 0;
             int32 found = -1;
             for (const auto& child : m_content_layout->children()) {
-                if (child->frame().contains(ptr->position)) {
+                if (child->frame().contains(position)) {
                     found = i;
                     break;
                 }
@@ -93,11 +100,12 @@ bool ListView::handle_event(const Event& event) noexcept {
                 mark_needs_paint();
             }
         }
-    } else if (const auto* click = std::get_if<PointerButtonEvent>(&event)) {
-        if (click->state == ButtonState::Pressed && frame().contains(click->position)) {
+    } else if (event.type == EventType::PointerButtonPress) {
+        Point position(event.pointer.x, event.pointer.y);
+        if (frame().contains(position)) {
             int32 i = 0;
             for (const auto& child : m_content_layout->children()) {
-                if (child->frame().contains(click->position)) {
+                if (child->frame().contains(position)) {
                     set_selected_index(i);
                     // Handle double click logic? Since txui doesn't have double-click event yet, we could mock it.
                     // For MVP, maybe we'll use a specific event or time-based logic.

@@ -73,7 +73,7 @@ bool InstallHandler::copy_fd_to_path(int fd, const std::string& target_path) con
 
         char* p = buf;
         while (bytes_read > 0) {
-            ssize_t bytes_written = write(out_fd, p, bytes_read);
+            ssize_t bytes_written = write(out_fd, p, static_cast<size_t>(bytes_read));
             if (bytes_written < 0) {
                 tinexus::log::error("[serviced] Error writing to temp install path");
                 unlink(tmp_path.c_str());
@@ -198,8 +198,7 @@ bool InstallHandler::handle_uninstall_request(const std::string& app_name) {
                 std::ofstream cache_out(tmp_cache, std::ios::trunc);
                 if (cache_out.is_open()) {
                     for (const auto& l : lines) {
-                        cache_out << l << "
-";
+                        cache_out << l << "\n";
                     }
                     cache_out.close();
                     rename(tmp_cache.c_str(), "/var/lib/tinexus/trust-overrides.conf");

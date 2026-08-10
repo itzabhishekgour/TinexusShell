@@ -8,4 +8,4 @@ $root = "E:\Tinu's Technology\Tinexus Manager"
   -boot d -vga virtio `
   -device virtio-keyboard-pci -device virtio-mouse-pci `
   -display sdl `
-  -serial file:"$root\boot_logs.txt"
+  -serial file:"$root\boot_logs.txt" > "$root\qemu_out.txt" 2>&1

@@ -3,6 +3,8 @@
 #include <txui/widgets/Widget.hpp>
 #include <txui/layout/ScrollArea.hpp>
 #include <txui/layout/FlexLayout.hpp>
+#include <txui/widgets/Label.hpp>
+#include <functional>
 #include "files/column_view_model.hpp"
 
 namespace tinexus::files::ui {

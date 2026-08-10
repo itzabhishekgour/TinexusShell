@@ -97,7 +97,11 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    // 1. Background Wallpaper
+    // 1. Search Daemon (needs to be ready before UI queries it)
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    launch_component("searchd");
+
+    // 2. Background Wallpaper
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     launch_component("wallpaper");
 
