@@ -148,12 +148,18 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
 
             if (layer_shell) {
                 if (win->m_connection->layer_shell() != nullptr) {
+                    const char* ns = win->m_title.c_str();
+                    if (win->m_title == "Aura") {
+                        ns = "tinexus-shell";
+                    } else if (win->m_title == "dock") {
+                        ns = "tinexus-dock";
+                    }
                     win->m_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
                         win->m_connection->layer_shell(),
                         target_ptr->surface().surface(),
                         nullptr, // default output
                         ZWLR_LAYER_SHELL_V1_LAYER_TOP,
-                        "tinexus-shell"
+                        ns
                     );
                     zwlr_layer_surface_v1_add_listener(win->m_layer_surface, &layer_surface_listener, win.get());
                     zwlr_layer_surface_v1_set_size(win->m_layer_surface, width, height);
@@ -161,6 +167,7 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
                     // the full width. We then set left/right margins to center the pill.
                     // margin = (output_width - pill_width) / 2; we use 1920 as default output
                     // until the configure event arrives with the real output dimensions.
+                    // Use stored config or default to TOP + exclusive zone
                     zwlr_layer_surface_v1_set_anchor(win->m_layer_surface,
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
@@ -260,20 +267,45 @@ void Window::start_interactive_resize(uint32 edges, uint32 serial) noexcept {
 }
 
 void Window::set_keyboard_interactivity(bool enable) noexcept {
-    if (m_layer_surface != nullptr) {
-        zwlr_layer_surface_v1_set_keyboard_interactivity(m_layer_surface, enable ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-        if (m_connection.has_value()) {
-            auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
-            if (wayland_target && wayland_target->surface().surface()) {
-                wl_surface_commit(wayland_target->surface().surface());
-            }
+    if (m_layer_surface) {
+        zwlr_layer_surface_v1_set_keyboard_interactivity(m_layer_surface, 
+            enable ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND 
+                   : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+    }
+}
+
+void Window::set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t exclusive_zone) noexcept {
+    if (m_layer_surface) {
+        uint32_t wl_anchors = 0;
+        if (anchors & LayerAnchor::Top) wl_anchors |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
+        if (anchors & LayerAnchor::Bottom) wl_anchors |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+        if (anchors & LayerAnchor::Left) wl_anchors |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
+        if (anchors & LayerAnchor::Right) wl_anchors |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+        
+        zwlr_layer_surface_v1_set_anchor(m_layer_surface, wl_anchors);
+        zwlr_layer_surface_v1_set_exclusive_zone(m_layer_surface, exclusive_zone);
+        
+        if ((anchors & LayerAnchor::Bottom) && !(anchors & LayerAnchor::Top)) {
+            zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, 0, 12, 0); 
         }
     }
+}
+
+void Window::set_tick_callback(std::function<void()> cb) noexcept {
+    m_tick_callback = std::move(cb);
 }
 
 void Window::present(const Rect& damage) noexcept {
     if (!m_render_target || !m_configured) {
         m_command_buffer.clear();
+        return;
+    }
+
+    if (m_tick_callback) {
+        m_tick_callback();
+    }
+
+    if (!m_frame_ready) {
         return;
     }
 

@@ -4,8 +4,15 @@
 #include "comp/window/scene_node.hpp"
 #include "comp/window/xdg_toplevel_node.hpp"
 #include "comp/animation/animation.hpp"
+#include <memory>
 
 namespace tinexus::comp {
+
+enum class AnimationPhase : uint8_t {
+    None,
+    Minimizing,
+    Restoring
+};
 
 class WindowNode : public SceneNode {
 public:
@@ -27,6 +34,15 @@ public:
 
     XdgToplevelNode toplevel;
     std::shared_ptr<RenderBuffer> render_buffer;
+
+    // Minimize/restore state
+    int32_t saved_x{0}, saved_y{0};
+    uint32_t saved_w{800}, saved_h{600};
+    int32_t dock_icon_x{0}, dock_icon_y{0};
+    bool minimized{false};
+
+    AnimationPhase animation_phase{AnimationPhase::None};
+    std::unique_ptr<BaseAnimation> active_dock_anim;
 };
 
 } // namespace tinexus::comp

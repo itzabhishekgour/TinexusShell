@@ -105,6 +105,10 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     launch_component("wallpaper");
 
+    // 2.5 Dock
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    launch_component("dock");
+
     // 2. Unified Shell (Dynamic Island + Launcher)
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     launch_component("shell");

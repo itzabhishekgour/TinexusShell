@@ -10,6 +10,7 @@ add_subdirectory(guard)
 # Future step subdirectories
 add_subdirectory(comp)
 add_subdirectory(shell)
+add_subdirectory(dock)
 add_subdirectory(settings)
 add_subdirectory(settings-ui)
 add_subdirectory(notifications)

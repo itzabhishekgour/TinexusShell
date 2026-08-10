@@ -1,5 +1,6 @@
 #include "comp/surface/xdg_shell_manager.hpp"
 #include "common/logger.hpp"
+#include "comp/window/window_manager.hpp"
 
 namespace tinexus::comp {
 
@@ -32,6 +33,13 @@ bool XdgShellManager::handle_ack_configure(uint64_t surface_id, uint32_t serial)
 
     if (m_serial_mgr.validate(serial)) {
         it->second.configured = true;
+        
+        auto win = WindowManager::instance().find_window(surface_id);
+        if (win) {
+            win->saved_w = it->second.geometry.width;
+            win->saved_h = it->second.geometry.height;
+        }
+        
         log::info("XdgShellManager: Validated client ack_configure serial #{} for Surface #{}", serial, surface_id);
         return true;
     }

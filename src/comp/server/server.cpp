@@ -1,4 +1,5 @@
 #include "comp/server/server.hpp"
+#include "comp/window/RestoreAnimation.hpp"
 #include "comp/backend/backend.hpp"
 #include "comp/output/output_manager.hpp"
 #include "comp/cursor/cursor_manager.hpp"
@@ -21,6 +22,11 @@
 #include <poll.h>
 
 #include "ipcd/protocol/header.hpp"
+#include "ipcd/protocol/dock_protocol.hpp"
+#include "comp/window/window_manager.hpp"
+#include "comp/window/MinimizeAnimation.hpp"
+#include "comp/focus/focus_manager.hpp"
+#include "comp/window/scene_graph.hpp"
 
 #include <wayland-server-core.h>
 
@@ -46,9 +52,18 @@ static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
 
 namespace tinexus::comp {
 
-TinexusServer::TinexusServer() = default;
+static TinexusServer* s_instance = nullptr;
+
+TinexusServer* TinexusServer::instance() {
+    return s_instance;
+}
+
+TinexusServer::TinexusServer() {
+    s_instance = this;
+}
 
 TinexusServer::~TinexusServer() {
+    if (s_instance == this) s_instance = nullptr;
     stop();
     
     // Shutdown backend before destroying display
@@ -135,7 +150,6 @@ bool TinexusServer::initialize() {
     ShortcutEngine::instance().set_shortcut_callback(
         [this](const std::string& shortcut_name) {
 
-            // ── Launcher ──────────────────────────────────────────────────
             if (shortcut_name == "launcher_toggle") {
                 // SECURITY: never spawn launcher while screen is locked
                 if (m_backend->is_locked()) {
@@ -143,45 +157,28 @@ bool TinexusServer::initialize() {
                     return;
                 }
                 log::info("[Server] Ctrl+K: Sending SHORTCUT_ACTIVATED to ipcd");
-                int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-                if (sock >= 0) {
-                    struct sockaddr_un addr;
-                    memset(&addr, 0, sizeof(addr));
-                    addr.sun_family = AF_UNIX;
-                    char path[256];
-                    snprintf(path, sizeof(path), "/run/user/%d/tinexus/ipc.sock", getuid());
-                    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-                    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+                
+                // Use the persistent IPC socket if available
+                if (m_ipc_socket < 0) {
+                    setup_ipc_connection();
+                }
+                if (m_ipc_socket >= 0) {
 #pragma pack(push, 1)
-                        struct IpcHeader {
-                            uint32_t magic = 0x544E5853;
-                            uint16_t version = 0x0100;
-                            uint16_t msg_type;
-                            uint16_t flags = 0;
-                            uint32_t sequence_id = 0;
-                            uint32_t payload_len = 0;
-                            uint32_t checksum = 0;
-                        };
+                    struct IpcHeader {
+                        uint32_t magic = 0x544E5853;
+                        uint16_t version = 0x0100;
+                        uint16_t msg_type;
+                        uint16_t flags = 0;
+                        uint32_t sequence_id = 0;
+                        uint32_t payload_len = 0;
+                        uint32_t checksum = 0;
+                    };
 #pragma pack(pop)
-                        IpcHeader msg1;
-                        msg1.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED);
-                        send(sock, &msg1, sizeof(msg1), MSG_NOSIGNAL);
-
-                        IpcHeader msg2;
-                        msg2.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_PING);
-                        send(sock, &msg2, sizeof(msg2), MSG_NOSIGNAL);
-
-                        // Use poll() with a bounded timeout to prevent the compositor
-                        // from freezing if ipcd is slow, crashed, or unresponsive.
-                        struct pollfd pfd = {sock, POLLIN, 0};
-                        if (poll(&pfd, 1, 100) > 0 && (pfd.revents & POLLIN)) {
-                            IpcHeader rx;
-                            recv(sock, &rx, sizeof(rx), 0);
-                        } else {
-                            log::warn("[Server] Ctrl+K: ipcd did not respond to SYS_PING within 100ms");
-                        }
-                    }
-                    close(sock);
+                    IpcHeader msg1;
+                    msg1.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED);
+                    send(m_ipc_socket, &msg1, sizeof(msg1), MSG_NOSIGNAL);
+                } else {
+                    log::warn("[Server] Ctrl+K: Persistent IPC socket not connected!");
                 }
                 return;
             }
@@ -263,6 +260,8 @@ bool TinexusServer::initialize() {
         });
     log::info("[Server] ShortcutEngine registered: Ctrl+K, Super+1–9, Super+L, Super+Arrows, Alt+Tab");
 
+    setup_ipc_connection();
+
     return true;
 }
 
@@ -295,6 +294,208 @@ void TinexusServer::stop() {
 
 const std::string& TinexusServer::wayland_display() const noexcept {
     return m_display_socket;
+}
+
+static int s_icon_query_timeout_handler(void* data) {
+    auto* srv = static_cast<TinexusServer*>(data);
+    srv->check_icon_query_timeout();
+    return 0;
+}
+
+void TinexusServer::setup_ipc_connection() {
+    m_ipc_socket = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (m_ipc_socket >= 0) {
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        snprintf(addr.sun_path, sizeof(addr.sun_path), "/run/user/%d/tinexus/ipc.sock", getuid());
+        if (connect(m_ipc_socket, (struct sockaddr*)&addr, sizeof(addr)) == 0 || errno == EINPROGRESS) {
+            wl_event_loop_add_fd(m_wl_loop, m_ipc_socket, WL_EVENT_READABLE, handle_ipc_fd, this);
+            log::info("[Server] Connected to ipcd at {}", addr.sun_path);
+            
+            // Subscribe to dock messages
+            uint16_t sub_types[] = {
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_ICON_POSITION),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RESTORE_REQUEST),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS)
+            };
+            
+            for (uint16_t t : sub_types) {
+                struct {
+                    tinexus::ipcd::protocol::Header hdr;
+                    uint16_t topic;
+                } __attribute__((packed)) msg;
+                msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+                msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+                msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC);
+                msg.hdr.payload_len = sizeof(msg.topic);
+                msg.topic = t;
+                send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+            }
+        } else {
+            close(m_ipc_socket);
+            m_ipc_socket = -1;
+            log::warn("[Server] Failed to connect to ipcd persistent socket");
+        }
+    }
+}
+
+int TinexusServer::handle_ipc_fd(int fd, uint32_t mask, void* data) {
+    auto* srv = static_cast<TinexusServer*>(data);
+    if (mask & (WL_EVENT_ERROR | WL_EVENT_HANGUP)) {
+        log::warn("[Server] IPC socket error/hangup");
+        return 0;
+    }
+    
+    tinexus::ipcd::protocol::Header hdr;
+    ssize_t n = recv(fd, &hdr, sizeof(hdr), MSG_PEEK);
+    if (n == sizeof(hdr)) {
+        if (hdr.magic != tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC) {
+            // drop bad byte
+            char c;
+            recv(fd, &c, 1, 0);
+            return 1;
+        }
+        std::vector<uint8_t> payload(hdr.payload_len);
+        // read full message
+        n = recv(fd, nullptr, 0, MSG_PEEK); // just to check if data is available
+        // Need to read hdr + payload
+        std::vector<uint8_t> buf(sizeof(hdr) + hdr.payload_len);
+        n = recv(fd, buf.data(), buf.size(), MSG_DONTWAIT);
+        if (n == static_cast<ssize_t>(buf.size())) {
+            srv->process_ipc_message(hdr.msg_type, buf.data() + sizeof(hdr), hdr.payload_len);
+        }
+    } else if (n <= 0 && errno != EAGAIN) {
+        log::warn("[Server] IPC socket closed");
+        close(fd);
+        srv->m_ipc_socket = -1;
+    }
+    return 1;
+}
+
+void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, uint32_t payload_len) {
+    using namespace tinexus::ipcd::protocol;
+    if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_ICON_POSITION) && payload_len >= sizeof(DockIconPositionPayload)) {
+        const auto* p = static_cast<const DockIconPositionPayload*>(payload);
+        if (!m_pending_icon_query.active || m_pending_icon_query.app_id != p->app_id) {
+            log::warn("[Comp] DOCK_ICON_POSITION stale or mismatch — discarded");
+            return;
+        }
+        m_pending_icon_query.active = false;
+        auto win = WindowManager::instance().find_window(m_pending_icon_query.surface_id);
+        if (win && win->animation_phase == AnimationPhase::None) {
+            win->dock_icon_x = p->x + p->w / 2;
+            win->dock_icon_y = p->y;
+            win->animation_phase = AnimationPhase::Minimizing;
+            win->active_dock_anim = std::make_unique<MinimizeAnimation>(win, 1.0f, 1.0f, win->saved_x, win->saved_y);
+            win->active_dock_anim->start();
+        }
+    }
+    else if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RESTORE_REQUEST) && payload_len >= sizeof(DockNotifyPayload)) {
+        const auto* p = static_cast<const DockNotifyPayload*>(payload);
+        auto win = WindowManager::instance().find_window(p->surface_id);
+        if (win) {
+            float start_opacity = 0.0f;
+            float start_scale = 0.1f;
+            int32_t start_x = win->dock_icon_x;
+            int32_t start_y = win->dock_icon_y;
+
+            if (win->animation_phase == AnimationPhase::Restoring) return; // Ignore duplicate
+            if (win->animation_phase == AnimationPhase::Minimizing) {
+                // Mid-flight reversal
+                start_opacity = win->opacity;
+                start_scale = win->scale;
+                start_x = win->x;
+                start_y = win->y;
+                win->active_dock_anim.reset();
+            }
+
+            win->animation_phase = AnimationPhase::Restoring;
+            win->active_dock_anim = std::make_unique<RestoreAnimation>(
+                win, start_opacity, start_scale, start_x, start_y
+            );
+            win->active_dock_anim->start();
+        }
+    }
+    else if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RAISE_AND_FOCUS) && payload_len >= sizeof(DockNotifyPayload)) {
+        const auto* p = static_cast<const DockNotifyPayload*>(payload);
+        if (m_backend) {
+            m_backend->focus_app(p->app_id);
+        }
+        
+        if (m_ipc_socket < 0) {
+            setup_ipc_connection();
+        }
+        if (m_ipc_socket >= 0) {
+            struct {
+                Header hdr;
+                DockFocusChangedPayload pld;
+            } __attribute__((packed)) msg;
+            msg.hdr.magic = TINEXUS_IPC_MAGIC;
+            msg.hdr.version = TINEXUS_IPC_VERSION_1;
+            msg.hdr.msg_type = static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED);
+            msg.hdr.payload_len = sizeof(msg.pld);
+            strncpy(msg.pld.app_id, p->app_id, sizeof(msg.pld.app_id)-1);
+            msg.pld.is_focused = 1;
+            send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+        }
+    }
+}
+
+void TinexusServer::check_icon_query_timeout() {
+    if (!m_pending_icon_query.active) return;
+    
+    log::warn("[Comp] DOCK_QUERY_ICON_POSITION timed out — using bottom-center fallback");
+    m_pending_icon_query.active = false;
+    auto win = WindowManager::instance().find_window(m_pending_icon_query.surface_id);
+    if (win && win->animation_phase == AnimationPhase::None) {
+        // fallback: bottom-center of screen
+        win->dock_icon_x = 1920 / 2; // Hardcode width for now, or get from output
+        win->dock_icon_y = 1080 - 36;
+        win->animation_phase = AnimationPhase::Minimizing;
+        win->active_dock_anim = std::make_unique<MinimizeAnimation>(win, 1.0f, 1.0f, win->saved_x, win->saved_y);
+        win->active_dock_anim->start();
+    }
+}
+
+void TinexusServer::trigger_minimize(uint64_t surface_id) {
+    auto win = WindowManager::instance().find_window(surface_id);
+    if (!win) return;
+
+    if (win->animation_phase == AnimationPhase::Minimizing) return;
+    if (win->animation_phase == AnimationPhase::Restoring) {
+        // Reverse mid-flight -> Minimize
+        win->active_dock_anim.reset();
+        win->animation_phase = AnimationPhase::Minimizing;
+        // Bypass IPC query, use cached icon position
+        win->active_dock_anim = std::make_unique<MinimizeAnimation>(
+            win, win->opacity, win->scale, win->x, win->y
+        );
+        win->active_dock_anim->start();
+        return;
+    }
+
+    // Fresh minimize
+    m_pending_icon_query.active = true;
+    m_pending_icon_query.surface_id = surface_id;
+    m_pending_icon_query.app_id = win->toplevel.app_id();
+    m_pending_icon_query.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+
+    if (m_ipc_socket < 0) {
+        setup_ipc_connection();
+    }
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockQueryIconPositionPayload pld;
+        } __attribute__((packed)) msg;
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        strncpy(msg.pld.app_id, win->toplevel.app_id().c_str(), sizeof(msg.pld.app_id) - 1);
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
 }
 
 } // namespace tinexus::comp

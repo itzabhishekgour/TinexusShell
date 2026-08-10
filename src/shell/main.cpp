@@ -325,10 +325,8 @@ public:
         const double cx = f.x() + W / 2.0, cy = f.y() + H / 2.0;
         const double R  = H / 2.0; // full pill radius — stadium shape
 
-        // ── Fake elevation shadows (offset below pill) ─────────────────
-        painter.fill_rounded_rect({f.x() - 1, f.y() + 5, W + 2, H}, static_cast<int>(R), SHADOW_1);
+        // ── Fake elevation shadows (Optimized: single pass) ───────────────
         painter.fill_rounded_rect({f.x() - 2, f.y() + 8, W + 4, H}, static_cast<int>(R), SHADOW_2);
-        painter.fill_rounded_rect({f.x() - 3, f.y() + 11, W + 6, H}, static_cast<int>(R), SHADOW_3);
 
         // ── Pill body ─────────────────────────────────────────────────
         painter.fill_rounded_rect(f, static_cast<int>(R), AURA_BG);
@@ -397,9 +395,7 @@ public:
         // Must clear wayland SHM buffer fully before drawing transparent scrim
         painter.clear(txui::Color(0, 0, 0, 0));
 
-        // ── 1. Fullscreen scrim ───────────────────────────────────────
-        painter.fill_rect(txui::Rect(0, 0, SW, SH), SCRIM);
-
+        // ── 1. Fullscreen scrim removed for performance ───────────────
         if (is_launching) {
             const double cx = SW * 0.5, cy = SH * 0.5;
             const double cw = 400.0, ch = 240.0;
@@ -421,10 +417,8 @@ public:
         const double px = (SW - CARD_W) * 0.5;
         const double py = SH * 0.38 - card_h * 0.5; // slightly above center — Spotlight style
 
-        // Fake elevation shadows behind card
-        painter.fill_rounded_rect({px - 2, py + 6, CARD_W + 4, card_h},  static_cast<int>(PANEL_RAD), SHADOW_1);
+        // Fake elevation shadows behind card (Optimized: single pass)
         painter.fill_rounded_rect({px - 4, py + 10, CARD_W + 8, card_h}, static_cast<int>(PANEL_RAD), SHADOW_2);
-        painter.fill_rounded_rect({px - 6, py + 14, CARD_W + 12, card_h},static_cast<int>(PANEL_RAD), SHADOW_3);
 
         // Card body
         painter.fill_gradient_rounded_rect(txui::Rect(px, py, CARD_W, card_h), PANEL_RAD, BG_T, BG_B);
@@ -614,8 +608,8 @@ int main(int argc, char** argv) {
 
     // Aura size state (for idle pill)
     constexpr double AURA_W = 360.0, AURA_H = 48.0;
-    // Pulse size state (fullscreen overlay)
-    constexpr double PULSE_W = 1536.0, PULSE_H = 793.0;
+    // Pulse size state (floating search card)
+    constexpr double PULSE_W = 720.0, PULSE_H = 540.0;
 
     double current_w = AURA_W, current_h = AURA_H;
     double target_w = AURA_W, target_h = AURA_H;
@@ -654,9 +648,9 @@ int main(int argc, char** argv) {
             
             // Ease-out tuning: fast start, gentle stop (premium feel)
             // Increased multiplier for faster start, but check for small delta for stop
-            current_w += dw * 0.28;
-            current_h += dh * 0.28;
-            if (std::abs(dw) < 0.5 && std::abs(dh) < 0.5) {
+            current_w += dw * 0.4;
+            current_h += dh * 0.4;
+            if (std::abs(dw) < 1.0 && std::abs(dh) < 1.0) {
                 current_w = target_w; current_h = target_h;
                 if (!launch_animating) animating = false;
             }

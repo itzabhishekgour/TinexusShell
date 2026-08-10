@@ -59,6 +59,10 @@ void WindowManager::tick_animations(double dt) {
             win->m_scale_anim.tick_dt(dt);
             win->scale = static_cast<float>(win->m_scale_anim.current_value());
         }
+        
+        if (win->active_dock_anim && win->active_dock_anim->is_running()) {
+            win->active_dock_anim->tick(std::chrono::steady_clock::now());
+        }
     }
 }
 
@@ -76,6 +80,8 @@ void WindowManager::unregister_window(uint64_t surface_id) {
 void WindowManager::set_geometry(uint64_t surface_id, int32_t x, int32_t y, uint32_t width, uint32_t height) {
     auto win = find_window(surface_id);
     if (win) {
+        win->saved_x = x;
+        win->saved_y = y;
         win->x = x;
         win->y = y;
         win->width = static_cast<int32_t>(width);

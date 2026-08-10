@@ -103,6 +103,7 @@ target_include_directories(unit_test_comp PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/focus/include
     ${CMAKE_SOURCE_DIR}/src/comp/workspace/include
     ${CMAKE_SOURCE_DIR}/src/comp/shell/include
@@ -209,6 +210,7 @@ add_executable(integration_test_alpha_stress
 
 target_include_directories(integration_test_alpha_stress PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/focus/include
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
 )
@@ -562,6 +564,7 @@ target_include_directories(integration_test_wayland_session PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/backend/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
     ${CMAKE_SOURCE_DIR}/src/comp/focus/include
@@ -713,6 +716,7 @@ target_include_directories(integration_test_first_client PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/backend/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
@@ -770,6 +774,7 @@ add_executable(integration_test_scene_graph
 
 target_include_directories(integration_test_scene_graph PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
     ${CMAKE_SOURCE_DIR}/src/comp/render/include
 )
@@ -843,6 +848,7 @@ target_include_directories(integration_test_real_client PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/backend/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
     ${CMAKE_SOURCE_DIR}/src/comp/output/include
     ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
@@ -938,6 +944,7 @@ add_executable(integration_test_interactive_window
 target_include_directories(integration_test_interactive_window PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/input/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
 )
 
@@ -984,6 +991,7 @@ add_executable(smoke_surface_lifecycle
 target_include_directories(smoke_surface_lifecycle PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/surface/include
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
 )
 
@@ -1084,6 +1092,7 @@ add_executable(smoke_notification_overlay
 
 target_include_directories(smoke_notification_overlay PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    /src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
     ${CMAKE_SOURCE_DIR}/src/comp/render/include
 )

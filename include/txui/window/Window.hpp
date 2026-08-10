@@ -17,6 +17,8 @@
 #include <string>
 #include <string_view>
 #include <memory>
+#include <functional>
+#include <optional>
 
 struct xdg_wm_base;
 struct xdg_surface;
@@ -25,6 +27,21 @@ struct zwlr_layer_surface_v1;
 struct wl_callback;
 
 namespace txui {
+
+enum class LayerType {
+    Background,
+    Bottom,
+    Top,
+    Overlay
+};
+
+enum LayerAnchor {
+    None = 0,
+    Top = 1,
+    Bottom = 2,
+    Left = 4,
+    Right = 8
+};
 
 class Window final : public Object {
 private:
@@ -95,6 +112,13 @@ public:
 
     // Enable or disable keyboard interactivity for layer shell surfaces
     void set_keyboard_interactivity(bool enable) noexcept;
+    
+    // Configure layer shell anchors and exclusive zone. Must be called before wait() or create() if possible.
+    // Actually, can be called on a created window.
+    void set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t exclusive_zone) noexcept;
+    
+    // Set tick callback to run in the event loop every frame
+    void set_tick_callback(std::function<void()> cb) noexcept;
 
     // Exposes Painter API for rendering commands.
     [[nodiscard]] Painter& painter() noexcept { return *m_painter; }
@@ -137,6 +161,9 @@ public:
     void push_event(const Event& event) noexcept;
 
     void bind_wm_base(xdg_wm_base* wm_base) noexcept { m_wm_base = wm_base; }
+    
+private:
+    std::function<void()> m_tick_callback;
 };
 
 } // namespace txui

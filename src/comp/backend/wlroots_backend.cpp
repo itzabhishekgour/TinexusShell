@@ -34,6 +34,7 @@ extern "C" {
 #include "comp/input/shortcut_engine.hpp"
 #include "comp/cursor/cursor_manager.hpp"
 #include "comp/focus/focus_manager.hpp"
+#include "comp/server/server.hpp"
 #include <unistd.h>
 #include <cstdlib>
 #include <sys/wait.h>
@@ -403,7 +404,7 @@ private:
             // Auto-focus heuristic for the unified shell
             if (w->layer_surface->wl_namespace && std::string(w->layer_surface->wl_namespace) == "tinexus-shell") {
                 if (w->layer_surface->surface->current.height > 100) {
-                    if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
+                    if (w->backend->m_lock_surface == nullptr && FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
                         log::info("[LayerShell] Height > 100. Granting keyboard focus to Pulse.");
                         FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
                     }
@@ -412,12 +413,16 @@ private:
                         FocusManager::instance().set_keyboard_focus(nullptr);
                         
                         // Restore focus to top toplevel
-                        ToplevelWrapper* next_focus = nullptr;
-                        if (!w->backend->m_toplevels.empty()) {
-                            next_focus = w->backend->m_toplevels.back().get();
-                        }
-                        if (next_focus) {
-                            w->backend->focus_toplevel(next_focus);
+                        if (w->backend->m_lock_surface == nullptr) {
+                            ToplevelWrapper* next_focus = nullptr;
+                            if (!w->backend->m_toplevels.empty()) {
+                                next_focus = w->backend->m_toplevels.back().get();
+                            }
+                            if (next_focus) {
+                                w->backend->focus_toplevel(next_focus);
+                            }
+                        } else {
+                            FocusManager::instance().set_keyboard_focus(w->backend->m_lock_surface);
                         }
                     }
                 }
@@ -439,6 +444,19 @@ private:
         }
         return nullptr;
     }
+
+    void set_layer_surfaces_enabled(bool enabled) {
+        int count = 0;
+        for (auto* wrapper : m_layer_surfaces) {
+            if (wrapper && wrapper->scene_layer && wrapper->scene_layer->tree) {
+                wlr_scene_node_set_enabled(&wrapper->scene_layer->tree->node, enabled);
+                count++;
+            }
+        }
+        log::info("[LockState] {} {} layer-shell surfaces", 
+            enabled ? "Restoring" : "Hiding", count);
+    }
+
 
     void focus_toplevel(ToplevelWrapper* wrapper) {
         if (m_is_locked && m_lock_surface != nullptr) {
@@ -683,6 +701,7 @@ private:
             log::info("[XDGShell] Lock screen mapped — m_lock_surface={} session LOCKED", static_cast<void*>(surface));
             wrapper->backend->m_is_locked = true;
             wrapper->backend->m_lock_surface = surface;
+            wrapper->backend->set_layer_surfaces_enabled(false);
         }
 
         wrapper->backend->focus_toplevel(wrapper);
@@ -718,8 +737,9 @@ private:
         // Minimize = hide the scene node. There is no dock/taskbar yet, so this
         // is a "hide-only" minimize. The user can re-open from Pulse.
         if (wrapper->scene_tree) {
-            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
-            log::info("[XDGShell] Minimized (hidden) — no dock restore path yet.");
+            if (TinexusServer::instance()) {
+                TinexusServer::instance()->trigger_minimize(reinterpret_cast<uint64_t>(wrapper->toplevel->base->surface));
+            }
         }
         wlr_xdg_surface_schedule_configure(toplevel->base);
     }
@@ -734,6 +754,7 @@ private:
             log::info("[XDGShell] Lock screen destroyed — marking session UNLOCKED atomically");
             backend->m_is_locked = false;
             backend->m_lock_surface = nullptr;
+            backend->set_layer_surfaces_enabled(true);
         }
 
         if (backend->m_active_toplevel == wrapper) {
