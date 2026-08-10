@@ -38,8 +38,8 @@ TitleBarWidget::TitleBarWidget(
       m_on_move(std::move(on_move)) {}
 
 Rect TitleBarWidget::button_rect(int index) const noexcept {
-    double y = (frame().height() - (BUTTON_RADIUS * 2.0)) / 2.0;
-    double x = LEFT_PADDING + static_cast<double>(index) * BUTTON_SPACING;
+    double y = frame().y() + (frame().height() - (BUTTON_RADIUS * 2.0)) / 2.0;
+    double x = frame().x() + LEFT_PADDING + static_cast<double>(index) * BUTTON_SPACING;
     return Rect(x, y, BUTTON_RADIUS * 2.0, BUTTON_RADIUS * 2.0);
 }
 
@@ -52,10 +52,10 @@ void TitleBarWidget::paint_override(Painter& painter) const noexcept {
     const Rect f = frame();
 
     // Background
-    painter.fill_rect(Rect(0.0, 0.0, f.width(), f.height()), TITLEBAR_BG);
+    painter.fill_rect(Rect(f.x(), f.y(), f.width(), f.height()), TITLEBAR_BG);
 
     // Bottom border — 1px separator line
-    painter.fill_rect(Rect(0.0, f.height() - 1.0, f.width(), 1.0), TITLEBAR_BORDER);
+    painter.fill_rect(Rect(f.x(), f.y() + f.height() - 1.0, f.width(), 1.0), TITLEBAR_BORDER);
 
     // Traffic light buttons
     const Color close_color = (m_hovered_button == 0) ? BTN_CLOSE_HOVER : BTN_CLOSE_NORMAL;
@@ -75,7 +75,7 @@ void TitleBarWidget::paint_override(Painter& painter) const noexcept {
     // Title text — muted gray, smaller scale, centered
     if (!m_title.empty()) {
         const double text_w = static_cast<double>(m_title.length()) * 5.5; // approx at scale 1.0
-        Point title_pos{(f.width() - text_w) / 2.0, 22.0};
+        Point title_pos{f.x() + (f.width() - text_w) / 2.0, f.y() + 10.0};
         painter.draw_text(title_pos, m_title, TITLE_TEXT, 1.0);
     }
 }

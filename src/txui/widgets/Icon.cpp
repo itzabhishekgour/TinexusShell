@@ -27,6 +27,32 @@ void Icon::paint_override(Painter& painter) const noexcept {
     
     // MVP Placeholder Shapes
     switch (m_type) {
+        case IconType::Home:
+            // Blue house (circle with a small square door)
+            painter.fill_circle(Point(f.left() + m_size*0.5, f.top() + m_size*0.5), m_size*0.4, Color(0, 122, 255, 255));
+            painter.fill_rect(Rect(f.left() + m_size*0.35, f.top() + m_size*0.5, m_size*0.3, m_size*0.4), Color(255, 255, 255, 255));
+            break;
+        case IconType::Downloads:
+            // Green circle with a download arrow (vertical bar + horizontal base)
+            painter.fill_circle(Point(f.left() + m_size*0.5, f.top() + m_size*0.5), m_size*0.4, Color(52, 199, 89, 255));
+            painter.fill_rect(Rect(f.left() + m_size*0.4, f.top() + m_size*0.2, m_size*0.2, m_size*0.4), Color(255, 255, 255, 255));
+            painter.fill_rect(Rect(f.left() + m_size*0.3, f.top() + m_size*0.6, m_size*0.4, m_size*0.15), Color(255, 255, 255, 255));
+            break;
+        case IconType::Apps: {
+            // Teal grid (4 small squares spread apart)
+            double w = m_size * 0.3;
+            painter.fill_rect(Rect(f.left() + m_size*0.15, f.top() + m_size*0.15, w, w), Color(90, 200, 250, 255));
+            painter.fill_rect(Rect(f.left() + m_size*0.55, f.top() + m_size*0.15, w, w), Color(90, 200, 250, 255));
+            painter.fill_rect(Rect(f.left() + m_size*0.15, f.top() + m_size*0.55, w, w), Color(90, 200, 250, 255));
+            painter.fill_rect(Rect(f.left() + m_size*0.55, f.top() + m_size*0.55, w, w), Color(90, 200, 250, 255));
+            break;
+        }
+        case IconType::Trash:
+            // Red bin with distinct lid
+            painter.fill_rect(Rect(f.left() + m_size*0.35, f.top() + m_size*0.1, m_size*0.3, m_size*0.1), Color(255, 59, 48, 255)); // lid handle
+            painter.fill_rect(Rect(f.left() + m_size*0.2, f.top() + m_size*0.2, m_size*0.6, m_size*0.1), Color(255, 59, 48, 255));  // lid
+            painter.fill_rect(Rect(f.left() + m_size*0.25, f.top() + m_size*0.35, m_size*0.5, m_size*0.5), Color(255, 59, 48, 255)); // bin body
+            break;
         case IconType::Folder:
             // Blue rounded rect for folder
             painter.fill_rounded_rect(f, m_size * 0.2, Color(50, 150, 250, 255));

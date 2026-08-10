@@ -9,7 +9,11 @@ enum class IconType {
     File,
     Executable,
     Image,
-    Archive
+    Archive,
+    Home,
+    Downloads,
+    Apps,
+    Trash
 };
 
 class Icon : public Widget {

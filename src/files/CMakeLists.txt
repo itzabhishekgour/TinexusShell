@@ -22,3 +22,14 @@ target_link_libraries(tinexus-files PRIVATE
 )
 
 install(TARGETS tinexus-files RUNTIME DESTINATION bin)
+
+add_executable(capture_files_ui
+    ../../tools/capture_files_ui.cpp
+    file_model.cpp
+    column_view_model.cpp
+    trash_manager.cpp
+    file_operations.cpp
+    ui/ColumnWidget.cpp
+    ui/ColumnBrowserWidget.cpp
+)
+target_link_libraries(capture_files_ui PRIVATE tinexus-sdk tinexus_common txui)

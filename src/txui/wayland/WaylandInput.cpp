@@ -103,7 +103,7 @@ void pointer_handle_button(void* data, struct wl_pointer* /*pointer*/, uint32_t 
 
 void pointer_handle_axis(void* data, struct wl_pointer* /*pointer*/, uint32_t time, uint32_t axis, wl_fixed_t value) {
     auto* input = static_cast<WaylandInput*>(data);
-    Event event;
+    Event event{};
     event.type = EventType::PointerScroll;
     event.timestamp_ns = static_cast<uint64>(time) * 1000000ULL;
     double delta = wl_fixed_to_double(value);

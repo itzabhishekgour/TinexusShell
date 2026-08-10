@@ -8,7 +8,7 @@ void ScrollArea::set_scroll_y(double y) noexcept {
     double new_y = std::clamp(y, 0.0, m_max_scroll_y);
     if (m_scroll_y != new_y) {
         m_scroll_y = new_y;
-        mark_needs_paint();
+        mark_needs_layout(); // must reposition child, not just repaint
     }
 }
 
@@ -16,7 +16,7 @@ void ScrollArea::set_scroll_x(double x) noexcept {
     double new_x = std::clamp(x, 0.0, m_max_scroll_x);
     if (m_scroll_x != new_x) {
         m_scroll_x = new_x;
-        mark_needs_paint();
+        mark_needs_layout(); // must reposition child, not just repaint
     }
 }
 
@@ -25,13 +25,10 @@ Size ScrollArea::measure_override(const Constraints& constraints) noexcept {
         return constraints.constrain(Size(0, 0));
     }
 
-    // ScrollArea provides infinite space to its children for measurement
+    // Pass infinite constraints only if scrolling is allowed in that direction
     Constraints child_constraints(0, INF, 0, INF);
-    
-    // Pass width constraints if we only want vertical scrolling, etc.
-    // For Tinexus files, we constrain width to max_width since we only scroll vertically.
-    child_constraints.max_width = constraints.max_width;
-    child_constraints.max_height = INF;
+    child_constraints.max_width = m_allow_scroll_x ? INF : constraints.max_width;
+    child_constraints.max_height = m_allow_scroll_y ? INF : constraints.max_height;
 
     auto& child = children().front();
     child->measure(child_constraints);
@@ -41,8 +38,8 @@ Size ScrollArea::measure_override(const Constraints& constraints) noexcept {
     double desired_h = std::min(constraints.max_height, child->desired_size().height);
     
     // Compute max scroll
-    m_max_scroll_x = std::max(0.0, child->desired_size().width - desired_w);
-    m_max_scroll_y = std::max(0.0, child->desired_size().height - desired_h);
+    m_max_scroll_x = m_allow_scroll_x ? std::max(0.0, child->desired_size().width - desired_w) : 0.0;
+    m_max_scroll_y = m_allow_scroll_y ? std::max(0.0, child->desired_size().height - desired_h) : 0.0;
 
     return constraints.constrain(Size(desired_w, desired_h));
 }
@@ -88,14 +85,24 @@ bool ScrollArea::handle_event(const Event& event) noexcept {
     if (event.type == EventType::PointerScroll) {
         Point position(event.pointer.x, event.pointer.y);
         if (frame().contains(position)) {
+            // Map vertical scroll to horizontal scroll if vertical scrolling is disabled
+            // This enables horizontal mouse-wheel scrolling across columns when the mouse is over the background
+            double dy = event.pointer.scroll_delta_y;
+            double dx = event.pointer.scroll_delta_x;
+            
+            if (dy != 0.0 && !m_allow_scroll_y && m_allow_scroll_x) {
+                dx += dy;
+                dy = 0.0;
+            }
+            
             // Scroll vertical
-            if (event.pointer.scroll_delta_y != 0.0 && m_max_scroll_y > 0.0) {
-                set_scroll_y(m_scroll_y + event.pointer.scroll_delta_y * 30.0);
+            if (dy != 0.0 && m_allow_scroll_y && m_max_scroll_y > 0.0) {
+                set_scroll_y(m_scroll_y + dy * 30.0);
                 return true;
             }
             // Scroll horizontal
-            if (event.pointer.scroll_delta_x != 0.0 && m_max_scroll_x > 0.0) {
-                set_scroll_x(m_scroll_x + event.pointer.scroll_delta_x * 30.0);
+            if (dx != 0.0 && m_allow_scroll_x && m_max_scroll_x > 0.0) {
+                set_scroll_x(m_scroll_x + dx * 30.0);
                 return true;
             }
         }

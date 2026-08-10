@@ -3,11 +3,14 @@
 #include <txui/widgets/Label.hpp>
 #include <txui/widgets/Icon.hpp>
 #include <txui/layout/Padding.hpp>
+#include <iostream>
 
 namespace tinexus::files::ui {
 
 ColumnBrowserWidget::ColumnBrowserWidget() {
     m_scroll_area = txui::make_ref<txui::ScrollArea>();
+    m_scroll_area->set_allow_scroll_y(false); // Outer scroll area only scrolls horizontally
+    
     m_columns_layout = txui::make_ref<txui::FlexLayout>();
     m_columns_layout->set_direction(txui::FlexDirection::Row);
     m_columns_layout->set_main_axis_alignment(txui::MainAxisAlignment::Start);
@@ -63,10 +66,10 @@ ColumnBrowserWidget::ColumnBrowserWidget() {
         return txui::make_ref<txui::Padding>(txui::Insets(8.0, 16.0), row);
     };
     
-    m_sidebar_home = create_sidebar_item("Home", txui::IconType::Folder);
-    m_sidebar_downloads = create_sidebar_item("Downloads", txui::IconType::Folder);
-    m_sidebar_apps = create_sidebar_item("Apps", txui::IconType::Executable);
-    m_sidebar_trash = create_sidebar_item("Trash", txui::IconType::Folder);
+    m_sidebar_home = create_sidebar_item("Home", txui::IconType::Home);
+    m_sidebar_downloads = create_sidebar_item("Downloads", txui::IconType::Downloads);
+    m_sidebar_apps = create_sidebar_item("Apps", txui::IconType::Apps);
+    m_sidebar_trash = create_sidebar_item("Trash", txui::IconType::Trash);
     
     m_sidebar->add_child(m_sidebar_home);
     m_sidebar->add_child(m_sidebar_downloads);
@@ -79,42 +82,7 @@ ColumnBrowserWidget::ColumnBrowserWidget() {
     add_child(m_path_label);
 }
 
-void ColumnBrowserWidget::navigate_to(const std::filesystem::path& path) {
-    m_model.initialize(path);
-    m_columns_layout->remove_all_children();
-    
-    size_t col_index = 0;
-    size_t total_cols = m_model.columns().size();
-    for (const auto& level : m_model.columns()) {
-        bool is_last = (col_index == total_cols - 1);
-        auto col_widget = txui::make_ref<ColumnWidget>(level, col_index, is_last);
-        col_widget->set_on_item_selected([this](size_t c, size_t i) { on_item_selected(c, i); });
-        col_widget->set_on_item_double_clicked([this](size_t c, size_t i) { on_item_double_clicked(c, i); });
-        m_columns_layout->add_child(col_widget);
-        col_index++;
-    }
-    mark_needs_measure();
-}
-
-void ColumnBrowserWidget::on_item_selected(size_t col_index, size_t item_index) {
-    if (m_model.select_item(col_index, item_index)) {
-        // Rebuild columns
-        m_columns_layout->remove_all_children();
-        size_t c = 0;
-        size_t total_cols = m_model.columns().size();
-        for (const auto& level : m_model.columns()) {
-            bool is_last = (c == total_cols - 1);
-            auto col_widget = txui::make_ref<ColumnWidget>(level, c, is_last);
-            col_widget->set_on_item_selected([this](size_t c_idx, size_t i_idx) { on_item_selected(c_idx, i_idx); });
-            col_widget->set_on_item_double_clicked([this](size_t c_idx, size_t i_idx) { on_item_double_clicked(c_idx, i_idx); });
-            m_columns_layout->add_child(col_widget);
-            c++;
-        }
-        
-        // Auto-scroll to the rightmost column
-        m_scroll_area->set_scroll_x(10000.0); 
-    }
-
+void ColumnBrowserWidget::update_chrome_state(size_t col_index, size_t item_index) {
     // Update preview panel
     if (col_index < m_model.columns().size()) {
         const auto& level = m_model.columns()[col_index];
@@ -123,6 +91,10 @@ void ColumnBrowserWidget::on_item_selected(size_t col_index, size_t item_index) 
             m_preview_name->set_text(item.name);
             m_preview_type->set_text(item.mime_type);
             m_preview_size->set_text(std::to_string(item.size_bytes / 1024) + " KB");
+        } else {
+            m_preview_name->set_text("No file selected");
+            m_preview_type->set_text("");
+            m_preview_size->set_text("");
         }
     }
     
@@ -144,6 +116,46 @@ void ColumnBrowserWidget::on_item_selected(size_t col_index, size_t item_index) 
     m_path_label->set_text(breadcrumb);
     
     mark_needs_measure();
+}
+
+void ColumnBrowserWidget::navigate_to(const std::filesystem::path& path) {
+    m_model.initialize(path);
+    m_columns_layout->remove_all_children();
+    
+    size_t col_index = 0;
+    size_t total_cols = m_model.columns().size();
+    for (const auto& level : m_model.columns()) {
+        bool is_last = (col_index == total_cols - 1);
+        auto col_widget = txui::make_ref<ColumnWidget>(level, col_index, is_last);
+        col_widget->set_on_item_selected([this](size_t c, size_t i) { on_item_selected(c, i); });
+        col_widget->set_on_item_double_clicked([this](size_t c, size_t i) { on_item_double_clicked(c, i); });
+        m_columns_layout->add_child(col_widget);
+        col_index++;
+    }
+    
+    update_chrome_state(m_model.columns().size() - 1, static_cast<size_t>(-1));
+}
+
+void ColumnBrowserWidget::on_item_selected(size_t col_index, size_t item_index) {
+    if (m_model.select_item(col_index, item_index)) {
+        // Rebuild columns
+        m_columns_layout->remove_all_children();
+        size_t c = 0;
+        size_t total_cols = m_model.columns().size();
+        for (const auto& level : m_model.columns()) {
+            bool is_last = (c == total_cols - 1);
+            auto col_widget = txui::make_ref<ColumnWidget>(level, c, is_last);
+            col_widget->set_on_item_selected([this](size_t c_idx, size_t i_idx) { on_item_selected(c_idx, i_idx); });
+            col_widget->set_on_item_double_clicked([this](size_t c_idx, size_t i_idx) { on_item_double_clicked(c_idx, i_idx); });
+            m_columns_layout->add_child(col_widget);
+            c++;
+        }
+        
+    // Auto-scroll to the rightmost column
+        m_scroll_area->set_scroll_x(10000.0); 
+    }
+
+    update_chrome_state(col_index, item_index);
 }
 
 void ColumnBrowserWidget::on_item_double_clicked(size_t col_index, size_t item_index) {
@@ -242,8 +254,29 @@ bool ColumnBrowserWidget::handle_event(const txui::Event& event) noexcept {
     }
     
     if (event.type == txui::EventType::PointerButtonPress) {
+        // Debug: log what's being clicked vs what frames sidebar items have
+        std::cout << "[Tinexus Files] PointerButtonPress at ("
+                  << event.pointer.x << ", " << event.pointer.y << ")\n";
+        std::cout << "[Tinexus Files]   sidebar frame: l=" << m_sidebar->frame().left()
+                  << " t=" << m_sidebar->frame().top()
+                  << " r=" << m_sidebar->frame().right()
+                  << " b=" << m_sidebar->frame().bottom() << "\n";
+        std::cout << "[Tinexus Files]   home item frame: l=" << m_sidebar_home->frame().left()
+                  << " t=" << m_sidebar_home->frame().top()
+                  << " r=" << m_sidebar_home->frame().right()
+                  << " b=" << m_sidebar_home->frame().bottom() << "\n";
+        std::cout << "[Tinexus Files]   downloads item frame: l=" << m_sidebar_downloads->frame().left()
+                  << " t=" << m_sidebar_downloads->frame().top()
+                  << " r=" << m_sidebar_downloads->frame().right()
+                  << " b=" << m_sidebar_downloads->frame().bottom() << "\n";
+
         auto check_sidebar_click = [&](txui::Ref<txui::Widget> item, const std::string& target) {
             if (item->frame().contains(event.pointer.x, event.pointer.y)) {
+                std::error_code ec;
+                if (!std::filesystem::exists(target, ec)) {
+                    std::cout << "[Tinexus Files] Sidebar navigation failed: Directory '" << target << "' does not exist." << std::endl;
+                    return true; // Consume event but do nothing
+                }
                 navigate_to(target);
                 return true;
             }
@@ -256,7 +289,7 @@ bool ColumnBrowserWidget::handle_event(const txui::Event& event) noexcept {
         if (check_sidebar_click(m_sidebar_trash, "/home/tinexus/.local/share/Trash/files")) return true;
     }
     
-    // Since we removed m_root_layout, we should forward events to our children
+    // Forward events to manually-managed children that are not in the Widget child tree dispatch
     if (m_scroll_area->handle_event(event)) return true;
     if (m_preview_panel->handle_event(event)) return true;
     

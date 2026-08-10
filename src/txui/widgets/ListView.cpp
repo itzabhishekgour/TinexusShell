@@ -7,6 +7,8 @@ namespace txui {
 
 ListView::ListView() noexcept {
     m_scroll_area = make_ref<ScrollArea>();
+    m_scroll_area->set_allow_scroll_x(false);
+    
     m_content_layout = make_ref<FlexLayout>();
     m_content_layout->set_direction(FlexDirection::Column);
     m_content_layout->set_main_axis_alignment(MainAxisAlignment::Start);

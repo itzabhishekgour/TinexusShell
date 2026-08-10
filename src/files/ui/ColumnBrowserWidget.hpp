@@ -37,6 +37,7 @@ private:
 
     void on_item_selected(size_t col_index, size_t item_index);
     void on_item_double_clicked(size_t col_index, size_t item_index);
+    void update_chrome_state(size_t col_index, size_t item_index);
 
 protected:
     txui::Size measure_override(const txui::Constraints& constraints) noexcept override;

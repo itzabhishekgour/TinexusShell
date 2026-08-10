@@ -107,19 +107,19 @@ int main(int argc, char* argv[]) {
         }
 
         // Prepare payload exactly like InstallerWidget
-        tinexus::ipcd::protocol::Header hdr = {0};
+        tinexus::ipcd::protocol::Header hdr = {};
         hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
         hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
         hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_REQUEST);
         
-        tinexus::ipcd::protocol::UninstallRequestPayload req = {0}; // Ensure null initialization
+        tinexus::ipcd::protocol::UninstallRequestPayload req = {}; // Ensure null initialization
         strncpy(req.app_name, app_name.c_str(), sizeof(req.app_name) - 1);
         req.app_name[sizeof(req.app_name) - 1] = '\0'; // Explicit null-termination
 
         hdr.payload_len = sizeof(req);
 
         // Send using sendmsg
-        struct msghdr msg = {0};
+        struct msghdr msg = {};
         struct iovec iov[2];
         iov[0].iov_base = &hdr;
         iov[0].iov_len = sizeof(hdr);
@@ -136,7 +136,7 @@ int main(int argc, char* argv[]) {
         }
         
         // Wait for response
-        tinexus::ipcd::protocol::Header resp_hdr = {0};
+        tinexus::ipcd::protocol::Header resp_hdr = {};
         if (recv(sock, &resp_hdr, sizeof(resp_hdr), 0) == sizeof(resp_hdr)) {
             if (resp_hdr.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_UNINSTALL_OK)) {
                 tinexus::log::info("Uninstall successful");

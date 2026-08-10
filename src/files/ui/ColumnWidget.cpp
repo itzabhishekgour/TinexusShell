@@ -92,9 +92,7 @@ void ColumnWidget::paint_override(txui::Painter& painter) const noexcept {
     
     // Draw column border on the right edge, unless this is the deepest column
     if (!m_is_last_column) {
-        txui::Point p1(frame().right(), frame().top());
-        txui::Point p2(frame().right(), frame().bottom());
-        painter.draw_line(p1, p2, 1.0, txui::Color(60, 60, 60, 255));
+        painter.fill_rect(txui::Rect(frame().right() - 1.0, frame().top(), 1.0, frame().height()), txui::Color(60, 60, 60, 255));
     }
 }
 
