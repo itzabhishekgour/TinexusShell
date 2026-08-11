@@ -327,6 +327,7 @@ void Window::present(const Rect& damage) noexcept {
 
     m_backend.execute(m_command_buffer, *m_render_target);
     m_command_buffer.clear();
+    m_frame_ready = false;
 
     if (m_connection.has_value()) {
         auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
@@ -435,7 +436,13 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
                 // m_output_width defaults to 1920 until configure event updates it.
                 const int32_t side_margin = static_cast<int32_t>((m_output_width - static_cast<int32_t>(width)) / 2);
                 const int32_t clamped = side_margin > 0 ? side_margin : 0;
-                zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
+                if (m_title == "shell") {
+                    zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
+                } else if (m_title == "dock") {
+                    zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, clamped, 12, clamped);
+                } else {
+                    zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, clamped, 0, clamped);
+                }
                 // NOTE: Do NOT commit here. The size/margin changes are Wayland
                 // pending state that will be atomically applied with the next pixel
                 // buffer commit in Window::present(). Committing here causes a

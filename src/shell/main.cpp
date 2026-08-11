@@ -215,6 +215,7 @@ static std::vector<AppItem> get_system_actions(const std::string& lq) {
 
 static std::vector<AppItem> load_system_apps() {
     std::vector<AppItem> apps;
+    apps.push_back({"Tinexus Terminal", "tinexus-terminal", "Default Wayland Terminal", false, ""});
     apps.push_back({"Foot Terminal", "foot", "Fast Wayland Terminal", true, ""});
     apps.push_back({"Weston Terminal", "weston-terminal", "Wayland Demo Terminal", true, ""});
     apps.push_back({"Alacritty", "alacritty", "GPU Accelerated Terminal", true, ""});
@@ -331,11 +332,6 @@ public:
         // ── Pill body ─────────────────────────────────────────────────
         painter.fill_rounded_rect(f, static_cast<int>(R), AURA_BG);
 
-        // ── Glass border: bright top, subtle rim ──────────────────────
-        painter.fill_rounded_rect({f.x() + 2, f.y(), W - 4, 1}, 0, BORDER_TOP);
-        painter.fill_rounded_rect({f.x() - 1, f.y() - 1, W + 2, H + 2},
-                                   static_cast<int>(R) + 1, BORDER_RIM);
-
         constexpr double PAD_H = 18.0;
 
         // ── LEFT: time + wifi bars ────────────────────────────────────
@@ -344,12 +340,14 @@ public:
         localtime_r(&now, &tb);
         char ts[16];
         strftime(ts, sizeof(ts), "%H:%M", &tb);
-        painter.draw_text({f.x() + PAD_H, cy + 6.0}, ts, TXT_PRI, 15);
+        // Center text vertically by shifting y up by half the font size (15 / 2 = 7.5)
+        painter.draw_text({f.x() + PAD_H, cy - 7.5}, ts, TXT_PRI, 15);
 
-        double wx = f.x() + PAD_H + 52.0;
+        double wx = f.x() + PAD_H + 54.0;
         for (int b = 0; b < 3; ++b) {
-            double bh = 4.0 + static_cast<double>(b) * 3.0;
-            painter.fill_rounded_rect({wx + static_cast<double>(b) * 6.0, cy - bh + 8.0, 4.0, bh},
+            double bh = 6.0 + static_cast<double>(b) * 3.0; // Heights: 6, 9, 12
+            // Vertically center the bars relative to cy. Center of a bar is cy, so top is cy - bh/2.
+            painter.fill_rounded_rect({wx + static_cast<double>(b) * 5.0, cy - bh / 2.0, 3.0, bh},
                                        1, WIFI_COL);
         }
 
@@ -357,17 +355,19 @@ public:
         const double r = H / 2.0 - 6.0;
         painter.fill_rounded_rect({cx - r, f.y() + 6.0, r * 2.0, r * 2.0},
                                    static_cast<int>(r), ACCENT);
-        painter.draw_text({cx - 5.0, cy + 6.0}, "T", txui::Color(255, 255, 255, 230), 14);
+        // Center "T" text vertically and horizontally. Text size is 15.
+        painter.draw_text({cx - 5.0, cy - 7.5}, "T", txui::Color(255, 255, 255, 240), 15);
 
         // ── RIGHT: battery ────────────────────────────────────────────
         constexpr double PCT = 85.0;
         const txui::Color bc = PCT > 20.0 ? txui::Color{100, 220, 130, 220} : txui::Color{240, 80, 80, 220};
-        const double bx = f.x() + W - PAD_H - 52.0, by = cy - 7.0;
+        const double bx = f.x() + W - PAD_H - 58.0, by = cy - 7.0; // Height is 14, so by = cy - 7 means centered!
         painter.fill_rounded_rect({bx, by, 22.0, 14.0}, 2, txui::Color{60, 60, 80, 200});
         painter.fill_rounded_rect({bx + 22.0, by + 3.5, 3.0, 7.0}, 1, txui::Color{60, 60, 80, 200});
         painter.fill_rounded_rect({bx + 2.0, by + 2.0, 18.0 * PCT / 100.0, 10.0}, 1, bc);
         char ps[8]; snprintf(ps, sizeof(ps), "%.0f%%", PCT);
-        painter.draw_text({bx + 26.0, cy + 6.0}, ps, TXT_PRI, 13);
+        // Center text vertically by shifting y up by half the font size (13 / 2 = 6.5)
+        painter.draw_text({bx + 28.0, cy - 6.5}, ps, TXT_PRI, 13);
     }
 };
 
