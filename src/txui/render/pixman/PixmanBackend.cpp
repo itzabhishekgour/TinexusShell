@@ -8,6 +8,7 @@
 #include FT_FREETYPE_H
 #include <unordered_map>
 #include <vector>
+#include <list>
 
 #if defined(TXUI_HAS_PIXMAN)
 #include <pixman.h>
@@ -390,16 +391,17 @@ namespace {
     bool g_ft_failed = false;
 
     struct GlyphCacheKey {
-        char ch;
+        uint32_t codepoint;
         int size;
+        bool bold;
         bool operator==(const GlyphCacheKey& other) const {
-            return ch == other.ch && size == other.size;
+            return codepoint == other.codepoint && size == other.size && bold == other.bold;
         }
     };
 
     struct GlyphCacheKeyHash {
         std::size_t operator()(const GlyphCacheKey& k) const {
-            return std::hash<char>()(k.ch) ^ (std::hash<int>()(k.size) << 1);
+            return std::hash<uint32_t>()(k.codepoint) ^ (std::hash<int>()(k.size) << 1) ^ (std::hash<bool>()(k.bold) << 2);
         }
     };
 
@@ -413,7 +415,12 @@ namespace {
         int advance_x;
     };
 
-    std::unordered_map<GlyphCacheKey, CachedGlyph, GlyphCacheKeyHash> g_glyph_cache;
+    constexpr size_t MAX_CACHED_GLYPHS = 2000;
+    std::list<GlyphCacheKey> g_glyph_lru;
+    std::unordered_map<GlyphCacheKey, std::pair<CachedGlyph, std::list<GlyphCacheKey>::iterator>, GlyphCacheKeyHash> g_glyph_cache;
+
+    size_t g_cache_hits = 0;
+    size_t g_cache_misses = 0;
 
     void init_freetype() {
         if (g_ft_initialized || g_ft_failed) return;
@@ -426,11 +433,10 @@ namespace {
         }
         
         const char* font_paths[] = {
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"
         };
         
         for (const char* path : font_paths) {
@@ -446,18 +452,27 @@ namespace {
         }
     }
 
-    const CachedGlyph* get_cached_glyph(char ch, int size) {
-        GlyphCacheKey key{ch, size};
+    const CachedGlyph* get_cached_glyph(uint32_t codepoint, int size, bool bold) {
+        GlyphCacheKey key{codepoint, size, bold};
         auto it = g_glyph_cache.find(key);
         if (it != g_glyph_cache.end()) {
-            return &it->second;
+            g_cache_hits++;
+            // Move to front of LRU
+            g_glyph_lru.splice(g_glyph_lru.begin(), g_glyph_lru, it->second.second);
+            return &it->second.first;
+        }
+        g_cache_misses++;
+        if (g_cache_misses % 1000 == 0) {
+            txui::log_message(txui::LogLevel::Info, "Glyph Cache: hits=" + std::to_string(g_cache_hits) + ", misses=" + std::to_string(g_cache_misses) + ", size=" + std::to_string(g_glyph_cache.size()));
         }
 
         if (FT_Set_Pixel_Sizes(g_ft_face, 0, static_cast<FT_UInt>(size))) {
             return nullptr;
         }
 
-        if (FT_Load_Char(g_ft_face, static_cast<FT_ULong>(static_cast<unsigned char>(ch)), FT_LOAD_RENDER)) {
+        // We skip synthetic bolding for MVP, but the key has it for future-proofing
+        FT_UInt glyph_index = FT_Get_Char_Index(g_ft_face, static_cast<FT_ULong>(codepoint));
+        if (FT_Load_Glyph(g_ft_face, glyph_index, FT_LOAD_RENDER)) {
             return nullptr;
         }
 
@@ -475,12 +490,19 @@ namespace {
             glyph.bitmap.assign(bitmap->buffer, bitmap->buffer + (static_cast<std::size_t>(bitmap->rows) * static_cast<std::size_t>(bitmap->pitch)));
         }
 
-        g_glyph_cache[key] = std::move(glyph);
-        return &g_glyph_cache[key];
+        if (g_glyph_cache.size() >= MAX_CACHED_GLYPHS) {
+            auto last = g_glyph_lru.back();
+            g_glyph_lru.pop_back();
+            g_glyph_cache.erase(last);
+        }
+
+        g_glyph_lru.push_front(key);
+        g_glyph_cache[key] = {std::move(glyph), g_glyph_lru.begin()};
+        return &g_glyph_cache[key].first;
     }
 }
 
-void rasterize_text(RenderTarget& target, const Point& pos, const std::string& text, const Color& color, double scale, const Rect& clip) noexcept {
+void rasterize_text(RenderTarget& target, const Point& pos, const std::string& text, const Color& color, double scale, bool bold, bool italic, const Rect& clip) noexcept {
     init_freetype();
     if (!g_ft_face || g_ft_failed) return; // Graceful fallback (draw nothing)
     
@@ -504,8 +526,30 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
     int32 clip_right  = std::min(target_w, static_cast<int32>(std::ceil(clip.right())));
     int32 clip_bottom = std::min(target_h, static_cast<int32>(std::ceil(clip.bottom())));
 
-    for (size_t i = 0; i < text.size(); ++i) {
-        const CachedGlyph* glyph = get_cached_glyph(text[i], size);
+    for (size_t i = 0; i < text.size(); ) {
+        uint32_t codepoint = 0;
+        uint8_t c = text[i];
+        if (c < 0x80) {
+            codepoint = c;
+            i += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 >= text.size()) break;
+            codepoint = ((c & 0x1F) << 6) | (text[i+1] & 0x3F);
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 >= text.size()) break;
+            codepoint = ((c & 0x0F) << 12) | ((text[i+1] & 0x3F) << 6) | (text[i+2] & 0x3F);
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i + 3 >= text.size()) break;
+            codepoint = ((c & 0x07) << 18) | ((text[i+1] & 0x3F) << 12) | ((text[i+2] & 0x3F) << 6) | (text[i+3] & 0x3F);
+            i += 4;
+        } else {
+            i += 1;
+            continue;
+        }
+
+        const CachedGlyph* glyph = get_cached_glyph(codepoint, size, bold);
         if (!glyph) continue;
 
         int32 draw_x = pen_x + glyph->bitmap_left;
@@ -767,7 +811,7 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
             } else if constexpr (::std::is_same_v<T, DrawCircleCommand>) {
                 rasterize_circle(target, current_clip, cmd.center, cmd.radius, cmd.color, cmd.stroke_width);
             } else if constexpr (::std::is_same_v<T, DrawTextCommand>) {
-                rasterize_text(target, cmd.pos, cmd.text, cmd.color, cmd.scale, current_clip);
+                rasterize_text(target, cmd.pos, cmd.text, cmd.color, cmd.scale, cmd.bold, cmd.italic, current_clip);
             } else if constexpr (::std::is_same_v<T, DrawLineCommand>) {
                 if (cmd.p1.x == cmd.p2.x) {
                     // Vertical line

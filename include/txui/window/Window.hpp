@@ -142,6 +142,9 @@ public:
     [[nodiscard]] Ref<Widget> root_widget() const noexcept { return m_root_widget; }
 
     [[nodiscard]] bool is_wayland_connected() const noexcept { return m_connection.has_value() && m_connection->is_valid(); }
+    
+    // Expose the event loop for adding custom FDs
+    [[nodiscard]] wayland::WaylandEventLoop* event_loop() noexcept { return m_event_loop ? &*m_event_loop : nullptr; }
 
     // Set or unset maximized state (sends xdg_toplevel request to compositor)
     void set_maximized(bool maximized) noexcept;

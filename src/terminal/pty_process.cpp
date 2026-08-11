@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <sys/wait.h>
 #include <termios.h>
+#include <cstring>
 
 namespace tinexus::terminal {
 
@@ -12,13 +13,17 @@ PtyProcess::~PtyProcess() {
     terminate();
 }
 
-bool PtyProcess::spawn(const std::string& shell_path, uint16_t cols, uint16_t rows) {
+bool PtyProcess::spawn(const std::string& shell_path, const std::vector<std::string>& args_list, uint16_t cols, uint16_t rows) {
     log::info("PtyProcess: Opening master PTY...");
     m_master_fd = posix_openpt(O_RDWR | O_NOCTTY);
     if (m_master_fd == -1) {
         log::error("PtyProcess: Failed to open master PTY!");
         return false;
     }
+
+    // Set non-blocking mode
+    int flags = fcntl(m_master_fd, F_GETFL, 0);
+    fcntl(m_master_fd, F_SETFL, flags | O_NONBLOCK);
 
     if (grantpt(m_master_fd) != 0 || unlockpt(m_master_fd) != 0) {
         log::error("PtyProcess: Failed to grant/unlock PTY!");
@@ -61,8 +66,21 @@ bool PtyProcess::spawn(const std::string& shell_path, uint16_t cols, uint16_t ro
         if (slave_fd > STDERR_FILENO) close(slave_fd);
 
         setenv("TERM", "xterm-256color", 1);
-        const char* args[] = {shell_path.c_str(), nullptr};
-        execvp(shell_path.c_str(), const_cast<char* const*>(args));
+        
+        std::vector<const char*> exec_args;
+        exec_args.push_back(shell_path.c_str());
+        for (const auto& arg : args_list) {
+            exec_args.push_back(arg.c_str());
+        }
+        exec_args.push_back(nullptr);
+        
+        execvp(shell_path.c_str(), const_cast<char* const*>(exec_args.data()));
+        
+        // If we get here, execvp failed. Write error to PTY before dying.
+        const char* err_msg = "Failed to execute shell: ";
+        write(STDOUT_FILENO, err_msg, strlen(err_msg));
+        write(STDOUT_FILENO, shell_path.c_str(), shell_path.length());
+        write(STDOUT_FILENO, "\r\n", 2);
         _exit(1);
     }
 
@@ -72,7 +90,11 @@ bool PtyProcess::spawn(const std::string& shell_path, uint16_t cols, uint16_t ro
 
 ssize_t PtyProcess::read_bytes(char* buffer, size_t max_len) {
     if (m_master_fd < 0) return -1;
-    return read(m_master_fd, buffer, max_len);
+    ssize_t n = read(m_master_fd, buffer, max_len);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return 0;
+    }
+    return n;
 }
 
 ssize_t PtyProcess::write_bytes(const char* data, size_t len) {

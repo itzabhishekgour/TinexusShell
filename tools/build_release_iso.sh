@@ -171,9 +171,15 @@ Categories=System;Utility;Core;
 EOF
 
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
-    mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin"
+    mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin" "$ROOTFS_DIR/etc"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
+
+    # Set up /etc/profile for a nice shell prompt
+    cat > "$ROOTFS_DIR/etc/profile" << 'EOF'
+export PS1='\e[01;32m\u@\h\e[00m:\e[01;34m\w\e[00m\$ '
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+EOF
 
     # Ensure busybox/sh is available in the rootfs for standard library system() calls
     local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"

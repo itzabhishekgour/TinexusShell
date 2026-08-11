@@ -79,8 +79,8 @@ public:
         }
     }
 
-    void draw_text(const Point& pos, const std::string& text, const Color& color, double scale = 1.0) {
-        m_buffer.push(DrawTextCommand{pos, text, color, scale});
+    void draw_text(const Point& pos, const std::string& text, const Color& color, double scale = 1.0, bool bold = false, bool italic = false) {
+        m_buffer.push(DrawTextCommand{pos, text, color, scale, bold, italic});
     }
 
     void draw_line(const Point& p1, const Point& p2, double thickness, const Color& color) {

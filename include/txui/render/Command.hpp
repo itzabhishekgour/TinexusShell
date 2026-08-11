@@ -86,6 +86,8 @@ struct DrawTextCommand {
     std::string text;
     Color color;
     double scale;
+    bool bold{false};
+    bool italic{false};
 };
 
 struct PushClipCommand {

@@ -45,3 +45,6 @@ target_link_libraries(txui
     PRIVATE
         tinexus_warnings
 )
+
+add_executable(test-lru-stress ../../tests/unit/test_lru_stress.cpp)
+target_link_libraries(test-lru-stress PRIVATE txui tinexus_common)
