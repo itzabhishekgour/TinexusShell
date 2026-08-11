@@ -1,8 +1,8 @@
 # Tinexus Shell — Project Roadmap
 
 > **Document:** 10_ROADMAP.md  
-> **Version:** 1.0.0  
-> **Status:** FROZEN  
+> **Version:** 2.0.0 (Unfrozen for v3.0 acceleration)  
+> **Status:** ACTIVE (Codebase has massively outpaced original planning)  
 > **Classification:** Public — Open Source  
 > **Depends on:** All previous documents
 
@@ -60,7 +60,7 @@ gantt
 
 ## 2. Version 0.1 — Foundation
 
-**Target Release:** Q4 2026  
+**Target Release:** Completed  
 **Codename:** "Horizon"  
 **Goal:** A working Wayland compositor and launcher that proves the architecture is correct.
 
@@ -75,67 +75,68 @@ Version 0.1 is for **developers and architects only**. It is not suitable for da
 ### 2.2 Feature Checklist
 
 #### Compositor (tinexus-comp)
-- [ ] wlroots backend initialization (DRM/KMS, headless)
-- [ ] Wayland socket creation and client connection
-- [ ] xdg-shell support (basic windows: map, unmap, move, resize)
-- [ ] XWayland integration
-- [ ] Single monitor support
-- [ ] Basic window focus management (click to focus)
-- [ ] Keyboard input forwarding to apps
-- [ ] Pointer input forwarding to apps
-- [ ] Global shortcut: Ctrl+K (trigger launcher)
-- [ ] D-Bus service: `io.Tinexus Shell.Compositor`
-- [ ] Structured logging to systemd journal
-- [ ] Debug overlay (FPS counter, damage visualization)
+- [x] wlroots backend initialization (DRM/KMS, headless)
+- [x] Wayland socket creation and client connection
+- [x] xdg-shell support (basic windows: map, unmap, move, resize)
+- [x] XWayland integration
+- [x] Single monitor support
+- [x] Basic window focus management (click to focus)
+- [x] Keyboard input forwarding to apps
+- [x] Pointer input forwarding to apps
+- [x] Global shortcut: Ctrl+K (trigger launcher)
+- [x] D-Bus service: `io.tinexus.shell.Compositor`
+- [x] Structured logging to systemd journal
+- [x] Debug overlay (FPS counter, damage visualization)
 
 #### Session Manager (tinexus-session)
-- [ ] Start daemons in dependency order
-- [ ] Monitor daemon health (SIGCHLD)
-- [ ] Restart crashed daemons (max 3 attempts)
-- [ ] logind integration (session registration)
-- [ ] D-Bus service: `io.Tinexus Shell.Session`
-- [ ] Shutdown/restart via systemd D-Bus
+- [x] Start daemons in dependency order
+- [x] Monitor daemon health (SIGCHLD)
+- [x] Restart crashed daemons (max 3 attempts)
+- [x] logind integration (session registration)
+- [x] D-Bus service: `io.tinexus.shell.Session`
+- [x] Shutdown/restart via systemd D-Bus
 
 #### Launcher (tinexus-launcher)
-- [ ] Layer-shell surface (OVERLAY layer)
-- [ ] Open/close with Ctrl+K
-- [ ] Search field with basic text input
-- [ ] App search via tinexus-indexer (D-Bus)
-- [ ] Basic result list (5 items, no scrolling)
-- [ ] Arrow key navigation
-- [ ] Enter to launch app
-- [ ] Escape to close
-- [ ] Open animation (fade + scale, 150ms)
-- [ ] Close animation (fade, 100ms)
+- [x] Layer-shell surface (OVERLAY layer)
+- [x] Open/close with Ctrl+K
+- [x] Search field with basic text input
+- [x] App search via tinexus-indexer (D-Bus)
+- [x] Basic result list (5 items, no scrolling)
+- [x] Arrow key navigation
+- [x] Enter to launch app
+- [x] Escape to close
+- [x] Open animation (fade + scale, 150ms)
+- [x] Close animation (fade, 100ms)
 
 #### App Indexer (tinexus-indexer)
-- [ ] Parse /usr/share/applications/*.desktop
-- [ ] Parse ~/.local/share/applications/*.desktop
-- [ ] Build trigram search index
-- [ ] D-Bus service: `io.Tinexus Shell.Indexer`
-- [ ] Search method (basic fuzzy match)
-- [ ] inotify watcher (incremental updates)
+- [x] Parse /usr/share/applications/*.desktop
+- [x] Parse ~/.local/share/applications/*.desktop
+- [x] Build trigram search index
+- [x] D-Bus service: `io.tinexus.shell.Indexer`
+- [x] Search method (basic fuzzy match)
+- [x] inotify watcher (incremental updates)
 
 #### Settings Daemon (tinexus-settings)
-- [ ] Load/parse TOML config files
-- [ ] D-Bus service: `io.Tinexus Shell.Settings`
-- [ ] GetValue / SetValue methods
-- [ ] SettingChanged signal
-- [ ] Default config generation on first run
-- [ ] Atomic config write
+- [x] Load/parse TOML config files
+- [x] D-Bus service: `io.tinexus.shell.Settings`
+- [x] GetValue / SetValue methods
+- [x] SettingChanged signal
+- [x] Default config generation on first run
+- [x] Atomic config write
 
 #### Wallpaper Engine (tinexus-wallpaper)
-- [ ] Layer-shell surface (BACKGROUND layer)
-- [ ] Load and display JPEG/PNG wallpaper
-- [ ] "fill" scale mode
-- [ ] Watch config for wallpaper changes
+- [x] Layer-shell surface (BACKGROUND layer)
+- [x] Load and display JPEG/PNG wallpaper
+- [x] "fill" scale mode
+- [x] Watch config for wallpaper changes
 
-#### Common Library (libTinexus Shell-common)
-- [ ] Structured logging API (spdlog → systemd journal)
-- [ ] D-Bus utility helpers
-- [ ] TOML config types
-- [ ] Result<T,E> type
-- [ ] Version constants
+#### Common Library (libtxui)
+- [x] Structured logging API (spdlog → systemd journal)
+- [x] D-Bus utility helpers
+- [x] TOML config types
+- [x] Result<T,E> type
+- [x] Version constants
+- [x] Custom immediate-mode GUI engine (txui)
 
 ### 2.3 v0.1 Performance Targets
 
@@ -165,7 +166,7 @@ Version 0.1 is for **developers and architects only**. It is not suitable for da
 
 ## 3. Version 0.2 — Launcher Excellence
 
-**Target Release:** Q1 2027  
+**Target Release:** Completed  
 **Codename:** "Meridian"  
 **Goal:** A complete, beautiful launcher experience with all core services.
 
@@ -176,17 +177,17 @@ Version 0.2 completes the user-facing experience. It is suitable for **developer
 ### 3.2 Feature Checklist
 
 #### Compositor Upgrades
-- [ ] Multi-monitor support (up to 4 monitors)
-- [ ] HiDPI support (1×, 1.5×, 2×, 3× scaling)
-- [ ] Workspace switching (Super+[1-9], 4 workspaces)
-- [ ] Workspace switch animation (slide, 200ms)
-- [ ] Window snap zones (left half, right half, maximize)
-- [ ] Alt+Tab window switcher
-- [ ] VT switching (Ctrl+Alt+F1-F6)
-- [ ] xdg-decoration-unstable-v1 (server-side decorations)
+- [x] Multi-monitor support (up to 4 monitors)
+- [x] HiDPI support (1×, 1.5×, 2×, 3× scaling)
+- [x] Workspace switching (Super+[1-9], 4 workspaces)
+- [x] Workspace switch animation (slide, 200ms)
+- [x] Window snap zones (left half, right half, maximize)
+- [x] Alt+Tab window switcher
+- [x] VT switching (Ctrl+Alt+F1-F6)
+- [x] xdg-decoration-unstable-v1 (server-side decorations)
 
 #### Launcher Enhancements
-- [ ] Scrollable result list (unlimited results)
+- [x] Scrollable result list (unlimited results)
 - [x] Result categories with Tab navigation
 - [x] Inline calculator (tinyexpr integration)
 - [x] System actions provider (Lock, Sleep, Shutdown, Restart, Logout)
@@ -194,45 +195,53 @@ Version 0.2 completes the user-facing experience. It is suitable for **developer
 - [x] Stagger animation for results (20ms per item)
 - [x] Keyboard shortcut: Ctrl+1…9 for Nth result
 - [x] Alt+Enter secondary action
-- [ ] Clipboard section (reads from tinexus-clip)
+- [x] Clipboard section (reads from tinexus-clip)
 - [x] Result icons (app icons, 24×24)
 - [x] Empty state design (logo + placeholder text)
-- [ ] Launcher position: centered, 30% from top
+- [x] Launcher position: centered, 30% from top
+
+#### Advanced Core Applications (v3.0 features pulled forward)
+- [x] **Terminal Emulator**: Native C++20 `tinexus-terminal` with PTY backend and LRU font caching.
+- [x] **Dock**: Native macOS-style bottom dock with spring physics (`tinexus-dock`).
+- [x] **File Manager**: Native Miller-column file manager (`tinexus-files`).
+- [x] **App Installer**: Built-in AppImage installer (`tinexus-app-installer`).
+- [x] **Crypto Guard**: Binary cryptographic signing module.
+- [x] **ISO Builder**: Complete hybrid ISO generation suite.
 
 #### Notification System
-- [ ] tinexus-notif process
-- [ ] org.freedesktop.Notifications D-Bus implementation
-- [ ] Notification display surface (layer-shell OVERLAY, top-right)
-- [ ] Auto-dismiss timer (configurable)
-- [ ] Do Not Disturb mode
-- [ ] Critical urgency (no auto-dismiss, red accent)
-- [ ] Notification stack (max 3 visible)
-- [ ] Slide-in animation
-- [ ] Notification history in launcher
+- [x] tinexus-notif process
+- [x] org.freedesktop.Notifications D-Bus implementation
+- [x] Notification display surface (layer-shell OVERLAY, top-right)
+- [x] Auto-dismiss timer (configurable)
+- [x] Do Not Disturb mode
+- [x] Critical urgency (no auto-dismiss, red accent)
+- [x] Notification stack (max 3 visible)
+- [x] Slide-in animation
+- [x] Notification history in launcher
 
 #### Clipboard Manager
-- [ ] tinexus-clip process
-- [ ] Monitor Wayland clipboard (wl_data_device)
-- [ ] Store last 50 text entries
-- [ ] Sensitive data detection (regex patterns)
-- [ ] D-Bus service: io.Tinexus Shell.Clipboard
-- [ ] Clipboard history search in launcher
+- [x] tinexus-clip process
+- [x] Monitor Wayland clipboard (wl_data_device)
+- [x] Store last 50 text entries
+- [x] Sensitive data detection (regex patterns)
+- [x] D-Bus service: io.tinexus.shell.Clipboard
+- [x] Clipboard history search in launcher
 
 #### Lock Screen
-- [ ] tinexus-lock process
-- [ ] ext-session-lock-v1 Wayland protocol
-- [ ] PAM authentication
-- [ ] Password input field (secure, no echo)
-- [ ] Lock on: user request, system suspend
-- [ ] Brute force protection (5-attempt lockout)
-- [ ] Session manager integration
+- [x] tinexus-lock process
+- [x] ext-session-lock-v1 Wayland protocol
+- [x] PAM authentication
+- [x] Password input field (secure, no echo)
+- [x] Lock on: user request, system suspend
+- [x] Brute force protection (5-attempt lockout)
+- [x] Session manager integration
 
 #### Settings UI (Basic)
-- [ ] tinexus-settings-ui process
-- [ ] Wallpaper settings page
-- [ ] Theme selection (Dark, Light)
-- [ ] Launcher settings (result count, debounce)
-- [ ] Keyboard shortcuts settings
+- [x] tinexus-settings-ui process
+- [x] Wallpaper settings page
+- [x] Theme selection (Dark, Light)
+- [x] Launcher settings (result count, debounce)
+- [x] Keyboard shortcuts settings
 
 ### 3.3 v0.2 Performance Targets
 

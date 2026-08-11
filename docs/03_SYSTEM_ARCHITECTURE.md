@@ -93,11 +93,18 @@ graph TB
 
     subgraph "Layer 5: Tinexus Shell UI"
         LAUNCHER["tinexus-launcher (Qt6/QML)"]
+        DOCK["tinexus-dock (Dock UI)"]
         LOCK["tinexus-lock (Lock Screen)"]
         SETTINGSUI["tinexus-settings-ui (Qt6)"]
     end
 
-    subgraph "Layer 6: Plugin Runtime (Future)"
+    subgraph "Layer 6: Tinexus Shell Native Apps"
+        TERMINAL["tinexus-terminal (Native Terminal)"]
+        FILES["tinexus-files (File Manager)"]
+        INSTALLER["tinexus-app-installer (AppImage)"]
+    end
+
+    subgraph "Layer 7: Plugin Runtime (Future)"
         PLUGINHOST["tinexus-plugin-host"]
         PLUGINS["Plugin Processes (sandboxed)"]
     end
@@ -159,6 +166,10 @@ graph TB
 | App Indexer | `tinexus-indexer` | C++20 | — | .desktop file parsing, search index build |
 | Wallpaper Engine | `tinexus-wallpaper` | C++20 | Qt6/OpenGL | Wallpaper rendering as wlr-layer-shell surface |
 | Lock Screen | `tinexus-lock` | C++20 + QML | Qt6 + PAM | Screen lock, PAM authentication |
+| Dock | `tinexus-dock` | C++20 | txui | macOS-style bottom dock with spring physics |
+| Terminal | `tinexus-terminal` | C++20 | txui | Custom Wayland-native PTY terminal emulator |
+| File Manager | `tinexus-files` | C++20 | txui | Miller-column native file manager |
+| App Installer | `tinexus-app-installer` | C++20 | txui | ISO / AppImage / package installer GUI |
 | Plugin Host | `tinexus-plugin-host` | C++20 | — | Plugin process supervisor (future) |
 
 ---

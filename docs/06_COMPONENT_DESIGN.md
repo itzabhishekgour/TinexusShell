@@ -25,6 +25,9 @@
 13. [Clipboard Component](#13-clipboard-component)
 14. [Plugin System Component](#14-plugin-system-component)
 15. [Future AI Component](#15-future-ai-component)
+16. [Terminal Component](#16-terminal-component)
+17. [File Manager Component](#17-file-manager-component)
+18. [Dock Component](#18-dock-component)
 
 ---
 
@@ -1144,6 +1147,41 @@ The following must be true in v1.0 for the AI layer to be addable in v2.0 withou
 - [ ] Launcher search manager handles provider timeouts gracefully
 - [ ] The `?` prefix is reserved (no built-in provider uses it)
 - [ ] `tinexus-indexer` exposes a `GetRecentFiles()` D-Bus method
+
+---
+
+## 16. Terminal Component
+
+### 16.1 Responsibility
+`tinexus-terminal` is a custom, Wayland-native, zero-overhead C++20 terminal emulator.
+- Fast PTY interaction for executing shell processes.
+- High-performance text rendering with FreeType font caching.
+- Integrated `libvterm` for robust terminal state and ANSI escape parsing.
+
+### 16.2 Process Model
+- Main thread handles Wayland events, `txui` event loop, and polling `master_fd`.
+- PTY process forks and executes the shell (`/bin/bash` or `foot`).
+- Input is handled by `TerminalWidget`, converting keystrokes to unichar or VTERM keys.
+
+---
+
+## 17. File Manager Component
+
+### 17.1 Responsibility
+`tinexus-files` provides a native Miller-column file manager optimized for desktop usability and speed.
+- Browsing local file systems with high-speed Miller column sliding layout.
+- Launching files via XDG integration.
+- Smooth transitions built on the `txui` animation engine.
+
+---
+
+## 18. Dock Component
+
+### 18.2 Responsibility
+`tinexus-dock` is a macOS-style bottom dock with spring physics.
+- Managed by `wlr-layer-shell` (TOP layer with bottom anchor).
+- Magnification and spring animations on hover.
+- Integrates with Compositor to track open application windows and statuses.
 
 ---
 
