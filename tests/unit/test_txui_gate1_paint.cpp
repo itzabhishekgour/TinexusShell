@@ -37,10 +37,10 @@ public:
     }
 
     void add_color(const Color& c) {
-        add_float64(c.r);
-        add_float64(c.g);
-        add_float64(c.b);
-        add_float64(c.a);
+        add_float64(c.r());
+        add_float64(c.g());
+        add_float64(c.b());
+        add_float64(c.a());
     }
 
     uint64_t get() const { return hash; }
@@ -54,17 +54,17 @@ struct PaintHashVisitor {
     
     void operator()(const SetBrushCommand& cmd) {
         builder.add_uint8(3);
-        if (std::holds_alternative<SolidBrush>(cmd.brush.type)) {
+        if (std::holds_alternative<SolidBrush>(cmd.brush)) {
             builder.add_uint8(1);
-            builder.add_color(std::get<SolidBrush>(cmd.brush.type).color);
+            builder.add_color(std::get<SolidBrush>(cmd.brush).color());
         }
     }
     
     void operator()(const DrawRectCommand& cmd) {
         builder.add_uint8(4);
         builder.add_rect(cmd.rect);
-        if (std::holds_alternative<SolidBrush>(cmd.brush.type)) {
-            builder.add_color(std::get<SolidBrush>(cmd.brush.type).color);
+        if (std::holds_alternative<SolidBrush>(cmd.brush)) {
+            builder.add_color(std::get<SolidBrush>(cmd.brush).color());
         }
     }
     
@@ -72,9 +72,14 @@ struct PaintHashVisitor {
         builder.add_uint8(5);
         builder.add_rect(cmd.rect);
         builder.add_float64(cmd.radius);
-        if (std::holds_alternative<SolidBrush>(cmd.brush.type)) {
-            builder.add_color(std::get<SolidBrush>(cmd.brush.type).color);
+        if (std::holds_alternative<SolidBrush>(cmd.brush)) {
+            builder.add_color(std::get<SolidBrush>(cmd.brush).color());
         }
+    }
+
+    template <typename T>
+    void operator()(const T&) {
+        builder.add_uint8(255);
     }
 };
 

@@ -7,12 +7,18 @@ using namespace txui;
 
 int g_widget_destruct_count = 0;
 
-class TrackedWidget : public SizedBox {
+class TrackedWidget : public Widget {
 public:
-    TrackedWidget() : SizedBox(10, 10) {}
+    TrackedWidget() = default;
     ~TrackedWidget() override {
         g_widget_destruct_count++;
     }
+
+    txui::Size measure_override(const txui::Constraints& constraints) noexcept override {
+        return txui::Size{10.0, 10.0};
+    }
+
+    void paint_override(txui::Painter& painter) const noexcept override {}
 };
 
 void test_parent_consistency() {

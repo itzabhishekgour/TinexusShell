@@ -12,14 +12,15 @@
 void test_launch_authority_validation() {
     auto& authority = tinexus::serviced::LaunchAuthority::instance();
 
-    // Valid commands
-    assert(authority.is_valid_executable("firefox"));
-    assert(authority.is_valid_executable("/usr/bin/gnome-terminal --dir=/home"));
+    // Valid commands: validate_and_get_fd returns -2 (base system binary) or >=0 (secured app)
+    // Both are non-(-1) results, meaning not rejected.
+    assert(authority.validate_and_get_fd("firefox") != -1);
+    assert(authority.validate_and_get_fd("/usr/bin/gnome-terminal") != -1);
 
-    // Malicious injection strings MUST be rejected
-    assert(!authority.is_valid_executable("firefox; rm -rf /"));
-    assert(!authority.is_valid_executable("terminal | cat /etc/passwd"));
-    assert(!authority.is_valid_executable("app & background_job"));
+    // Malicious injection strings MUST be rejected (return -1)
+    assert(authority.validate_and_get_fd("firefox; rm -rf /") == -1);
+    assert(authority.validate_and_get_fd("terminal | cat /etc/passwd") == -1);
+    assert(authority.validate_and_get_fd("app & background_job") == -1);
 
     std::cout << "[PASS] test_launch_authority_validation\n";
 }

@@ -15,7 +15,7 @@ int main() {
     for (int i = 0; i < 50; ++i) {
         auto row = make_ref<Row>();
         for (int j = 0; j < 20; ++j) {
-            row->add_child(make_ref<SolidColorWidget>(Color(i % 255, j % 255, 100, 255)));
+            row->add_child(make_ref<SolidColorWidget>(Color(static_cast<uint8_t>(i % 255), static_cast<uint8_t>(j % 255), 100, 255)));
         }
         root->add_child(std::move(row));
     }

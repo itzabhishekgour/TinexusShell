@@ -1,5 +1,5 @@
 #include <txui/window/Window.hpp>
-#include <txui/core/Event.hpp>
+#include <txui/input/Event.hpp>
 #include <iostream>
 #include <cassert>
 
@@ -46,7 +46,8 @@ void test_event_queue_mixed_fifo() {
             e.keyboard.key = Key::A;
         } else {
             e.type = EventType::WindowResize;
-            e.resize.width = i;
+            e.resize.width = static_cast<uint32_t>(i);
+            e.resize.height = static_cast<uint32_t>(i * 2);
         }
         win->push_event(e);
     }

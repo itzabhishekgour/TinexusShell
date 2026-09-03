@@ -31,7 +31,7 @@ int main() {
     };
 
     for (int i = 0; i < 500; ++i) {
-        const Size& sz = sizes[i % sizes.size()];
+        const Size& sz = sizes[static_cast<size_t>(i) % sizes.size()];
         
         // Simulate Wayland configure event
         win->on_configure(static_cast<uint32>(sz.width), static_cast<uint32>(sz.height));

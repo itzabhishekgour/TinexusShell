@@ -42,7 +42,7 @@ void test_pty_process_spawn_and_resize() {
 
 void test_interactive_bash_session() {
     tinexus::terminal::PtyProcess pty;
-    assert(pty.spawn("/bin/bash", 80, 24));
+    assert(pty.spawn("/bin/bash", {}, 80, 24));
     usleep(50000); // 50ms startup pause
 
     std::string cmd = "echo HELLO_TINEXUS_TERMINAL\nexit\n";
