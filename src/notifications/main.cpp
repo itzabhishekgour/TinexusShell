@@ -13,7 +13,8 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
-
+#include <poll.h>
+#include "notifications/dbus_server.hpp"
 using namespace tinexus;
 
 static zwlr_layer_shell_v1* g_layer_shell = nullptr;
@@ -56,6 +57,10 @@ int main() {
 
     log::set_component_name("notifications");
     log::info("[Notifications] Tinexus Notification Center Daemon starting...");
+
+    if (!notifications::DBusServer::instance().start()) {
+        log::error("[Notifications] Failed to start DBus Server!");
+    }
 
     auto conn_opt = txui::wayland::WaylandConnection::connect();
     if (!conn_opt) {
@@ -130,24 +135,60 @@ int main() {
 
     // Display toast notification banner for 15 seconds, then hide
     auto start_time = std::chrono::steady_clock::now();
-    while (g_running) {
-        if (wl_display_dispatch_pending(connection.display()) == -1) break;
+    bool toast_dismissed = false;
 
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_time).count();
-        if (elapsed > 15) {
-            // Auto dismiss toast notification
-            zwlr_layer_surface_v1_set_size(layer_surface, 0, 0);
-            wl_surface_commit(raw_surface);
-            connection.flush();
-            log::info("[Notifications] Toast notification auto-dismissed.");
-            break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    int wl_fd = wl_display_get_fd(connection.display());
+    int bus_fd = -1;
+    if (notifications::DBusServer::instance().bus()) {
+        bus_fd = sd_bus_get_fd(notifications::DBusServer::instance().bus());
     }
 
     while (g_running) {
-        if (wl_display_dispatch(connection.display()) == -1) break;
+        while (wl_display_prepare_read(connection.display()) != 0) {
+            wl_display_dispatch_pending(connection.display());
+        }
+        wl_display_flush(connection.display());
+
+        struct pollfd fds[2] = {};
+        int num_fds = 0;
+
+        fds[0].fd = wl_fd;
+        fds[0].events = POLLIN;
+        num_fds = 1;
+
+        if (bus_fd >= 0) {
+            fds[1].fd = bus_fd;
+            fds[1].events = POLLIN;
+            num_fds = 2;
+        }
+
+        int ret = poll(fds, num_fds, 100); // 100ms timeout for toast check
+
+        if (ret > 0) {
+            if (fds[0].revents & POLLIN) {
+                wl_display_read_events(connection.display());
+                wl_display_dispatch_pending(connection.display());
+            } else {
+                wl_display_cancel_read(connection.display());
+            }
+
+            if (num_fds == 2 && (fds[1].revents & POLLIN)) {
+                while (sd_bus_process(notifications::DBusServer::instance().bus(), nullptr) > 0) {}
+            }
+        } else {
+            wl_display_cancel_read(connection.display());
+        }
+
+        if (!toast_dismissed) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_time).count();
+            if (elapsed > 15) {
+                zwlr_layer_surface_v1_set_size(layer_surface, 0, 0);
+                wl_surface_commit(raw_surface);
+                connection.flush();
+                log::info("[Notifications] Toast notification auto-dismissed.");
+                toast_dismissed = true;
+            }
+        }
     }
 
     if (layer_surface) zwlr_layer_surface_v1_destroy(layer_surface);

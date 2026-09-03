@@ -5,6 +5,7 @@ add_executable(tinexus-notifications
     notification_manager.cpp
     notification_server.cpp
     NotificationBubble.cpp
+    dbus_server.cpp
 )
 
 target_include_directories(tinexus-notifications PRIVATE
@@ -18,6 +19,7 @@ target_link_libraries(tinexus-notifications PRIVATE
     txui
     tinexus_warnings
     tinexus_sanitizers
+    systemd
 )
 
 install(TARGETS tinexus-notifications RUNTIME DESTINATION bin)
