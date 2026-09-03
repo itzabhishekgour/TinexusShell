@@ -18,7 +18,9 @@
 #include <txui/widgets/TextWidget.hpp>
 #include <txui/layout/FlexLayout.hpp>
 #include <txui/theme/Theme.hpp>
+#include <txui/render/WaylandRenderTarget.hpp>
 #include <common/logger.hpp>
+#include <common/dbus_power.hpp>
 #include <indexer/desktop_entry.hpp>
 #include <unistd.h>
 #include <csignal>
@@ -96,10 +98,10 @@ static pid_t spawn_app(const AppItem& item) {
             pid_t pid = fork();
             if (pid == 0) { setsid(); execlp("tinexus-lock", "tinexus-lock", nullptr); _exit(127); }
             return pid;
-        } else if (cmd == "shutdown") { if (::system("systemctl poweroff") == -1) {}; return -1; } // NOLINT
-        else if (cmd == "reboot")   { if (::system("systemctl reboot") == -1) {};   return -1; } // NOLINT
-        else if (cmd == "sleep")    { if (::system("systemctl suspend") == -1) {};  return -1; } // NOLINT
-        else if (cmd == "logout")   { if (::system("loginctl terminate-session ''") == -1) {}; return -1; } // NOLINT
+        } else if (cmd == "shutdown") { tinexus::common::dbus_power::poweroff(); return -1; }
+        else if (cmd == "reboot")   { tinexus::common::dbus_power::reboot();   return -1; }
+        else if (cmd == "sleep")    { tinexus::common::dbus_power::suspend();  return -1; }
+        else if (cmd == "logout")   { tinexus::common::dbus_power::logout(); return -1; }
         return -1;
     }
     std::string clean_exec = indexer::DesktopParser::sanitize_exec(item.exec);

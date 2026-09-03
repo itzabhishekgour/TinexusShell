@@ -2,6 +2,7 @@ add_library(tinexus_common SHARED
     logger.cpp
     string_interner.cpp
     peer_credentials.cpp
+    dbus_power.cpp
 )
 
 target_include_directories(tinexus_common PUBLIC
@@ -12,6 +13,7 @@ target_link_libraries(tinexus_common PRIVATE
     tinexus_warnings
     tinexus_sanitizers
 )
+target_link_libraries(tinexus_common PUBLIC systemd)
 
 set_target_properties(tinexus_common PROPERTIES
     VERSION ${PROJECT_VERSION}

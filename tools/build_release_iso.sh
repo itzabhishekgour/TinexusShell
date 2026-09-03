@@ -83,10 +83,12 @@ EOF
     # Create minimal users and groups for Tinexus
     cat > "$ROOTFS_DIR/etc/passwd" << 'EOF'
 root:x:0:0:root:/root:/bin/sh
+messagebus:x:104:104::/var/run/dbus:/bin/false
 tinexus:x:1000:1000:Tinexus User:/home/tinexus:/bin/sh
 EOF
     cat > "$ROOTFS_DIR/etc/group" << 'EOF'
 root:x:0:
+messagebus:x:104:
 tinexus:x:1000:
 tty:x:5:
 audio:x:29:tinexus
@@ -262,6 +264,55 @@ EOF_UDEV_SEAT
                 [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
             done
         done
+    fi
+
+    # ── Stage D-Bus Daemon and Policies ──────────────────────────────
+    info "Staging D-Bus Daemon and Policies..."
+    if [ -f "/usr/bin/dbus-daemon" ]; then
+        cp -L "/usr/bin/dbus-daemon" "$ROOTFS_DIR/usr/bin/"
+        [ -f "/usr/bin/dbus-uuidgen" ] && cp -L "/usr/bin/dbus-uuidgen" "$ROOTFS_DIR/usr/bin/"
+        
+        # Directories
+        mkdir -p "$ROOTFS_DIR/var/run/dbus" "$ROOTFS_DIR/var/lib/dbus" "$ROOTFS_DIR/etc/dbus-1/system.d" "$ROOTFS_DIR/usr/share/dbus-1"
+        chown 104:104 "$ROOTFS_DIR/var/run/dbus" 2>/dev/null || true
+        chown 104:104 "$ROOTFS_DIR/var/lib/dbus" 2>/dev/null || true
+
+        # Conf files
+        cp -r /usr/share/dbus-1/* "$ROOTFS_DIR/usr/share/dbus-1/" 2>/dev/null || true
+        cp -r /etc/dbus-1/* "$ROOTFS_DIR/etc/dbus-1/" 2>/dev/null || true
+        
+        # Clean out host-specific policies that reference non-existent users (like polkitd, systemd-network)
+        rm -f "$ROOTFS_DIR/etc/dbus-1/system.d/"*.conf 2>/dev/null || true
+        rm -f "$ROOTFS_DIR/usr/share/dbus-1/system.d/"*.conf 2>/dev/null || true
+
+        # Add Tinexus Custom Policy for logind mimic
+        cat << 'EOF_DBUS_POL' > "$ROOTFS_DIR/etc/dbus-1/system.d/tinexus-logind.conf"
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <policy user="root">
+    <allow own="org.freedesktop.login1"/>
+    <allow send_destination="org.freedesktop.login1"/>
+    <allow receive_sender="org.freedesktop.login1"/>
+  </policy>
+  <policy context="default">
+    <allow send_destination="org.freedesktop.login1"/>
+    <allow receive_sender="org.freedesktop.login1"/>
+  </policy>
+</busconfig>
+EOF_DBUS_POL
+
+        # Dependencies
+        for bin in "/usr/bin/dbus-daemon" "/usr/bin/dbus-uuidgen"; do
+            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+            done
+        done
+    else
+        warn "dbus-daemon not found on host. System bus will be unavailable."
     fi
 
     # ── Stage foot terminal + fonts + fontconfig ──────────────────────────────

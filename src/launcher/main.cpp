@@ -4,7 +4,9 @@
 #include <txui/widgets/TextWidget.hpp>
 #include <txui/layout/FlexLayout.hpp>
 #include <common/logger.hpp>
-#include <indexer/desktop_entry.hpp>
+#include <indexer/desktop_parser.hpp>
+#include <indexer/search_ranker.hpp>
+#include <common/dbus_power.hpp>
 #include <unistd.h>   // fork, execvp, execlp, setsid
 #include <csignal>    // signal, SIGCHLD, SIG_IGN
 #include <cstdlib>    // _exit
@@ -60,19 +62,19 @@ static pid_t spawn_app(const AppItem& item) {
             return pid;
         } else if (cmd == "shutdown") {
             log::info("[Launcher] System action: Shutdown");
-            ::system("systemctl poweroff"); // NOLINT — intentional
+            tinexus::common::dbus_power::poweroff();
             return -1;
         } else if (cmd == "reboot") {
             log::info("[Launcher] System action: Restart");
-            ::system("systemctl reboot"); // NOLINT
+            tinexus::common::dbus_power::reboot();
             return -1;
         } else if (cmd == "sleep") {
             log::info("[Launcher] System action: Sleep");
-            ::system("systemctl suspend"); // NOLINT
+            tinexus::common::dbus_power::suspend();
             return -1;
         } else if (cmd == "logout") {
             log::info("[Launcher] System action: Log Out");
-            ::system("loginctl terminate-session ''"); // NOLINT
+            tinexus::common::dbus_power::logout();
             return -1;
         }
         return -1;

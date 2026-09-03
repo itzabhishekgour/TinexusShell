@@ -6,6 +6,7 @@
 #include "serviced/runtime_socket.hpp"
 #include "serviced/heartbeat_watchdog.hpp"
 #include "serviced/ipcd_client.hpp"
+#include "serviced/logind_mimic.hpp"
 #include <iostream>
 #include <csignal>
 #include <cstdlib>
@@ -90,6 +91,7 @@ void signal_handler(int signal) {
         tinexus::log::info("Received signal {}, stopping tinexus-serviced...", signal);
         g_socket->stop();
         tinexus::serviced::IpcdClient::instance().stop();
+        tinexus::serviced::LogindMimic::instance().stop();
     }
 }
 } // namespace
@@ -139,6 +141,33 @@ int main(int argc, char** argv) {
     // Use 'builtin' standalone libseat backend for root compositors (opens physical DRM & input devices)
     setenv("LIBSEAT_BACKEND", "builtin", 1);
     setenv("WLR_LOG_LEVEL", "DEBUG", 1);
+
+    // Ensure dbus directories exist (since /run and /var are tmpfs mounts)
+    try {
+        std::filesystem::create_directories("/run/dbus");
+        std::filesystem::create_directories("/var/lib/dbus");
+        std::filesystem::create_directories("/var/run/dbus"); // For legacy paths
+        
+        // Ensure messagebus user owns them
+        // User messagebus has UID 104 in our rootfs
+        chown("/run/dbus", 104, 104);
+        chown("/var/lib/dbus", 104, 104);
+        chown("/var/run/dbus", 104, 104);
+    } catch (const std::exception& e) {
+        tinexus::log::error("Failed to create D-Bus directories: {}", e.what());
+    }
+
+    // Generate machine-id if missing
+    if (!std::filesystem::exists("/var/lib/dbus/machine-id") && !std::filesystem::exists("/etc/machine-id")) {
+        tinexus::log::info("Generating D-Bus machine-id...");
+        pid_t p = fork();
+        if (p == 0) {
+            execl("/usr/bin/dbus-uuidgen", "dbus-uuidgen", "--ensure", nullptr);
+            _exit(127);
+        } else if (p > 0) {
+            waitpid(p, nullptr, 0);
+        }
+    }
 
     // Ensure XDG_RUNTIME_DIR exists with correct permissions so unprivileged apps can traverse it
     try {
@@ -190,6 +219,13 @@ int main(int argc, char** argv) {
     tinexus::serviced::DependencyGraph graph;
 
     // Phase A: Simplified Desktop Bring-up graph
+    tinexus::serviced::DaemonSpec dbus;
+    dbus.id = "dbus-daemon";
+    dbus.executable = "/usr/bin/dbus-daemon";
+    dbus.arguments = {"--system", "--nofork", "--nopidfile", "--nosyslog"};
+    dbus.critical = true;
+    graph.add_service(dbus);
+
     tinexus::serviced::DaemonSpec comp;
     comp.id = "comp";
     comp.executable = "tinexus-comp";
@@ -224,7 +260,49 @@ int main(int argc, char** argv) {
 
     tinexus::log::info("Platform Runtime Manager ready. Auto-spawning supervision tree...");
     run_udev_setup();
-    pm.start_all_services();
+    
+    // First, explicitly start dbus-daemon so we can poll for its socket
+    pm.start_service("dbus-daemon");
+
+    // Wait up to 5 seconds for the D-Bus system socket.
+    // dbus-daemon may write to either /run/dbus or /var/run/dbus depending on
+    // the host configuration compiled into the binary; check both.
+    tinexus::log::info("Waiting for D-Bus system socket...");
+    bool dbus_ready = false;
+    const char* dbus_socket_path = nullptr;
+    for (int tries = 0; tries < 50; ++tries) {
+        if (std::filesystem::exists("/run/dbus/system_bus_socket")) {
+            dbus_socket_path = "/run/dbus/system_bus_socket";
+            dbus_ready = true;
+            break;
+        }
+        if (std::filesystem::exists("/var/run/dbus/system_bus_socket")) {
+            dbus_socket_path = "/var/run/dbus/system_bus_socket";
+            dbus_ready = true;
+            break;
+        }
+        usleep(100'000); // 100ms
+    }
+
+    if (!dbus_ready) {
+        tinexus::log::error("FATAL: dbus-daemon failed to create system_bus_socket within 5 seconds.");
+        tinexus::log::error("Checked: /run/dbus/system_bus_socket and /var/run/dbus/system_bus_socket");
+        tinexus::log::error("Dependent D-Bus services will fail to connect. Failing loud.");
+        if (splash_pid > 0) kill(splash_pid, SIGTERM);
+        return 1;
+    }
+
+    // Export system bus address so all child processes inherit it automatically.
+    std::string dbus_addr = std::string("unix:path=") + dbus_socket_path;
+    setenv("DBUS_SYSTEM_BUS_ADDRESS", dbus_addr.c_str(), 1);
+    tinexus::log::info("DBUS_SYSTEM_BUS_ADDRESS={}", dbus_addr);
+    
+    tinexus::log::info("D-Bus system socket is ready. Starting LogindMimic...");
+    if (!tinexus::serviced::LogindMimic::instance().start()) {
+        tinexus::log::error("Failed to start LogindMimic on system bus!");
+    }
+
+    pm.start_all_services(); // starts comp, session, etc.
 
     // ── Wait for wayland-0 socket, then dismiss splash ──────────────────────────
     // tinexus-comp writes the socket; once it exists the compositor is rendering.

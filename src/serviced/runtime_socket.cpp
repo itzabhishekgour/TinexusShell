@@ -2,6 +2,7 @@
 #include "serviced/event_journal.hpp"
 #include "serviced/heartbeat_watchdog.hpp"
 #include "serviced/launch_authority.hpp"
+#include "serviced/logind_mimic.hpp"
 #include "common/logger.hpp"
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -57,21 +58,34 @@ bool RuntimeControlSocket::start() {
 
 void RuntimeControlSocket::run_accept_loop() {
     while (m_running && m_server_fd >= 0) {
-        struct pollfd pfd;
-        pfd.fd = m_server_fd;
-        pfd.events = POLLIN;
+        struct pollfd pfd[2];
+        pfd[0].fd = m_server_fd;
+        pfd[0].events = POLLIN;
 
-        int ret = poll(&pfd, 1, 500); // 500ms timeout check
-        if (ret > 0 && (pfd.revents & POLLIN)) {
-            int client_fd = accept(m_server_fd, nullptr, nullptr);
-            if (client_fd >= 0) {
-                char buf[256];
-                ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
-                if (n > 0) {
-                    buf[n] = '\0';
-                    process_command(client_fd, std::string_view(buf, static_cast<size_t>(n)));
+        int dbus_fd = LogindMimic::instance().get_fd();
+        nfds_t num_fds = 1;
+        if (dbus_fd >= 0) {
+            pfd[1].fd = dbus_fd;
+            pfd[1].events = POLLIN;
+            num_fds = 2;
+        }
+
+        int ret = poll(pfd, num_fds, 500); // 500ms timeout check
+        if (ret > 0) {
+            if (pfd[0].revents & POLLIN) {
+                int client_fd = accept(m_server_fd, nullptr, nullptr);
+                if (client_fd >= 0) {
+                    char buf[256];
+                    ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
+                    if (n > 0) {
+                        buf[n] = '\0';
+                        process_command(client_fd, std::string_view(buf, static_cast<size_t>(n)));
+                    }
+                    close(client_fd);
                 }
-                close(client_fd);
+            }
+            if (num_fds == 2 && (pfd[1].revents & POLLIN)) {
+                LogindMimic::instance().process_pending();
             }
         }
     }

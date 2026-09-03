@@ -7,6 +7,7 @@ add_executable(tinexus-serviced
     runtime_socket.cpp
     launch_authority.cpp
     install_handler.cpp
+    logind_mimic.cpp
     main.cpp
 )
 
@@ -20,6 +21,7 @@ target_link_libraries(tinexus-serviced PRIVATE
     tinexus-guard
     tinexus_warnings
     tinexus_sanitizers
+    systemd
 )
 
 install(TARGETS tinexus-serviced
