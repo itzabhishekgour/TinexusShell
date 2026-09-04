@@ -12,12 +12,12 @@
 namespace txui {
 
 // ── Design tokens ────────────────────────────────────────────────────────────
-static constexpr double BASE_SIZE       = 52.0;
-static constexpr double GAP             = 10.0;
-static constexpr double DOCK_PAD        = 10.0;
-static constexpr double DOCK_BOT_MARGIN = 8.0;
-static constexpr double PILL_RADIUS     = 22.0;
-static constexpr double ICON_RADIUS     = 13.0;
+static constexpr double BASE_SIZE       = 40.0;
+static constexpr double GAP             = 8.0;
+static constexpr double DOCK_PAD        = 8.0;
+static constexpr double DOCK_BOT_MARGIN = 6.0;
+static constexpr double PILL_RADIUS     = 18.0;
+static constexpr double ICON_RADIUS     = 10.0;
 static constexpr double MAX_SCALE       = 1.55;
 static constexpr double INFLUENCE_R     = 2.4 * BASE_SIZE;
 
@@ -29,6 +29,13 @@ DockWidget::DockWidget() {
         DockIconState{"tinexus-monitor",   "Monitor",   "tinexus-monitor",   IconType::Apps},
         DockIconState{"tinexus-pkg",       "Packages",  "tinexus-pkg",       IconType::Apps},
     };
+    // Pre-init springs to 1.0 so icons render at correct size from frame 1
+    for (auto& icon : m_icons) {
+        icon.scale_spring.value  = 1.0;
+        icon.scale_spring.target = 1.0;
+        icon.bounce_offset_spring.value  = 0.0;
+        icon.bounce_offset_spring.target = 0.0;
+    }
     setup_ipc();
 }
 
