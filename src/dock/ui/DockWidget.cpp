@@ -60,19 +60,19 @@ void DockWidget::setup_ipc() {
 
 void DockWidget::send_ipc(uint16_t msg_type, const std::string& app_id) {
     if (m_ipc_socket < 0) return;
-    struct {
-        tinexus::ipcd::protocol::Header hdr;
-        tinexus::ipcd::protocol::DockNotifyPayload pld;
-    } __attribute__((packed)) msg;
-    msg.hdr.magic       = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-    msg.hdr.version     = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-    msg.hdr.msg_type    = msg_type;
-    msg.hdr.payload_len = sizeof(msg.pld);
-    msg.hdr.flags = msg.hdr.sequence_id = msg.hdr.checksum = 0;
-    memset(&msg.pld, 0, sizeof(msg.pld));
-    strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
-    msg.pld.surface_id = 0;
-    send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    tinexus::ipcd::protocol::Header hdr;
+    tinexus::ipcd::protocol::DockNotifyPayload pld;
+    hdr.magic       = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+    hdr.version     = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+    hdr.msg_type    = msg_type;
+    hdr.payload_len = sizeof(pld);
+    hdr.flags = hdr.sequence_id = hdr.checksum = 0;
+    memset(&pld, 0, sizeof(pld));
+    strncpy(pld.app_id, app_id.c_str(), sizeof(pld.app_id) - 1);
+    pld.surface_id = 0;
+
+    send(m_ipc_socket, &hdr, sizeof(hdr), MSG_NOSIGNAL);
+    send(m_ipc_socket, &pld, sizeof(pld), MSG_NOSIGNAL);
 }
 
 void DockWidget::spawn_app(const std::string& exec_cmd) {
@@ -264,18 +264,20 @@ void DockWidget::paint_override(Painter& p) const noexcept {
     const double pill_y = gy + H - PILL_H - DOCK_BOT_MARGIN;
 
     // ── Shadow ───────────────────────────────────────────────────────────
-    p.fill_rounded_rect({pill_x - 2, pill_y + 10, pill_w + 4, PILL_H},
+    p.fill_rounded_rect({pill_x - 4, pill_y + 10, pill_w + 8, PILL_H},
+                        static_cast<int>(PILL_RADIUS), Color{0, 0, 0, 50});
+    p.fill_rounded_rect({pill_x - 2, pill_y + 5, pill_w + 4, PILL_H},
                         static_cast<int>(PILL_RADIUS), Color{0, 0, 0, 35});
-    p.fill_rounded_rect({pill_x - 1, pill_y + 6, pill_w + 2, PILL_H},
-                        static_cast<int>(PILL_RADIUS), Color{0, 0, 0, 25});
 
     // ── Pill border ──────────────────────────────────────────────────────
     p.fill_rounded_rect({pill_x - 1, pill_y - 1, pill_w + 2, PILL_H + 2},
-                        static_cast<int>(PILL_RADIUS) + 1, Color{255, 255, 255, 35});
+                        static_cast<int>(PILL_RADIUS) + 1, Color{255, 255, 255, 42});
 
     // ── Pill background (frosted glass) ──────────────────────────────────
-    p.fill_rounded_rect({pill_x, pill_y, pill_w, PILL_H},
-                        static_cast<int>(PILL_RADIUS), Color{22, 22, 35, 185});
+    p.fill_gradient_rounded_rect({pill_x, pill_y, pill_w, PILL_H},
+                                static_cast<int>(PILL_RADIUS),
+                                Color{28, 30, 46, 215},
+                                Color{18, 19, 30, 230});
 
     // ── Draw icons ───────────────────────────────────────────────────────
     double cur_x = pill_x + DOCK_PAD;
@@ -306,7 +308,7 @@ void DockWidget::paint_override(Painter& p) const noexcept {
         if (is_hovered) {
             // Subtle bright outer glow
             p.fill_rounded_rect({icon_cx - half - 2, icon_top_y - 2, size + 4, size + 4},
-                                static_cast<int>(ICON_RADIUS * scale) + 2, Color{255, 255, 255, 30});
+                                static_cast<int>(ICON_RADIUS * scale) + 2, Color{255, 255, 255, 35});
         }
 
         p.fill_gradient_rounded_rect(
@@ -319,10 +321,16 @@ void DockWidget::paint_override(Painter& p) const noexcept {
 
         // ── Running indicator dot ─────────────────────────────────────
         if (icon.app_state != DockIconAppState::NotRunning) {
-            Color dot = (icon.app_state == DockIconAppState::RunningFocused)
-                        ? Color{255, 255, 255, 255}
-                        : Color{255, 255, 255, 120};
-            p.fill_circle(Point{icon_cx, pill_y + PILL_H - 3.0}, 2.5, dot);
+            double dot_y = pill_y + PILL_H - 3.5;
+            if (icon.app_state == DockIconAppState::RunningFocused) {
+                // Outer soft halo + bright white core
+                p.fill_circle(Point{icon_cx, dot_y}, 4.5, Color{255, 255, 255, 70});
+                p.fill_circle(Point{icon_cx, dot_y}, 2.5, Color{255, 255, 255, 255});
+            } else if (icon.app_state == DockIconAppState::RunningBg) {
+                p.fill_circle(Point{icon_cx, dot_y}, 2.5, Color{255, 255, 255, 150});
+            } else if (icon.app_state == DockIconAppState::Minimized) {
+                p.fill_circle(Point{icon_cx, dot_y}, 2.0, Color{255, 255, 255, 80});
+            }
         }
 
         cur_x += size + GAP;

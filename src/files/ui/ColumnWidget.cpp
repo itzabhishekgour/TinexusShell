@@ -35,19 +35,28 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         row->set_direction(txui::FlexDirection::Row);
         row->set_main_axis_alignment(txui::MainAxisAlignment::Start);
         row->set_cross_axis_alignment(txui::CrossAxisAlignment::Center);
-        // Fixed height for list item
-        // Wait, FlexLayout doesn't force height unless constrained, but we can set constraints later.
-        
+
         txui::IconType icon_type = txui::IconType::File;
-        if (item.type == FileType::Directory) icon_type = txui::IconType::Folder;
-        else if (item.is_executable) icon_type = txui::IconType::Executable;
-        // Archive/Image matching can be added later by mime_type
+        if (item.type == FileType::Directory) {
+            icon_type = txui::IconType::Folder;
+        } else if (item.is_executable) {
+            icon_type = txui::IconType::Executable;
+        } else if (item.mime_type.starts_with("image/")) {
+            icon_type = txui::IconType::Image;
+        } else if (item.mime_type == "application/archive") {
+            icon_type = txui::IconType::Archive;
+        } else if (item.name == "Trash" || item.path.string().find("Trash") != std::string::npos) {
+            icon_type = txui::IconType::Trash;
+        }
 
         auto icon = txui::make_ref<txui::Icon>(icon_type, 16.0);
         auto label = txui::make_ref<txui::Label>(item.name);
-        label->set_font_size(14.0);
+        label->set_font_size(13.0);
+        if (item.is_hidden) {
+            label->set_color(txui::Color(150, 150, 165, 180));
+        }
         
-        // Add 8px padding before the label to separate it from the icon
+        // 8px padding before label
         auto padded_label = txui::make_ref<txui::Padding>(txui::Insets(0, 0, 0, 8.0), label);
 
         row->add_child(icon);
@@ -56,18 +65,32 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         if (item.type == FileType::Directory) {
             auto spacer = txui::FlexItem::Expanded(nullptr, 1);
             auto chevron = txui::make_ref<txui::Label>(">");
-            chevron->set_font_size(14.0);
-            chevron->set_color(txui::Color(150, 150, 150, 255));
-            // Add right padding to the chevron so it doesn't touch the edge
+            chevron->set_font_size(12.0);
+            chevron->set_color(txui::Color(140, 145, 165, 200));
             auto padded_chevron = txui::make_ref<txui::Padding>(txui::Insets(0, 8.0, 0, 0), chevron);
             
             row->add_child(spacer);
             row->add_child(padded_chevron);
+        } else {
+            auto spacer = txui::FlexItem::Expanded(nullptr, 1);
+            std::string size_str;
+            if (item.size_bytes < 1024) {
+                size_str = std::to_string(item.size_bytes) + " B";
+            } else if (item.size_bytes < 1024 * 1024) {
+                size_str = std::to_string(item.size_bytes / 1024) + " KB";
+            } else {
+                size_str = std::to_string(item.size_bytes / (1024 * 1024)) + " MB";
+            }
+            auto size_lbl = txui::make_ref<txui::Label>(size_str);
+            size_lbl->set_font_size(11.0);
+            size_lbl->set_color(txui::Color(130, 135, 150, 180));
+            auto padded_size = txui::make_ref<txui::Padding>(txui::Insets(0, 6.0, 0, 0), size_lbl);
+            
+            row->add_child(spacer);
+            row->add_child(padded_size);
         }
         
-        // Add 12px horizontal and 6px vertical padding to the entire row
-        auto padded_row = txui::make_ref<txui::Padding>(txui::Insets(6.0, 12.0), row);
-        
+        auto padded_row = txui::make_ref<txui::Padding>(txui::Insets(5.0, 10.0), row);
         m_list_view->add_item(padded_row);
     }
     
@@ -77,10 +100,9 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
 }
 
 txui::Size ColumnWidget::measure_override(const txui::Constraints& constraints) noexcept {
-    // Fixed width for column: 250px
-    txui::Constraints list_constraints(250.0, 250.0, constraints.min_height, constraints.max_height);
+    txui::Constraints list_constraints(240.0, 240.0, constraints.min_height, constraints.max_height);
     m_list_view->measure(list_constraints);
-    return constraints.constrain(txui::Size(250.0, m_list_view->desired_size().height));
+    return constraints.constrain(txui::Size(240.0, m_list_view->desired_size().height));
 }
 
 void ColumnWidget::layout_override(const txui::Rect& frame) noexcept {
@@ -90,9 +112,9 @@ void ColumnWidget::layout_override(const txui::Rect& frame) noexcept {
 void ColumnWidget::paint_override(txui::Painter& painter) const noexcept {
     m_list_view->paint(painter);
     
-    // Draw column border on the right edge, unless this is the deepest column
+    // Draw subtle vertical column separator line on the right edge
     if (!m_is_last_column) {
-        painter.fill_rect(txui::Rect(frame().right() - 1.0, frame().top(), 1.0, frame().height()), txui::Color(60, 60, 60, 255));
+        painter.fill_rect(txui::Rect(frame().right() - 1.0, frame().top(), 1.0, frame().height()), txui::Color(55, 58, 72, 255));
     }
 }
 
