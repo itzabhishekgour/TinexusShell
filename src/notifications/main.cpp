@@ -214,6 +214,20 @@ int main() {
     txui::CommandBuffer cmd_buf;
     txui::PixmanBackend backend;
 
+    recreate_or_resize_surface(420, 100);
+
+    // Initial frame present
+    {
+        txui::Painter painter(cmd_buf);
+        painter.begin_frame();
+        painter.clear(txui::Color::transparent());
+        painter.end_frame();
+        backend.execute(cmd_buf, *render_target);
+        cmd_buf.clear();
+        render_target->present();
+        connection.flush();
+    }
+
     int wl_fd = wl_display_get_fd(connection.display());
     int bus_fd = -1;
     if (notifications::DBusServer::instance().bus()) {
@@ -350,11 +364,16 @@ int main() {
             target_h += static_cast<uint32_t>(b.height()) + 8;
         }
 
-        // 5. Render or unmap surface
+        // 5. Render or clear surface
         if (bubbles.empty() || target_h == 0) {
-            if (layer_surface && raw_surface) {
-                wl_surface_attach(raw_surface, nullptr, 0, 0);
-                wl_surface_commit(raw_surface);
+            if (render_target && layer_surface) {
+                txui::Painter painter(cmd_buf);
+                painter.begin_frame();
+                painter.clear(txui::Color::transparent());
+                painter.end_frame();
+                backend.execute(cmd_buf, *render_target);
+                cmd_buf.clear();
+                render_target->present();
                 connection.flush();
             }
             continue;
