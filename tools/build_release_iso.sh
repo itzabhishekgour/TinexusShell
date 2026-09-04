@@ -383,6 +383,18 @@ EOF_DBUS_POL
         warn "No wallpaper found in Temp/ or assets/wallpaper/ — procedural fallback will be used."
     fi
 
+    # Stage timezone data so localtime_r() returns correct local time
+    info "Staging timezone data (Asia/Kolkata)..."
+    if [ -f "/usr/share/zoneinfo/Asia/Kolkata" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/share/zoneinfo/Asia"
+        cp /usr/share/zoneinfo/Asia/Kolkata "$ROOTFS_DIR/usr/share/zoneinfo/Asia/Kolkata"
+        ln -sf /usr/share/zoneinfo/Asia/Kolkata "$ROOTFS_DIR/etc/localtime"
+        echo "Asia/Kolkata" > "$ROOTFS_DIR/etc/timezone"
+        success "Timezone set to Asia/Kolkata (IST UTC+5:30)."
+    else
+        warn "Zoneinfo not found on build host — time will show UTC."
+    fi
+
     # Stage any AppImages provided by the user in Temp/
     info "Checking for 3rd-party AppImages in Temp/..."
     if ls "$PROJECT_DIR/Temp/"*.AppImage 1> /dev/null 2>&1; then
