@@ -193,14 +193,10 @@ void LockWidget::paint_override(txui::Painter& painter) const noexcept {
             painter.fill_rect(txui::Rect(dot_x + 2.0, pw_y + 12.0, 2.0, 20.0), ACCENT);
         }
     } else {
-        // Hint text with optional blinking caret
+        // Hint text — no caret shown here (caret appears after password dots when typing)
         const std::string hint = "Press Enter to unlock";
-        const double hint_x = cx - (static_cast<double>(hint.size()) * 8.0) * 0.5;
+        const double hint_x = cx - (static_cast<double>(hint.size()) * 7.2) * 0.5;
         painter.draw_text(txui::Point(hint_x, pw_y + 14.0), hint, HINT_COLOR, 1.0);
-        if (m_caret_visible) {
-            painter.fill_rect(txui::Rect(hint_x + static_cast<double>(hint.size()) * 8.0 + 4.0,
-                                         pw_y + 12.0, 2.0, 20.0), ACCENT);
-        }
     }
 
     // ── 6. Bottom info bar
