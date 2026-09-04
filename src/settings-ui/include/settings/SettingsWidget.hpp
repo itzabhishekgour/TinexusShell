@@ -2,7 +2,9 @@
 
 #include <txui/widgets/Widget.hpp>
 #include <txui/core/Types.hpp>
+#include <txui/math/Rect.hpp>
 #include <string>
+#include <vector>
 
 namespace tinexus::settings_ui {
 
@@ -14,25 +16,24 @@ enum class SettingsPage {
     About
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SettingsWidget — The Tinexus Control Center root widget.
-//
-// Visual Design:
-//   ┌────────────────────────────────────────────────────────────────────────┐
-//   │ Sidebar (220px)  │ Content Area (fill)                                │
-//   │ ─────────────────┤────────────────────────────────────────────────────│
-//   │ 🖥  Display       │ [Page content with cards, toggles, sliders]        │
-//   │ 🎨 Personalize   │                                                    │
-//   │ ⚙️  System        │                                                    │
-//   │ ℹ  About         │                                                    │
-//   └────────────────────────────────────────────────────────────────────────┘
-// ─────────────────────────────────────────────────────────────────────────────
+struct AccentOption {
+    uint8_t r, g, b;
+    std::string name;
+};
+
+struct WallpaperItem {
+    std::string name;
+    std::string path;
+    uint8_t preview_r{20};
+    uint8_t preview_g{30};
+    uint8_t preview_b{50};
+};
+
 class SettingsWidget : public txui::Widget {
 public:
     SettingsWidget();
 
     void select_page(SettingsPage page);
-
     bool handle_event(const txui::Event& event) noexcept override;
 
 protected:
@@ -44,7 +45,7 @@ private:
     SettingsPage m_current_page{SettingsPage::Display};
     int m_hovered_tab{-1};
 
-    // Sidebar
+    // Sidebar rendering
     void paint_sidebar(txui::Painter& painter) const noexcept;
     void paint_sidebar_item(txui::Painter& painter, const std::string& label,
                             SettingsPage page, txui::float64 y) const noexcept;
@@ -62,23 +63,39 @@ private:
     void paint_privacy_security_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
     void paint_about_page(txui::Painter& painter, const txui::Rect& area) const noexcept;
 
-    // Rects updated by layout
+    // Layout Rects
     txui::Rect m_sidebar_rect;
     txui::Rect m_content_rect;
 
     static constexpr txui::float64 SIDEBAR_W = 220.0;
     static constexpr txui::float64 ITEM_H    = 48.0;
-    static constexpr txui::float64 ITEM_Y0   = 124.0; // below title and search bar
+    static constexpr txui::float64 ITEM_Y0   = 124.0;
 
-    // System State
+    // System Information
     std::string m_os_version;
     std::string m_mem_info;
     std::string m_cpu_model;
     
-    // Config State
+    // Display Page Settings
+    bool m_night_light_enabled{false};
+    bool m_vrr_enabled{false};
+    int m_display_scale_idx{0}; // 0: 100%, 1: 125%, 2: 150%, 3: 200%
+
+    // Personalization Page Settings
+    int m_selected_accent_idx{0};
+    std::string m_theme_mode{"Dark"}; // "Dark" or "Light"
+    int m_selected_wallpaper_idx{0};
+    std::vector<WallpaperItem> m_wallpapers;
+
+    // System Page Settings
     int m_screen_timeout_min{5};
     int m_sleep_after_min{15};
-    std::string m_power_profile{"Balanced"};
+    std::string m_power_profile{"Balanced"}; // "Power Saver", "Balanced", "Performance"
+    bool m_lock_on_sleep{true};
+    bool m_pam_auth{true};
+
+    // Session Trigger Feedback
+    std::string m_session_status_msg;
 
     // Privacy & Security State
     struct UnverifiedApp {
@@ -91,6 +108,12 @@ private:
     std::vector<UnverifiedApp> m_unverified_apps;
     void refresh_unverified_apps();
     void trust_app(const std::string& hash);
+
+    // Helpers
+    void load_config();
+    void save_config();
+    void scan_wallpapers();
+    void trigger_session_action(int action_idx);
 };
 
 } // namespace tinexus::settings_ui

@@ -64,6 +64,16 @@ void DBusServer::stop() {
     }
 }
 
+void DBusServer::emit_notification_closed(uint32_t id, uint32_t reason) {
+    if (!m_bus) return;
+    sd_bus_emit_signal(m_bus, "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed", "uu", id, reason);
+}
+
+void DBusServer::emit_action_invoked(uint32_t id, const std::string& action_key) {
+    if (!m_bus) return;
+    sd_bus_emit_signal(m_bus, "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "ActionInvoked", "us", id, action_key.c_str());
+}
+
 int DBusServer::method_notify(sd_bus_message *m, void *, sd_bus_error *ret_error) {
     const char *app_name;
     uint32_t replaces_id;

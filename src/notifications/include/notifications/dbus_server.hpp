@@ -15,6 +15,9 @@ public:
 
     sd_bus* bus() const { return m_bus; }
 
+    void emit_notification_closed(uint32_t id, uint32_t reason);
+    void emit_action_invoked(uint32_t id, const std::string& action_key);
+
     static int method_notify(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
     static int method_close_notification(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
     static int method_get_capabilities(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
