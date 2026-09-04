@@ -7,7 +7,7 @@
 namespace tinexus::searchd {
 
 bool AppProvider::canHandle(const std::string& query) const {
-    return !query.empty();
+    return true;
 }
 
 static bool contains_icase(std::string_view text, std::string_view query) {
@@ -46,6 +46,29 @@ std::vector<SearchResult> AppProvider::search(const std::string& query, size_t m
 
         results.push_back(std::move(res));
     });
+
+    struct BuiltinApp { const char* name; const char* exec; const char* desc; };
+    BuiltinApp builtins[] = {
+        {"Tinexus Terminal", "tinexus-terminal", "Default Wayland Terminal"},
+        {"Tinexus Settings", "tinexus-settings-ui", "System Configuration"},
+        {"Files", "tinexus-files", "File Manager"},
+        {"Lock Screen", "tinexus-lock", "Lock the session"},
+        {"Screenshot", "tinexus-screenshot", "Capture screen"}
+    };
+    for (const auto& b : builtins) {
+        if (contains_icase(b.name, query) || contains_icase(b.exec, query) || contains_icase(b.desc, query)) {
+            SearchResult res;
+            res.id = std::string("builtin:") + b.exec;
+            res.type = "app";
+            res.priority = 2;
+            res.icon = "application-x-executable";
+            res.title = b.name;
+            res.subtitle = b.desc;
+            res.action = b.exec;
+            res.provider_id = "apps";
+            results.push_back(std::move(res));
+        }
+    }
 
     return results;
 }

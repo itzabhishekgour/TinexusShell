@@ -7,11 +7,11 @@
 
 namespace tinexus::indexer {
 
-static std::string trim(std::string_view sv) {
+static std::string_view trim(std::string_view sv) {
     auto start = sv.find_first_not_of(" \t\r\n");
     if (start == std::string_view::npos) return "";
     auto end = sv.find_last_not_of(" \t\r\n");
-    return std::string(sv.substr(start, end - start + 1));
+    return sv.substr(start, end - start + 1);
 }
 
 static std::vector<std::string> split_semicolon(std::string_view sv) {
@@ -19,7 +19,7 @@ static std::vector<std::string> split_semicolon(std::string_view sv) {
     std::string current;
     for (char ch : sv) {
         if (ch == ';') {
-            std::string t = trim(current);
+            std::string t(trim(current));
             if (!t.empty()) {
                 results.push_back(std::move(t));
             }
@@ -28,7 +28,7 @@ static std::vector<std::string> split_semicolon(std::string_view sv) {
             current.push_back(ch);
         }
     }
-    std::string t = trim(current);
+    std::string t(trim(current));
     if (!t.empty()) {
         results.push_back(std::move(t));
     }
@@ -50,7 +50,7 @@ std::string DesktopParser::sanitize_exec(std::string_view raw_exec) noexcept {
         }
         result.push_back(raw_exec[i]);
     }
-    return trim(result);
+    return std::string(trim(result));
 }
 
 std::optional<DesktopEntry> DesktopParser::parse_file(const std::filesystem::path& path) noexcept {

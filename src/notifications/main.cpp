@@ -182,7 +182,11 @@ int main() {
         if (!toast_dismissed) {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_time).count();
             if (elapsed > 15) {
-                zwlr_layer_surface_v1_set_size(layer_surface, 0, 0);
+                if (layer_surface) {
+                    zwlr_layer_surface_v1_destroy(layer_surface);
+                    layer_surface = nullptr;
+                }
+                wl_surface_attach(raw_surface, nullptr, 0, 0);
                 wl_surface_commit(raw_surface);
                 connection.flush();
                 log::info("[Notifications] Toast notification auto-dismissed.");

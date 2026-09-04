@@ -7,7 +7,7 @@ namespace tinexus::notifications {
 
 static const sd_bus_vtable notifications_vtable[] = {
     SD_BUS_VTABLE_START(0),
-    SD_BUS_METHOD("Notify", "susssasb{sv}i", "u", DBusServer::method_notify, SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("Notify", "susssasa{sv}i", "u", DBusServer::method_notify, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("CloseNotification", "u", "", DBusServer::method_close_notification, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("GetCapabilities", "", "as", DBusServer::method_get_capabilities, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("GetServerInformation", "", "ssss", DBusServer::method_get_server_information, SD_BUS_VTABLE_UNPRIVILEGED),

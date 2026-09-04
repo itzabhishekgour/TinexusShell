@@ -20,9 +20,9 @@
 #include <txui/theme/Theme.hpp>
 #include <txui/render/WaylandRenderTarget.hpp>
 #include <common/logger.hpp>
-#include <common/dbus_power.hpp>
 #include <indexer/desktop_entry.hpp>
 #include <unistd.h>
+#include <sys/reboot.h>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -98,10 +98,24 @@ static pid_t spawn_app(const AppItem& item) {
             pid_t pid = fork();
             if (pid == 0) { setsid(); execlp("tinexus-lock", "tinexus-lock", nullptr); _exit(127); }
             return pid;
-        } else if (cmd == "shutdown") { tinexus::common::dbus_power::poweroff(); return -1; }
-        else if (cmd == "reboot")   { tinexus::common::dbus_power::reboot();   return -1; }
-        else if (cmd == "sleep")    { tinexus::common::dbus_power::suspend();  return -1; }
-        else if (cmd == "logout")   { tinexus::common::dbus_power::logout(); return -1; }
+        } else if (cmd == "shutdown") {
+            log::info("[Pulse] System action: Shutdown");
+            sync();
+            ::reboot(RB_POWER_OFF);
+            return -1;
+        } else if (cmd == "reboot") {
+            log::info("[Pulse] System action: Reboot");
+            sync();
+            ::reboot(RB_AUTOBOOT);
+            return -1;
+        } else if (cmd == "sleep") {
+            log::info("[Pulse] System action: Sleep — suspend not supported in VM");
+            return -1;
+        } else if (cmd == "logout") {
+            log::info("[Pulse] System action: Logout");
+            ::kill(1, SIGTERM);
+            return -1;
+        }
         return -1;
     }
     std::string clean_exec = indexer::DesktopParser::sanitize_exec(item.exec);
@@ -503,6 +517,33 @@ public:
 // ─────────────────────────────────────────────────────────────────────────────
 // IPC listener thread — receives LAUNCHER_SHOW from compositor via ipcd
 // ─────────────────────────────────────────────────────────────────────────────
+
+#include <mutex>
+#include <cstring>
+static std::atomic<int> g_ipc_fd{-1};
+static std::atomic<uint32_t> g_search_seq{0};
+static std::mutex g_results_mutex;
+static std::vector<AppItem> g_search_results;
+static std::atomic<bool> g_results_updated{false};
+
+#pragma pack(push, 1)
+struct IpcHdr {
+    uint32_t magic = 0x544E5853; uint16_t version = 0x0100; uint16_t msg_type;
+    uint16_t flags = 0; uint32_t seq = 0; uint32_t payload_len; uint32_t csum = 0;
+};
+#pragma pack(pop)
+
+static void send_search_query(const std::string& q) {
+    int fd = g_ipc_fd.load();
+    if (fd < 0) return;
+    IpcHdr hdr;
+    hdr.msg_type = 2000; // SEARCH_QUERY
+    hdr.seq = ++g_search_seq;
+    hdr.payload_len = q.size();
+    send(fd, &hdr, sizeof(hdr), MSG_NOSIGNAL);
+    if (!q.empty()) send(fd, q.data(), q.size(), MSG_NOSIGNAL);
+}
+
 static std::atomic<bool> g_toggle_pulse{false};
 
 void ipc_listener_thread() {
@@ -521,31 +562,25 @@ void ipc_listener_thread() {
         }
     }
     if (fd < 0) { log::warn("[Shell] Could not connect to ipcd"); return; }
-
-#pragma pack(push, 1)
-    struct Hdr {
-        uint32_t magic = 0x544E5853; uint16_t version = 0x0100; uint16_t msg_type;
-        uint16_t flags = 0; uint32_t seq = 0; uint32_t payload_len; uint32_t csum = 0;
-    };
-#pragma pack(pop)
-    static_assert(sizeof(Hdr) == 22, "");
+    g_ipc_fd.store(fd);
 
     uint16_t topic = 1000;
-    Hdr sh; sh.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC); sh.payload_len = sizeof(topic);
+    IpcHdr sh; sh.msg_type = 2 /* SYS_SUBSCRIBE_TOPIC */; sh.payload_len = sizeof(topic);
     send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
     send(fd, &topic, sizeof(topic), MSG_NOSIGNAL);
     log::info("[Shell] Subscribed to LAUNCHER_OPEN (1000) via ipcd");
 
     while (true) {
-        Hdr rx; ssize_t got = 0;
+        IpcHdr rx; ssize_t got = 0;
         auto* raw = reinterpret_cast<uint8_t*>(&rx);
         while (got < static_cast<ssize_t>(sizeof(rx))) {
             ssize_t n = recv(fd, raw + got, sizeof(rx) - static_cast<size_t>(got), 0);
             if (n <= 0) goto done;
             got += n;
         }
+        std::vector<uint8_t> buf;
         if (rx.payload_len > 0) {
-            std::vector<uint8_t> buf(rx.payload_len); ssize_t pg = 0;
+            buf.resize(rx.payload_len); ssize_t pg = 0;
             while (pg < static_cast<ssize_t>(rx.payload_len)) {
                 ssize_t n = recv(fd, buf.data() + pg, rx.payload_len - static_cast<size_t>(pg), 0);
                 if (n <= 0) goto done;
@@ -555,6 +590,61 @@ void ipc_listener_thread() {
         if (rx.msg_type == 1004) {
             g_toggle_pulse.store(true);
             log::info("[Shell] LAUNCHER_SHOW received — toggling Pulse");
+        } else if (rx.msg_type == 2001) { // SEARCH_RESULT
+            if (rx.payload_len >= 16) {
+                uint32_t version, result_count;
+                uint64_t latency;
+                size_t offset = 0;
+                std::memcpy(&version, buf.data() + offset, 4); offset += 4;
+                std::memcpy(&result_count, buf.data() + offset, 4); offset += 4;
+                std::memcpy(&latency, buf.data() + offset, 8); offset += 8;
+
+                std::vector<AppItem> parsed;
+                for (uint32_t i = 0; i < result_count; ++i) {
+                    if (offset + 20 > buf.size()) break;
+                    float score;
+                    uint32_t t_len, s_len, a_len, i_len;
+                    
+                    std::memcpy(&score, buf.data() + offset, 4); offset += 4;
+                    
+                    std::memcpy(&t_len, buf.data() + offset, 4); offset += 4;
+                    if (offset + t_len > buf.size()) break;
+                    std::string title(reinterpret_cast<char*>(buf.data() + offset), t_len); offset += t_len;
+                    
+                    if (offset + 4 > buf.size()) break;
+                    std::memcpy(&s_len, buf.data() + offset, 4); offset += 4;
+                    if (offset + s_len > buf.size()) break;
+                    std::string subtitle(reinterpret_cast<char*>(buf.data() + offset), s_len); offset += s_len;
+                    
+                    if (offset + 4 > buf.size()) break;
+                    std::memcpy(&a_len, buf.data() + offset, 4); offset += 4;
+                    if (offset + a_len > buf.size()) break;
+                    std::string action(reinterpret_cast<char*>(buf.data() + offset), a_len); offset += a_len;
+                    
+                    if (offset + 4 > buf.size()) break;
+                    std::memcpy(&i_len, buf.data() + offset, 4); offset += 4;
+                    if (offset + i_len > buf.size()) break;
+                    std::string icon(reinterpret_cast<char*>(buf.data() + offset), i_len); offset += i_len;
+                    
+                    AppItem item;
+                    item.name = title;
+                    item.description = subtitle;
+                    item.exec = action;
+                    item.icon = icon;
+                    if (action == "shutdown" || action == "reboot" || action == "lock" || action == "sleep" || action == "logout") {
+                        item.kind = ResultKind::System;
+                    } else if (title.starts_with("=") || action.find("+") != std::string::npos || action.find("-") != std::string::npos) {
+                        item.kind = ResultKind::Calculator;
+                    } else {
+                        item.kind = ResultKind::App;
+                        item.is_terminal = (subtitle.find("Terminal") != std::string::npos);
+                    }
+                    parsed.push_back(item);
+                }
+                std::lock_guard<std::mutex> lock(g_results_mutex);
+                g_search_results = std::move(parsed);
+                g_results_updated.store(true);
+            }
         }
     }
 done:
@@ -580,6 +670,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Load all apps once at startup for local search fallback
     std::vector<AppItem> all_apps = load_system_apps();
     std::string query;
     size_t selected_index = 0;
@@ -592,13 +683,17 @@ int main(int argc, char** argv) {
     window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
 
     auto sync_pulse = [&]() {
+        // Local search runs instantly — no IPC latency
         current_results = build_results(query, all_apps);
-        if (current_results.empty()) selected_index = 0;
-        else if (selected_index >= current_results.size()) selected_index = current_results.size() - 1;
-        pulse_widget->query          = query;
+        if (selected_index >= current_results.size()) {
+            selected_index = current_results.empty() ? 0 : current_results.size() - 1;
+        }
+        pulse_widget->results = current_results;
         pulse_widget->selected_index = selected_index;
-        pulse_widget->results        = current_results;
+        pulse_widget->query = query;
         pulse_widget->mark_needs_paint();
+        // Also fire IPC query so searchd can enrich results asynchronously
+        send_search_query(query);
     };
     sync_pulse();
     aura_widget->mark_needs_paint();
@@ -681,6 +776,15 @@ int main(int argc, char** argv) {
                 needs_redraw = true;
             }
         }
+
+        // ── Handle async IPC search results ──────────────────────────────
+        // NOTE: IPC results from searchd are intentionally NOT applied to current_results.
+        // Local build_results() is the authoritative source. Applying async IPC results
+        // mid-interaction caused race conditions where selected_index pointed to wrong item
+        // (e.g., "restart" typed → Enter → app-installer launched because IPC updated list).
+        // Clear the flag to prevent backlog buildup.
+        g_results_updated.store(false);
+        { std::lock_guard<std::mutex> lock(g_results_mutex); g_search_results.clear(); }
 
         // ── Poll events ──────────────────────────────────────────────────
         txui::Event event;

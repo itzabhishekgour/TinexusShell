@@ -82,6 +82,30 @@ int main(int argc, char* argv[]) {
     setenv("WAYLAND_DISPLAY", "wayland-0", 1);
     setenv("XDG_RUNTIME_DIR", "/run/user/0", 1);
 
+    // Launch D-Bus Session Bus
+    log::info("[Session] Starting D-Bus Session Bus...");
+    pid_t dbus_pid = fork();
+    if (dbus_pid == 0) {
+        execl("/usr/bin/dbus-daemon", "dbus-daemon", "--session", "--nofork", "--nopidfile", "--address=unix:path=/run/user/0/bus", nullptr);
+        _exit(127);
+    }
+    
+    // Wait for session bus socket
+    fs::path session_bus_sock = "/run/user/0/bus";
+    for (int i = 0; i < 30; ++i) {
+        if (fs::exists(session_bus_sock)) {
+            log::info("[Session] D-Bus session socket is ready at {}", session_bus_sock.string());
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    
+    // Export DBUS_SESSION_BUS_ADDRESS so child processes inherit it
+    setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/bus", 1);
+    
+    // Track dbus-daemon in managed components
+    g_managed_components[dbus_pid] = {"dbus-session", 0, 0, {}};
+
     // Launch Desktop Shell Components in correct order:
     // 0. IPC Daemon (MUST be first — all other components depend on it)
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

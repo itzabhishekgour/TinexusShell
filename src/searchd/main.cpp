@@ -16,6 +16,8 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <filesystem>
+#include "indexer/desktop_entry.hpp"
 
 namespace {
 std::atomic<bool> g_running{true};
@@ -36,6 +38,30 @@ int main(int argc, char** argv) {
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN);
+
+    // -----------------------------------------------------------------------
+    // Initialize Desktop Application Index (RamSnapshot)
+    // -----------------------------------------------------------------------
+    std::vector<std::filesystem::path> app_dirs;
+    app_dirs.push_back("/usr/share/applications");
+    if (const char* home = std::getenv("HOME")) {
+        app_dirs.push_back(std::filesystem::path(home) / ".local" / "share" / "applications");
+    }
+
+    std::vector<tinexus::indexer::DesktopEntry> initial_entries;
+    for (const auto& dir : app_dirs) {
+        if (!std::filesystem::exists(dir)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".desktop") {
+                auto parsed = tinexus::indexer::DesktopParser::parse_file(entry.path());
+                if (parsed) {
+                    initial_entries.push_back(std::move(*parsed));
+                }
+            }
+        }
+    }
+    tinexus::indexer::RamSnapshot::instance().set_all_entries(initial_entries);
+    tinexus::log::info("[searchd] Indexed {} application desktop entries", initial_entries.size());
 
     // -----------------------------------------------------------------------
     // Initialize the multi-provider search engine
