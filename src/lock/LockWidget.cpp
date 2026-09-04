@@ -108,11 +108,14 @@ void LockWidget::paint_override(txui::Painter& painter) const noexcept {
 
     // ── 2. Time & Date block
     time_t now = time(nullptr);
-    struct tm* t = localtime(&now);
-    char time_buf[8];
-    char date_buf[48];
-    strftime(time_buf, sizeof(time_buf), "%H:%M", t);
-    strftime(date_buf, sizeof(date_buf), "%A, %B %d", t);
+    struct tm t_buf;
+    struct tm* t = (localtime_r(&now, &t_buf) != nullptr) ? &t_buf : nullptr;
+    char time_buf[8]  = "??:??";
+    char date_buf[48] = "";
+    if (t) {
+        strftime(time_buf, sizeof(time_buf), "%H:%M", t);
+        strftime(date_buf, sizeof(date_buf), "%A, %B %d", t);
+    }
 
     // Large Time Text (scale = 4 → 32px per char)
     constexpr double TIME_SCALE = 4.0;
