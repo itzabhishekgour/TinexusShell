@@ -53,6 +53,7 @@ private:
 
     mutable std::vector<DockIconState> m_icons;
     int m_mouse_x{-1};
+    int m_hovered_idx{-1};
     int m_ipc_socket{-1};
     
     void setup_ipc();
