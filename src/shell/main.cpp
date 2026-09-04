@@ -302,7 +302,72 @@ namespace aura_ui {
     constexpr txui::Color SHADOW_3   {  0,   0,   0,  15}; // furthest shadow
     constexpr txui::Color TXT_PRI    {240, 240, 248, 255};
     constexpr txui::Color WIFI_COL   {100, 210, 100, 220};
+    constexpr txui::Color WIFI_DIM   { 80,  80, 100, 120};
     constexpr txui::Color ACCENT     {107, 140, 239, 255};
+}
+
+// ── System info helpers ───────────────────────────────────────────────────────
+static double read_battery_percent() {
+    // Try common sysfs paths for battery capacity
+    const char* paths[] = {
+        "/sys/class/power_supply/BAT0/capacity",
+        "/sys/class/power_supply/BAT1/capacity",
+        "/sys/class/power_supply/battery/capacity",
+    };
+    for (const char* p : paths) {
+        FILE* f = fopen(p, "r");
+        if (!f) continue;
+        int cap = -1;
+        fscanf(f, "%d", &cap);
+        fclose(f);
+        if (cap >= 0 && cap <= 100) return static_cast<double>(cap);
+    }
+    return -1.0; // no battery (VM/desktop)
+}
+
+// Returns 0-3: number of WiFi signal bars (0=no signal/no WiFi, 1-3=strength)
+static int read_wifi_bars() {
+    FILE* f = fopen("/proc/net/wireless", "r");
+    if (!f) return 0;
+    char line[256];
+    int bars = 0;
+    while (fgets(line, sizeof(line), f)) {
+        // Lines starting with interface name (not header lines)
+        if (strchr(line, ':') == nullptr) continue;
+        float link = 0.0f;
+        // Format: iface: status link level noise ...
+        char iface[32];
+        int status = 0;
+        if (sscanf(line, " %31[^:]: %d %f", iface, &status, &link) >= 3) {
+            // link is 0-70 typically
+            if      (link >= 50.0f) bars = 3;
+            else if (link >= 25.0f) bars = 2;
+            else if (link >  0.0f)  bars = 1;
+            else                    bars = 0;
+            break;
+        }
+    }
+    fclose(f);
+    return bars;
+}
+
+// Returns true if any wired/wireless network interface is UP (excluding lo)
+static bool read_network_connected() {
+    FILE* f = fopen("/proc/net/if_inet6", "r");
+    if (!f) f = fopen("/proc/net/fib_trie", "r"); // fallback
+    // Simpler: check /sys/class/net/*/operstate
+    if (f) { fclose(f); }
+    // Check /proc/net/dev for non-loopback interfaces with traffic
+    FILE* dev = fopen("/proc/net/dev", "r");
+    if (!dev) return false;
+    char line[256];
+    bool connected = false;
+    while (fgets(line, sizeof(line), dev)) {
+        if (strstr(line, "lo:") || strstr(line, "Inter-") || strstr(line, "face")) continue;
+        if (strchr(line, ':')) { connected = true; break; }
+    }
+    fclose(dev);
+    return connected;
 }
 
 namespace pulse_ui {
@@ -356,34 +421,45 @@ public:
         localtime_r(&now, &tb);
         char ts[16];
         strftime(ts, sizeof(ts), "%H:%M", &tb);
-        // Center text vertically by shifting y up by half the font size (15 / 2 = 7.5)
         painter.draw_text({f.x() + PAD_H, cy - 7.5}, ts, TXT_PRI, 15);
 
+        // WiFi bars — real signal from /proc/net/wireless
         double wx = f.x() + PAD_H + 54.0;
+        int wifi_bars = read_wifi_bars();
+        bool has_net  = (wifi_bars > 0) || read_network_connected();
         for (int b = 0; b < 3; ++b) {
-            double bh = 6.0 + static_cast<double>(b) * 3.0; // Heights: 6, 9, 12
-            // Vertically center the bars relative to cy. Center of a bar is cy, so top is cy - bh/2.
-            painter.fill_rounded_rect({wx + static_cast<double>(b) * 5.0, cy - bh / 2.0, 3.0, bh},
-                                       1, WIFI_COL);
+            double bh = 6.0 + static_cast<double>(b) * 3.0;
+            // Light bar if signal reaches this level, dim otherwise
+            txui::Color bc = (b < wifi_bars || (b == 0 && has_net))
+                              ? WIFI_COL : WIFI_DIM;
+            painter.fill_rounded_rect(
+                {wx + static_cast<double>(b) * 5.0, cy - bh / 2.0, 3.0, bh},
+                1, bc);
         }
 
         // ── CENTER: avatar circle ─────────────────────────────────────
         const double r = H / 2.0 - 6.0;
         painter.fill_rounded_rect({cx - r, f.y() + 6.0, r * 2.0, r * 2.0},
                                    static_cast<int>(r), ACCENT);
-        // Center "T" text vertically and horizontally. Text size is 15.
         painter.draw_text({cx - 5.0, cy - 7.5}, "T", txui::Color(255, 255, 255, 240), 15);
 
         // ── RIGHT: battery ────────────────────────────────────────────
-        constexpr double PCT = 85.0;
-        const txui::Color bc = PCT > 20.0 ? txui::Color{100, 220, 130, 220} : txui::Color{240, 80, 80, 220};
-        const double bx = f.x() + W - PAD_H - 58.0, by = cy - 7.0; // Height is 14, so by = cy - 7 means centered!
-        painter.fill_rounded_rect({bx, by, 22.0, 14.0}, 2, txui::Color{60, 60, 80, 200});
-        painter.fill_rounded_rect({bx + 22.0, by + 3.5, 3.0, 7.0}, 1, txui::Color{60, 60, 80, 200});
-        painter.fill_rounded_rect({bx + 2.0, by + 2.0, 18.0 * PCT / 100.0, 10.0}, 1, bc);
-        char ps[8]; snprintf(ps, sizeof(ps), "%.0f%%", PCT);
-        // Center text vertically by shifting y up by half the font size (13 / 2 = 6.5)
-        painter.draw_text({bx + 28.0, cy - 6.5}, ps, TXT_PRI, 13);
+        double PCT = read_battery_percent();
+        if (PCT < 0.0) {
+            // No battery (VM) — show "DC" for direct current / plugged in
+            painter.draw_text({f.x() + W - PAD_H - 30.0, cy - 6.5},
+                              "DC", TXT_PRI, 11);
+        } else {
+            const txui::Color bc_col = PCT > 20.0
+                ? txui::Color{100, 220, 130, 220}
+                : txui::Color{240,  80,  80, 220};
+            const double bx = f.x() + W - PAD_H - 58.0, by = cy - 7.0;
+            painter.fill_rounded_rect({bx, by, 22.0, 14.0}, 2, txui::Color{60, 60, 80, 200});
+            painter.fill_rounded_rect({bx + 22.0, by + 3.5, 3.0, 7.0}, 1, txui::Color{60, 60, 80, 200});
+            painter.fill_rounded_rect({bx + 2.0, by + 2.0, 18.0 * PCT / 100.0, 10.0}, 1, bc_col);
+            char ps[8]; snprintf(ps, sizeof(ps), "%.0f%%", PCT);
+            painter.draw_text({bx + 28.0, cy - 6.5}, ps, TXT_PRI, 13);
+        }
     }
 };
 
