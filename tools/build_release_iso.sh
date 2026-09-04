@@ -367,15 +367,20 @@ EOF_DBUS_POL
         cp -r /var/cache/fontconfig/. "$ROOTFS_DIR/var/cache/fontconfig/" 2>/dev/null || true
     fi
 
-    # Stage custom wallpaper image from Temp directory
+    # Stage custom wallpaper image from Temp directory or assets/
     info "Staging custom wallpaper image into rootfs..."
     mkdir -p "$ROOTFS_DIR/usr/share/backgrounds"
     if [ -f "$PROJECT_DIR/Temp/tinexus-default.jpg" ]; then
         cp -L "$PROJECT_DIR/Temp/tinexus-default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
-        success "Staged 1080p mountain wallpaper (tinexus-default.jpg)."
+        success "Staged wallpaper (tinexus-default.jpg from Temp/)."
     elif [ -f "$PROJECT_DIR/Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg" ]; then
         cp -L "$PROJECT_DIR/Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
         success "Staged custom mountain wallpaper."
+    elif [ -f "$PROJECT_DIR/assets/wallpaper/tinexus-default.jpg" ]; then
+        cp -L "$PROJECT_DIR/assets/wallpaper/tinexus-default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
+        success "Staged wallpaper from assets/wallpaper/."
+    else
+        warn "No wallpaper found in Temp/ or assets/wallpaper/ — procedural fallback will be used."
     fi
 
     # Stage any AppImages provided by the user in Temp/
