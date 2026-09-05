@@ -196,6 +196,72 @@ int main(int argc, char** argv) {
         tinexus::log::error("Failed AppImage sweep: {}", e.what());
     }
 
+    // ── Non-Blocking Userspace Network Bring-up (lo + insmod/modprobe + udhcpc) ──
+    // POLICY BOUNDARY: Core platform daemons (tinexus-comp, tinexus-searchd,
+    // tinexus-serviced, tinexus-ipcd) strictly NEVER open network connections.
+    // DHCP/DNS staging is purely for user-space client apps (browser, curl, AppImages).
+    {
+        pid_t net_bringup_pid = fork();
+        if (net_bringup_pid == 0) {
+            // Child: load drivers and configure networking in the background
+            for (const char* mod : {
+                "/lib/modules/failover.ko",
+                "/lib/modules/net_failover.ko",
+                "/lib/modules/virtio_net.ko",
+                "/lib/modules/e1000.ko",
+                "/lib/modules/e1000e.ko",
+                "/lib/modules/r8169.ko"
+            }) {
+                if (std::filesystem::exists(mod)) {
+                    pid_t p = fork();
+                    if (p == 0) {
+                        execl("/bin/busybox", "busybox", "insmod", mod, nullptr);
+                        execl("/sbin/insmod", "insmod", mod, nullptr);
+                        _exit(0);
+                    }
+                    if (p > 0) waitpid(p, nullptr, 0);
+                }
+            }
+
+            // Bring up loopback
+            pid_t lo_p = fork();
+            if (lo_p == 0) {
+                execl("/bin/ip", "ip", "link", "set", "lo", "up", nullptr);
+                execl("/sbin/ifconfig", "ifconfig", "lo", "127.0.0.1", "up", nullptr);
+                _exit(0);
+            }
+            if (lo_p > 0) waitpid(lo_p, nullptr, 0);
+
+            // Bring up discovered physical/virtual interfaces and start udhcpc
+            try {
+                if (std::filesystem::exists("/sys/class/net")) {
+                    for (const auto& entry : std::filesystem::directory_iterator("/sys/class/net")) {
+                        std::string iface = entry.path().filename().string();
+                        if (iface == "lo") continue;
+
+                        pid_t up_p = fork();
+                        if (up_p == 0) {
+                            execl("/bin/ip", "ip", "link", "set", iface.c_str(), "up", nullptr);
+                            execl("/sbin/ifconfig", "ifconfig", iface.c_str(), "up", nullptr);
+                            _exit(0);
+                        }
+                        if (up_p > 0) waitpid(up_p, nullptr, 0);
+
+                        pid_t dhcp_p = fork();
+                        if (dhcp_p == 0) {
+                            execl("/bin/busybox", "busybox", "udhcpc", "-b", "-i", iface.c_str(), "-s", "/usr/share/udhcpc/default.script", "-q", nullptr);
+                            execl("/sbin/udhcpc", "udhcpc", "-b", "-i", iface.c_str(), "-s", "/usr/share/udhcpc/default.script", "-q", nullptr);
+                            execl("/bin/udhcpc", "udhcpc", "-b", "-i", iface.c_str(), "-s", "/usr/share/udhcpc/default.script", "-q", nullptr);
+                            _exit(0);
+                        }
+                    }
+                }
+            } catch (...) {}
+
+            _exit(0);
+        }
+    }
+
     // ── Launch splash screen immediately — fills the framebuffer before Wayland ──
     // Splash runs on /dev/fb0 independently of the compositor. We kill it with
     // SIGTERM once wayland-0 is up so the compositor's first frame takes over.
