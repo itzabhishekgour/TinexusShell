@@ -573,6 +573,9 @@ private:
 
     void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
         if (wrapper->is_fullscreen == fullscreen) {
+            if (fullscreen && wrapper->scene_tree) {
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+            }
             wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
             return;
         }
@@ -656,6 +659,12 @@ private:
         // Position window with cascade offset
         int32_t offset_x = 50 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
         int32_t offset_y = 100 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
+        if (xdg_toplevel->app_id && (std::string(xdg_toplevel->app_id) == "lock" || std::string(xdg_toplevel->app_id) == "tinexus-lock")) {
+            offset_x = 0;
+            offset_y = 0;
+            wrapper->saved_x = 0;
+            wrapper->saved_y = 0;
+        }
         wlr_scene_node_set_position(&scene_tree->node, offset_x, offset_y);
 
         // map fires when the surface first attaches a buffer (i.e. is ready to show)
@@ -702,6 +711,12 @@ private:
             wrapper->backend->m_is_locked = true;
             wrapper->backend->m_lock_surface = surface;
             wrapper->backend->set_layer_surfaces_enabled(false);
+            wrapper->saved_x = 0;
+            wrapper->saved_y = 0;
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+            wrapper->backend->toplevel_set_fullscreen(wrapper, true);
+        } else if (wrapper->is_fullscreen) {
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
         }
 
         wrapper->backend->focus_toplevel(wrapper);

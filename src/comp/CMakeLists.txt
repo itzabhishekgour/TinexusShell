@@ -58,6 +58,7 @@ add_executable(tinexus-comp
     renderer/vulkan_renderer.cpp
     renderer/opengl_renderer.cpp
     renderer/blur_pass.cpp
+    renderer/shadow_generator.cpp
 )
 
 target_include_directories(tinexus-comp PRIVATE
