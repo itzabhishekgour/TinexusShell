@@ -16,5 +16,6 @@ Remove-Item "$root\qemu_out.txt" -Force -ErrorAction SilentlyContinue
   -cdrom "$root\build\Tinexus-x86_64.iso" `
   -boot d -vga virtio `
   -device virtio-keyboard-pci -device virtio-mouse-pci `
+  -netdev user,id=net0 -device virtio-net-pci,netdev=net0 `
   -display sdl `
   -serial file:"$root\boot_logs.txt" 2>&1 | Out-File "$root\qemu_out.txt"

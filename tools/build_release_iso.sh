@@ -353,6 +353,22 @@ EOF_DBUS_POL
         fi
     done
 
+    # ── Tinexus UI Fonts (Inter) — hardcoded path in PixmanBackend.cpp ────────
+    # CRITICAL: PixmanBackend::init_freetype() expects Inter-Regular.ttf at
+    # /usr/share/tinexus/fonts/Inter-Regular.ttf — no fallback, explicit failure.
+    info "Staging Tinexus UI fonts (Inter) into rootfs..."
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/fonts"
+    if [ ! -f "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" ]; then
+        fatal "MISSING: assets/fonts/Inter-Regular.ttf — run: cp Inter-Regular.ttf assets/fonts/"
+    fi
+    if [ ! -f "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf" ]; then
+        fatal "MISSING: assets/fonts/Inter-Bold.ttf — run: cp Inter-Bold.ttf assets/fonts/"
+    fi
+    cp -v "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" "$ROOTFS_DIR/usr/share/tinexus/fonts/"
+    cp -v "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf"    "$ROOTFS_DIR/usr/share/tinexus/fonts/"
+    success "Staged Inter-Regular.ttf + Inter-Bold.ttf → /usr/share/tinexus/fonts/"
+
+
     # fontconfig — so foot can discover fonts at runtime
     info "Staging fontconfig..."
     if [ -d "/etc/fonts" ]; then
@@ -488,19 +504,79 @@ EOF_PAM
     # We previously generated custom /etc/passwd, /etc/group, and /etc/shadow.
     # Do NOT copy the host's files, as they will overwrite the custom ones!
 
+    # ── Non-blocking Userspace Networking Staging (DHCP / DNS) ────────────────
+    # POLICY BOUNDARY: Core platform daemons (comp/searchd/serviced/ipcd) never touch
+    # network connections. DHCP/DNS staging is purely for user-space apps (browser, curl, AppImages).
+    info "Staging lightweight userspace network stack (udhcpc / DNS)..."
+    mkdir -p "$ROOTFS_DIR/usr/share/udhcpc" "$ROOTFS_DIR/etc"
+    cat > "$ROOTFS_DIR/usr/share/udhcpc/default.script" << 'EOF_DHCP'
+#!/bin/sh
+# udhcpc script for Tinexus OS (Purely for user-space client application networking)
+[ -z "$1" ] && exit 1
+RESOLV_CONF="/etc/resolv.conf"
+
+case "$1" in
+    deconfig)
+        /bin/ip addr flush dev "$interface" 2>/dev/null || /sbin/ifconfig "$interface" 0.0.0.0 2>/dev/null || true
+        ;;
+    renew|bound)
+        if [ -n "$ip" ]; then
+            /bin/ip addr add "$ip/$mask" dev "$interface" 2>/dev/null || /sbin/ifconfig "$interface" "$ip" netmask "$subnet" 2>/dev/null || true
+        fi
+        if [ -n "$router" ]; then
+            for r in $router; do
+                /bin/ip route add default via "$r" dev "$interface" 2>/dev/null || /sbin/route add default gw "$r" dev "$interface" 2>/dev/null || true
+                break
+            done
+        fi
+        if [ -n "$dns" ]; then
+            echo -n > "$RESOLV_CONF.tmp"
+            [ -n "$domain" ] && echo "search $domain" >> "$RESOLV_CONF.tmp"
+            for d in $dns; do
+                echo "nameserver $d" >> "$RESOLV_CONF.tmp"
+            done
+            mv -f "$RESOLV_CONF.tmp" "$RESOLV_CONF"
+        fi
+        ;;
+esac
+exit 0
+EOF_DHCP
+    chmod 0755 "$ROOTFS_DIR/usr/share/udhcpc/default.script"
+
+    # Default fallback DNS nameserver
+    if [ ! -f "$ROOTFS_DIR/etc/resolv.conf" ]; then
+        echo "nameserver 1.1.1.1" > "$ROOTFS_DIR/etc/resolv.conf"
+        echo "nameserver 8.8.8.8" >> "$ROOTFS_DIR/etc/resolv.conf"
+    fi
+
+    # Ensure busybox networking applets are symlinked
+    local bb_host="$(command -v busybox || true)"
+    if [ -n "$bb_host" ] && [ -f "$bb_host" ]; then
+        cp -L "$bb_host" "$ROOTFS_DIR/bin/busybox"
+        for net_app in udhcpc ip ifconfig route ping wget; do
+            ln -sf busybox "$ROOTFS_DIR/bin/$net_app" 2>/dev/null || true
+            ln -sf /bin/busybox "$ROOTFS_DIR/sbin/$net_app" 2>/dev/null || true
+            ln -sf /bin/busybox "$ROOTFS_DIR/usr/bin/$net_app" 2>/dev/null || true
+        done
+        success "Staged busybox networking tools (udhcpc, ip, ifconfig, route, ping, wget)."
+    fi
+
     info "Staging minimal kernel modules into rootfs for runtime hardware support..."
-    mkdir -p "$ROOTFS_DIR/lib/modules"
+    mkdir -p "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" "$ROOTFS_DIR/lib/modules"
     if [ -d "/lib/modules/7.0.0-28-generic" ]; then
         find "/lib/modules/7.0.0-28-generic" -type f \( \
             -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
+            -o -name "virtio_net.ko*" -o -name "net_failover.ko*" -o -name "failover.ko*" \
+            -o -name "e1000.ko*" -o -name "e1000e.ko*" -o -name "r8169.ko*" -o -name "igb.ko*" -o -name "tg3.ko*" \
             -o -name "evdev.ko*" \
             -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
         \) | while read -r mod; do
+            cp -L "$mod" "$ROOTFS_DIR/lib/modules/7.0.0-28-generic/"
             cp -L "$mod" "$ROOTFS_DIR/lib/modules/"
         done
-        for compressed in "$ROOTFS_DIR/lib/modules"/*.zst; do
+        for compressed in "$ROOTFS_DIR/lib/modules/7.0.0-28-generic"/*.zst "$ROOTFS_DIR/lib/modules"/*.zst; do
             [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
         done
         if [ -f "/usr/sbin/depmod" ]; then

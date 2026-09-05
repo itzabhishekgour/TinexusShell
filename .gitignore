@@ -50,3 +50,5 @@ boot_logs.txt
 artifacts/
 .cache/
 Temp/
+qemu_out.txt
+*.deb
