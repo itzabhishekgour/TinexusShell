@@ -33,6 +33,7 @@ ChromeWidget::ChromeWidget(
 
     // Column layout: TitleBar on top, content below
     m_layout = make_ref<Column>();
+    m_layout->set_cross_axis_alignment(CrossAxisAlignment::Stretch);
     m_layout->add_child(m_title_bar);
     m_layout->add_child(m_content_item);
 

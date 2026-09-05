@@ -143,7 +143,9 @@ void FlexLayout::layout_override(const Rect& frame) noexcept {
 
         switch (m_cross_axis_alignment) {
             case CrossAxisAlignment::Start:
+                break;
             case CrossAxisAlignment::Stretch:
+                child_cross_size = cross_size;
                 break;
             case CrossAxisAlignment::End:
                 child_cross_offset += (cross_size - child_cross_size);

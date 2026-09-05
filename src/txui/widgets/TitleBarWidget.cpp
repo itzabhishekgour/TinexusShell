@@ -8,14 +8,12 @@
 namespace txui {
 
 // ── Apple-reference traffic light colors ─────────────────────────────────────
-// Normal: slightly muted (alpha ~200) so they don't scream on dark backgrounds
-// Hover:  full-vivid Apple HIG values
-constexpr Color BTN_CLOSE_NORMAL {180,  65,  60, 200};
-constexpr Color BTN_CLOSE_HOVER  {255,  95,  87, 255}; // #FF5F57
-constexpr Color BTN_MIN_NORMAL   {180, 140,  30, 200};
-constexpr Color BTN_MIN_HOVER    {255, 189,  46, 255}; // #FFBD2E
-constexpr Color BTN_MAX_NORMAL   { 28, 140,  45, 200};
-constexpr Color BTN_MAX_HOVER    { 40, 200,  64, 255}; // #28C840
+constexpr Color BTN_CLOSE_NORMAL {255,  95,  87, 255}; // #FF5F57
+constexpr Color BTN_CLOSE_HOVER  {255, 125, 120, 255};
+constexpr Color BTN_MIN_NORMAL   {255, 189,  46, 255}; // #FFBD2E
+constexpr Color BTN_MIN_HOVER    {255, 205,  80, 255};
+constexpr Color BTN_MAX_NORMAL   { 40, 200,  64, 255}; // #28C840
+constexpr Color BTN_MAX_HOVER    { 65, 220,  90, 255};
 
 // Title bar appearance
 constexpr Color TITLEBAR_BG    { 22,  22,  26, 255}; // Very dark, slightly warm
@@ -44,8 +42,8 @@ Rect TitleBarWidget::button_rect(int index) const noexcept {
 }
 
 Size TitleBarWidget::measure_override(const Constraints& constraints) noexcept {
-    // Fixed height 36px, full width
-    return Size(constraints.max_width, 36.0);
+    // Standard macOS titlebar height 42px, full width
+    return Size(constraints.max_width, 42.0);
 }
 
 void TitleBarWidget::paint_override(Painter& painter) const noexcept {
@@ -72,10 +70,10 @@ void TitleBarWidget::paint_override(Painter& painter) const noexcept {
     draw_btn(1, min_color);
     draw_btn(2, max_color);
 
-    // Title text — muted gray, smaller scale, centered
+    // Title text — muted gray, smaller scale, vertically centered
     if (!m_title.empty()) {
         const double text_w = static_cast<double>(m_title.length()) * 5.5; // approx at scale 1.0
-        Point title_pos{f.x() + (f.width() - text_w) / 2.0, f.y() + 10.0};
+        Point title_pos{f.x() + (f.width() - text_w) / 2.0, f.y() + (f.height() - 14.0) * 0.5};
         painter.draw_text(title_pos, m_title, TITLE_TEXT, 1.0);
     }
 }

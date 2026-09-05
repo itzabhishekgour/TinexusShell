@@ -9,7 +9,7 @@ int main(int /*argc*/, char** /*argv*/) {
     tinexus::log::set_component_name("tinexus-settings-ui");
     tinexus::log::info("Starting Tinexus Control Center v{}", tinexus::VERSION_STRING);
 
-    auto window = txui::Window::create(1280, 800, "Tinexus Settings");
+    auto window = txui::Window::create(1000, 640, "Tinexus Settings");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("[settings-ui] Failed to connect to Wayland display!");
         return 1;

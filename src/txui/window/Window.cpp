@@ -376,6 +376,11 @@ void Window::on_configure(uint32 width, uint32 height) noexcept {
         m_width = width;
         m_height = height;
 
+        if (m_root_widget != nullptr) {
+            m_root_widget->mark_needs_measure();
+            m_root_widget->mark_needs_layout();
+        }
+
         if (m_render_target) {
             auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
             if (wayland_target != nullptr) {

@@ -27,8 +27,8 @@ private:
 
     // Layout geometry — Apple HIG proportions
     constexpr static double BUTTON_RADIUS  = 6.0;   // 12px diameter
-    constexpr static double BUTTON_SPACING = 18.0;  // tighter Apple-style gap
-    constexpr static double LEFT_PADDING   = 16.0;
+    constexpr static double BUTTON_SPACING = 18.0;  // Apple-style gap
+    constexpr static double LEFT_PADDING   = 18.0;  // 18px left inset from window edge
 
     [[nodiscard]] Rect button_rect(int index) const noexcept;
 
