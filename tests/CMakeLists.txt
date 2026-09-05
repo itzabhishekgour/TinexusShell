@@ -17,6 +17,19 @@ target_link_libraries(unit_test_common PRIVATE
 
 add_test(NAME unit_test_common COMMAND unit_test_common)
 
+add_executable(unit_test_txui_clipboard
+    unit/test_txui_clipboard.cpp
+)
+
+target_link_libraries(unit_test_txui_clipboard PRIVATE
+    txui
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
+
 add_executable(unit_test_searchd
     unit/test_searchd.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp

@@ -28,6 +28,10 @@ struct wl_callback;
 
 namespace txui {
 
+namespace wayland {
+class WaylandClipboard;
+}
+
 enum class LayerType {
     Background,
     Bottom,
@@ -60,6 +64,7 @@ private:
     std::optional<wayland::WaylandConnection> m_connection;
     std::optional<wayland::WaylandEventLoop> m_event_loop;
     std::unique_ptr<wayland::WaylandInput> m_input;
+    std::unique_ptr<wayland::WaylandClipboard> m_clipboard;
     std::unique_ptr<RenderTarget> m_render_target;
 
     xdg_wm_base* m_wm_base{nullptr};
@@ -156,6 +161,11 @@ public:
     [[nodiscard]] bool is_maximized() const noexcept { return m_is_maximized; }
 
     void close() noexcept;
+
+    // Clipboard interaction
+    bool set_clipboard_text(std::string_view text) noexcept;
+    [[nodiscard]] std::string get_clipboard_text() noexcept;
+    [[nodiscard]] bool has_clipboard_text() const noexcept;
 
     // Internal Wayland / XDG-Shell hooks
     void on_configure(uint32 width, uint32 height) noexcept;

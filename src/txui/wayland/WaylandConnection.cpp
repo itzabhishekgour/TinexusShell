@@ -21,6 +21,8 @@ void handle_global(void* data, struct wl_registry* registry, uint32_t name, cons
         conn->bind_layer_shell(registry, name, version);
     } else if (std::strcmp(interface, "wl_seat") == 0) {
         conn->bind_seat(registry, name, version);
+    } else if (std::strcmp(interface, "wl_data_device_manager") == 0) {
+        conn->bind_data_device_manager(registry, name, version);
     }
 }
 
@@ -52,10 +54,12 @@ WaylandConnection::WaylandConnection(WaylandConnection&& other) noexcept
       m_shm(std::exchange(other.m_shm, nullptr)),
       m_wm_base(std::exchange(other.m_wm_base, nullptr)),
       m_layer_shell(std::exchange(other.m_layer_shell, nullptr)),
-      m_seat(std::exchange(other.m_seat, nullptr)) {}
+      m_seat(std::exchange(other.m_seat, nullptr)),
+      m_data_device_manager(std::exchange(other.m_data_device_manager, nullptr)) {}
 
 WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexcept {
     if (this != &other) {
+        if (m_data_device_manager != nullptr) wl_data_device_manager_destroy(m_data_device_manager);
         if (m_wm_base != nullptr) xdg_wm_base_destroy(m_wm_base);
         if (m_layer_shell != nullptr) zwlr_layer_shell_v1_destroy(m_layer_shell);
         if (m_seat != nullptr) wl_seat_destroy(m_seat);
@@ -71,11 +75,13 @@ WaylandConnection& WaylandConnection::operator=(WaylandConnection&& other) noexc
         m_wm_base = std::exchange(other.m_wm_base, nullptr);
         m_layer_shell = std::exchange(other.m_layer_shell, nullptr);
         m_seat = std::exchange(other.m_seat, nullptr);
+        m_data_device_manager = std::exchange(other.m_data_device_manager, nullptr);
     }
     return *this;
 }
 
 WaylandConnection::~WaylandConnection() noexcept {
+    if (m_data_device_manager != nullptr) wl_data_device_manager_destroy(m_data_device_manager);
     if (m_wm_base != nullptr) xdg_wm_base_destroy(m_wm_base);
     if (m_layer_shell != nullptr) zwlr_layer_shell_v1_destroy(m_layer_shell);
     if (m_seat != nullptr) wl_seat_destroy(m_seat);
@@ -140,6 +146,13 @@ void WaylandConnection::bind_seat(wl_registry* registry, uint32_t name, uint32_t
     uint32_t bind_ver = (version < 7U) ? version : 7U;
     m_seat = static_cast<wl_seat*>(
         wl_registry_bind(registry, name, &wl_seat_interface, bind_ver)
+    );
+}
+
+void WaylandConnection::bind_data_device_manager(wl_registry* registry, uint32_t name, uint32_t version) noexcept {
+    uint32_t bind_ver = (version < 3U) ? version : 3U;
+    m_data_device_manager = static_cast<struct wl_data_device_manager*>(
+        wl_registry_bind(registry, name, &wl_data_device_manager_interface, bind_ver)
     );
 }
 

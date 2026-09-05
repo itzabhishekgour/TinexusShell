@@ -9,6 +9,7 @@ add_library(txui STATIC
     render/ImageReader.cpp
     render/WaylandRenderTarget.cpp
     wayland/WaylandConnection.cpp
+    wayland/WaylandClipboard.cpp
     wayland/WaylandBuffer.cpp
     wayland/WaylandSurface.cpp
     wayland/WaylandInput.cpp
@@ -48,3 +49,6 @@ target_link_libraries(txui
 
 add_executable(test-lru-stress ../../tests/unit/test_lru_stress.cpp)
 target_link_libraries(test-lru-stress PRIVATE txui tinexus_common)
+
+add_executable(unit_test_txui_clipboard ../../tests/unit/test_txui_clipboard.cpp)
+target_link_libraries(unit_test_txui_clipboard PRIVATE txui tinexus_common)

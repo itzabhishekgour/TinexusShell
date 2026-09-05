@@ -13,6 +13,7 @@ struct wl_shm;
 struct xdg_wm_base;
 struct wl_seat;
 struct zwlr_layer_shell_v1;
+struct wl_data_device_manager;
 
 namespace txui::wayland {
 
@@ -25,6 +26,7 @@ private:
     xdg_wm_base* m_wm_base{nullptr};
     zwlr_layer_shell_v1* m_layer_shell{nullptr};
     wl_seat* m_seat{nullptr};
+    struct wl_data_device_manager* m_data_device_manager{nullptr};
 
     explicit WaylandConnection(wl_display* display) noexcept;
 
@@ -49,6 +51,7 @@ public:
     [[nodiscard]] xdg_wm_base* wm_base() const noexcept { return m_wm_base; }
     [[nodiscard]] zwlr_layer_shell_v1* layer_shell() const noexcept { return m_layer_shell; }
     [[nodiscard]] wl_seat* seat() const noexcept { return m_seat; }
+    [[nodiscard]] struct wl_data_device_manager* data_device_manager() const noexcept { return m_data_device_manager; }
     [[nodiscard]] bool is_valid() const noexcept {
         return m_display != nullptr && m_compositor != nullptr && m_shm != nullptr;
     }
@@ -59,6 +62,7 @@ public:
     void bind_wm_base(wl_registry* registry, uint32_t name, uint32_t version) noexcept;
     void bind_layer_shell(wl_registry* registry, uint32_t name, uint32_t version) noexcept;
     void bind_seat(wl_registry* registry, uint32_t name, uint32_t version) noexcept;
+    void bind_data_device_manager(wl_registry* registry, uint32_t name, uint32_t version) noexcept;
 };
 
 } // namespace txui::wayland

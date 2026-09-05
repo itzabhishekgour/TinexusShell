@@ -1,7 +1,7 @@
-// Force rebuild to resolve ODR violation
 #include <txui/window/Window.hpp>
 #include <txui/render/WaylandRenderTarget.hpp>
 #include <txui/render/CanvasRenderTarget.hpp>
+#include <txui/wayland/WaylandClipboard.hpp>
 #include <wayland-client.h>
 #include <xdg-shell-client-protocol.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -114,6 +114,7 @@ Window::~Window() {
         zwlr_layer_surface_v1_destroy(m_layer_surface);
         m_layer_surface = nullptr;
     }
+    m_clipboard.reset();
     m_render_target.reset();
     m_input.reset();
     m_event_loop.reset();
@@ -207,6 +208,10 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
     if (!win->m_render_target) {
         // Offline / Headless fallback for automated CI testing
         win->m_render_target = std::make_unique<CanvasRenderTarget>(width, height);
+    }
+
+    if (win->m_connection.has_value() && win->m_connection->is_valid()) {
+        win->m_clipboard = std::make_unique<wayland::WaylandClipboard>(*win->m_connection);
     }
 
     win->m_state = WindowState::Running;
@@ -480,6 +485,27 @@ void Window::minimize() noexcept {
     if (m_connection.has_value()) {
         m_connection->flush();
     }
+}
+
+bool Window::set_clipboard_text(std::string_view text) noexcept {
+    if (m_clipboard) {
+        return m_clipboard->set_text(text);
+    }
+    return false;
+}
+
+std::string Window::get_clipboard_text() noexcept {
+    if (m_clipboard) {
+        return m_clipboard->get_text();
+    }
+    return "";
+}
+
+bool Window::has_clipboard_text() const noexcept {
+    if (m_clipboard) {
+        return m_clipboard->has_text();
+    }
+    return false;
 }
 
 } // namespace txui
