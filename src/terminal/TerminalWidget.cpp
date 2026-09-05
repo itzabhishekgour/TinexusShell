@@ -1,8 +1,10 @@
 #include "TerminalWidget.hpp"
+#include <txui/window/Window.hpp>
 #include <txui/math/Rect.hpp>
 #include <txui/math/Size.hpp>
 #include <cmath>
 #include <algorithm>
+
 
 namespace tinexus::terminal {
 
@@ -106,7 +108,7 @@ void TerminalWidget::paint_override(txui::Painter& painter) const noexcept {
                 bool bold = cell.attrs.bold != 0;
                 bool italic = cell.attrs.italic != 0;
                 
-                painter.draw_text(text_pos, text, fg_color, 1.0, bold, italic);
+                painter.draw_mono_text(text_pos, text, fg_color, 1.0, bold);
             }
 
             // Selection highlight overlay (live-view only)
@@ -142,7 +144,7 @@ void TerminalWidget::paint_override(txui::Painter& painter) const noexcept {
             }
             txui::Color text_on_cursor = get_txui_color(
                 cursor_cell.attrs.bg_red, cursor_cell.attrs.bg_green, cursor_cell.attrs.bg_blue);
-            painter.draw_text(txui::Point(cx, cy), text, text_on_cursor, 1.0, false, false);
+            painter.draw_mono_text(txui::Point(cx, cy), text, text_on_cursor, 1.0, false);
         }
     }
 }
@@ -182,8 +184,24 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
         if (txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Ctrl))  mods |= VTERM_MOD_CTRL;
         if (txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Alt))   mods |= VTERM_MOD_ALT;
         
-        VTermModifier vmod = static_cast<VTermModifier>(mods);
+        bool is_ctrl = (mods & VTERM_MOD_CTRL) != 0;
+        bool is_shift = (mods & VTERM_MOD_SHIFT) != 0;
         txui::Key key = event.keyboard.key;
+
+        // Clipboard keyboard shortcuts:
+        // Ctrl+Shift+C -> Copy selection
+        if (is_ctrl && is_shift && key == txui::Key::C) {
+            copy_to_clipboard();
+            return true;
+        }
+
+        // Ctrl+Shift+V -> Paste from clipboard
+        if (is_ctrl && is_shift && key == txui::Key::V) {
+            paste_from_clipboard();
+            return true;
+        }
+
+        VTermModifier vmod = static_cast<VTermModifier>(mods);
         VTermKey vkey = VTERM_KEY_NONE;
         
         switch (key) {
@@ -196,6 +214,7 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
             case txui::Key::Left:      vkey = VTERM_KEY_LEFT; break;
             case txui::Key::Right:     vkey = VTERM_KEY_RIGHT; break;
             case txui::Key::F1:        vkey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(1)); break;
+
             case txui::Key::F2:        vkey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(2)); break;
             case txui::Key::F3:        vkey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(3)); break;
             case txui::Key::F4:        vkey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(4)); break;
@@ -246,11 +265,11 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
         }
     }
 
-    // --- Pointer selection (live-view only) ---
+    // --- Pointer selection & clipboard (live-view only) ---
     if (event.type == txui::EventType::PointerButtonPress) {
-        if (event.pointer.button == txui::MouseButton::Left) {
-            if (event.pointer.x >= frame().left() && event.pointer.x <= frame().right() &&
-                event.pointer.y >= frame().top() && event.pointer.y <= frame().bottom()) {
+        if (event.pointer.x >= frame().left() && event.pointer.x <= frame().right() &&
+            event.pointer.y >= frame().top() && event.pointer.y <= frame().bottom()) {
+            if (event.pointer.button == txui::MouseButton::Left) {
                 if (m_emulator->scroll_offset() == 0) {
                     double rel_x = event.pointer.x - frame().x();
                     double rel_y = event.pointer.y - frame().y();
@@ -262,6 +281,10 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
                     mark_needs_paint();
                 }
                 return true; // Consume if inside frame
+            } else if (event.pointer.button == txui::MouseButton::Right) {
+                // Right-click: paste clipboard content
+                paste_from_clipboard();
+                return true;
             }
         }
     }
@@ -282,13 +305,15 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
 
     if (event.type == txui::EventType::PointerButtonRelease && m_selecting) {
         m_selecting = false;
-        // Selection stays visible (m_sel_start/end remain valid) for copy operations.
+        // Auto-copy selected text on mouse release
+        copy_to_clipboard();
         mark_needs_paint();
         return true;
     }
 
     return txui::Widget::handle_event(event);
 }
+
 
 // --- Stage 7 helper implementations ---
 
@@ -369,4 +394,71 @@ void TerminalWidget::cancel_selection() noexcept {
     }
 }
 
+static void append_utf8_codepoint(std::string& out, uint32_t cp) {
+    if (cp == 0) {
+        out.push_back(' ');
+    } else if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0x10FFFF) {
+        out.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+std::string TerminalWidget::get_selected_text() const {
+    if (m_sel_start_row < 0 || m_sel_end_row < 0) return {};
+    int r0 = m_sel_start_row, c0 = m_sel_start_col;
+    int r1 = m_sel_end_row,   c1 = m_sel_end_col;
+    if (r0 > r1 || (r0 == r1 && c0 > c1)) {
+        std::swap(r0, r1);
+        std::swap(c0, c1);
+    }
+    
+    std::string text;
+    for (int r = r0; r <= r1; ++r) {
+        int start_col = (r == r0) ? c0 : 0;
+        int end_col = (r == r1) ? c1 : (m_cols - 1);
+        std::string line;
+        for (int c = start_col; c <= end_col; ++c) {
+            auto cell = m_emulator->get_cell(r, c);
+            append_utf8_codepoint(line, cell.codepoint);
+        }
+        // Strip trailing spaces from line
+        while (!line.empty() && line.back() == ' ') {
+            line.pop_back();
+        }
+        text += line;
+        if (r < r1) {
+            text += '\n';
+        }
+    }
+    return text;
+}
+
+void TerminalWidget::copy_to_clipboard() noexcept {
+    std::string text = get_selected_text();
+    if (!text.empty() && m_window) {
+        m_window->set_clipboard_text(text);
+    }
+}
+
+void TerminalWidget::paste_from_clipboard() noexcept {
+    if (m_window) {
+        std::string text = m_window->get_clipboard_text();
+        if (!text.empty()) {
+            m_pty.write_bytes(text.data(), text.size());
+        }
+    }
+}
+
 } // namespace tinexus::terminal
+

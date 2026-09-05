@@ -29,6 +29,7 @@ int main(int argc, char* argv[]) {
 
     // Create terminal widget
     auto terminal_widget = txui::make_ref<tinexus::terminal::TerminalWidget>();
+    terminal_widget->set_window(window.get());
     // Create the Chrome/Window frame with traffic lights
     auto chrome = txui::make_ref<txui::ChromeWidget>(
         "Tinexus Terminal",

@@ -9,7 +9,12 @@
 #include <string>
 #include <vector>
 
+namespace txui {
+class Window;
+}
+
 namespace tinexus::terminal {
+
 
 class TerminalWidget : public txui::Widget {
 private:
@@ -58,11 +63,17 @@ public:
     int rows() const noexcept { return m_rows; }
     int cols() const noexcept { return m_cols; }
 
+    void set_window(txui::Window* window) noexcept { m_window = window; }
+    [[nodiscard]] std::string get_selected_text() const;
+    void copy_to_clipboard() noexcept;
+    void paste_from_clipboard() noexcept;
+
     // Called by the event loop or a blink timer on each blink interval (~530ms).
     // Toggles the cursor blink state and marks only the cursor cell dirty.
     void tick_blink() noexcept;
 
 private:
+    txui::Window* m_window{nullptr};
     mutable bool m_first_paint{true};
 
     // Called from TerminalEmulator::movecursor_cb. Updates cursor pos and marks
@@ -78,3 +89,4 @@ private:
 };
 
 } // namespace tinexus::terminal
+
