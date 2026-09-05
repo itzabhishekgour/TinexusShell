@@ -1029,7 +1029,9 @@ private:
     }
 
     static void handle_cursor_axis(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_axis_listener);
         auto* event = static_cast<struct wlr_pointer_axis_event*>(data);
+        self->process_cursor_motion(event->time_msec);
         SeatManager::instance().notify_axis(
             event->time_msec,
             static_cast<uint32_t>(event->orientation),

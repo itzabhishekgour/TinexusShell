@@ -1,6 +1,10 @@
 # boot-tinexus.ps1 — Tinexus OS QEMU Launcher
 $root = "E:\Tinu's Technology\Tinexus Manager"
 
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "       Tinexus OS - Starting QEMU Display         " -ForegroundColor Cyan
+Write-Host "==================================================" -ForegroundColor Cyan
+
 # Kill any existing QEMU instance to release file locks
 Get-Process -Name "qemu-system-x86_64" -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500

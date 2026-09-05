@@ -4,6 +4,8 @@ add_executable(tinexus-files
     column_view_model.cpp
     trash_manager.cpp
     file_operations.cpp
+    ThumbnailCache.cpp
+    TagManager.cpp
     ui/ColumnWidget.cpp
     ui/ColumnBrowserWidget.cpp
 )

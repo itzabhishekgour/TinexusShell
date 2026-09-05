@@ -758,10 +758,14 @@ void rasterize_circle(RenderTarget& target, const Rect& clip, const Point& cente
     const double outer_r  = radius;
     const double inner_r  = (stroke_width > 0.0) ? std::max(0.0, radius - stroke_width) : 0.0;
 
-    int32 left   = std::max(0, static_cast<int32>(std::floor(center.x - outer_r - 1.0)));
-    int32 top    = std::max(0, static_cast<int32>(std::floor(center.y - outer_r - 1.0)));
-    int32 right  = std::min(target_w, static_cast<int32>(std::ceil(center.x + outer_r + 1.0)));
-    int32 bottom = std::min(target_h, static_cast<int32>(std::ceil(center.y + outer_r + 1.0)));
+    int32 left   = std::max({0, static_cast<int32>(std::floor(clip.left())), static_cast<int32>(std::floor(center.x - outer_r - 1.0))});
+    int32 top    = std::max({0, static_cast<int32>(std::floor(clip.top())), static_cast<int32>(std::floor(center.y - outer_r - 1.0))});
+    int32 right  = std::min({target_w, static_cast<int32>(std::ceil(clip.right())), static_cast<int32>(std::ceil(center.x + outer_r + 1.0))});
+    int32 bottom = std::min({target_h, static_cast<int32>(std::ceil(clip.bottom())), static_cast<int32>(std::ceil(center.y + outer_r + 1.0))});
+
+    if (left >= right || top >= bottom) {
+        return;
+    }
 
     uint32* buffer = target.data();
 
@@ -795,6 +799,47 @@ void rasterize_circle(RenderTarget& target, const Rect& clip, const Point& cente
 
             Color px(color.r(), color.g(), color.b(), static_cast<uint8>(a));
             row[x] = blend_argb32_premultiplied(row[x], px.to_argb32_premultiplied());
+        }
+    }
+}
+
+void rasterize_image(RenderTarget& target, const Rect& rect,
+                     const std::shared_ptr<std::vector<uint32_t>>& pixels,
+                     uint32_t src_w, uint32_t src_h,
+                     const Rect& clip) noexcept {
+    if (!pixels || src_w == 0 || src_h == 0 || rect.width() <= 0 || rect.height() <= 0) {
+        return;
+    }
+
+    const int32 target_w = static_cast<int32>(target.width());
+    const int32 target_h = static_cast<int32>(target.height());
+
+    int32 left   = std::max({0, static_cast<int32>(std::floor(clip.left())), static_cast<int32>(std::floor(rect.left()))});
+    int32 top    = std::max({0, static_cast<int32>(std::floor(clip.top())), static_cast<int32>(std::floor(rect.top()))});
+    int32 right  = std::min({target_w, static_cast<int32>(std::ceil(clip.right())), static_cast<int32>(std::ceil(rect.right()))});
+    int32 bottom = std::min({target_h, static_cast<int32>(std::ceil(clip.bottom())), static_cast<int32>(std::ceil(rect.bottom()))});
+
+    if (left >= right || top >= bottom) {
+        return;
+    }
+
+    const double scale_x = static_cast<double>(src_w) / rect.width();
+    const double scale_y = static_cast<double>(src_h) / rect.height();
+    const double rect_x  = rect.left();
+    const double rect_y  = rect.top();
+
+    const uint32_t* src_buf = pixels->data();
+    uint32* dst_buf = target.data();
+
+    for (int32 y = top; y < bottom; ++y) {
+        uint32_t src_y = static_cast<uint32_t>(std::clamp((y - rect_y) * scale_y, 0.0, static_cast<double>(src_h - 1)));
+        const uint32_t* src_row = src_buf + (src_y * src_w);
+        uint32* dst_row = dst_buf + (static_cast<std::size_t>(y) * static_cast<std::size_t>(target_w));
+
+        for (int32 x = left; x < right; ++x) {
+            uint32_t src_x = static_cast<uint32_t>(std::clamp((x - rect_x) * scale_x, 0.0, static_cast<double>(src_w - 1)));
+            uint32_t src_pixel = src_row[src_x];
+            dst_row[x] = blend_argb32_premultiplied(dst_row[x], src_pixel);
         }
     }
 }
@@ -867,6 +912,8 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                     double y2 = std::max(cmd.p1.y, cmd.p2.y);
                     rasterize_solid_rect(target, Rect(x1, y1, x2 - x1, y2 - y1), cmd.color, current_clip);
                 }
+            } else if constexpr (::std::is_same_v<T, DrawImageCommand>) {
+                rasterize_image(target, cmd.rect, cmd.pixels, cmd.width, cmd.height, current_clip);
             } else if constexpr (::std::is_same_v<T, PushClipCommand>) {
                 clip_stack.push_back(current_clip);
                 // Compute intersection of two Rects manually (Rect has no intersection() method)

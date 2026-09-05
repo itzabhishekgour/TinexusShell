@@ -33,7 +33,12 @@ FileItem FileModel::stat_file(const std::filesystem::path& file_path) {
             std::string ext = file_path.extension().string();
             for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-            if (ext == ".txapp" || exec_perm) {
+            bool is_known_data_ext = (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".svg" || ext == ".webp" ||
+                                      ext == ".txt" || ext == ".md" || ext == ".log" || ext == ".toml" || ext == ".json" || ext == ".conf" ||
+                                      ext == ".cpp" || ext == ".c" || ext == ".hpp" || ext == ".h" || ext == ".py" ||
+                                      ext == ".zip" || ext == ".tar" || ext == ".gz" || ext == ".xz" || ext == ".iso" || ext == ".pdf");
+
+            if (!is_known_data_ext && (ext == ".txapp" || ext == ".sh" || exec_perm)) {
                 item.is_executable = true;
                 item.type = FileType::Executable;
             } else {
@@ -57,12 +62,52 @@ FileItem FileModel::stat_file(const std::filesystem::path& file_path) {
             } else {
                 item.mime_type = "application/octet-stream";
             }
+            item.last_modified = std::filesystem::last_write_time(file_path, ec);
         }
     } else {
         item.type = FileType::Unknown;
     }
 
     return item;
+}
+
+void FileModel::sort_items(std::vector<FileItem>& items, SortCriteria criteria, SortDirection direction) {
+    std::sort(items.begin(), items.end(), [criteria, direction](const FileItem& a, const FileItem& b) {
+        if ((a.type == FileType::Directory) != (b.type == FileType::Directory)) {
+            return a.type == FileType::Directory;
+        }
+
+        bool result = false;
+        switch (criteria) {
+            case SortCriteria::Name: {
+                std::string a_lower = a.name;
+                std::string b_lower = b.name;
+                std::transform(a_lower.begin(), a_lower.end(), a_lower.begin(), [](unsigned char c){ return std::tolower(c); });
+                std::transform(b_lower.begin(), b_lower.end(), b_lower.begin(), [](unsigned char c){ return std::tolower(c); });
+                result = (a_lower < b_lower);
+                break;
+            }
+            case SortCriteria::DateModified:
+                result = (a.last_modified < b.last_modified);
+                break;
+            case SortCriteria::Size:
+                result = (a.size_bytes < b.size_bytes);
+                break;
+            case SortCriteria::Kind:
+                if (a.mime_type != b.mime_type) {
+                    result = (a.mime_type < b.mime_type);
+                } else {
+                    std::string a_lower = a.name;
+                    std::string b_lower = b.name;
+                    std::transform(a_lower.begin(), a_lower.end(), a_lower.begin(), [](unsigned char c){ return std::tolower(c); });
+                    std::transform(b_lower.begin(), b_lower.end(), b_lower.begin(), [](unsigned char c){ return std::tolower(c); });
+                    result = (a_lower < b_lower);
+                }
+                break;
+        }
+
+        return (direction == SortDirection::Ascending) ? result : !result;
+    });
 }
 
 std::vector<FileItem> FileModel::scan_directory(const std::filesystem::path& dir_path, bool show_hidden) {
@@ -81,18 +126,7 @@ std::vector<FileItem> FileModel::scan_directory(const std::filesystem::path& dir
         items.push_back(item);
     }
 
-    // Sort: directories first, then alphabetical (case-insensitive)
-    std::sort(items.begin(), items.end(), [](const FileItem& a, const FileItem& b) {
-        if ((a.type == FileType::Directory) != (b.type == FileType::Directory)) {
-            return a.type == FileType::Directory;
-        }
-        std::string a_lower = a.name;
-        std::string b_lower = b.name;
-        std::transform(a_lower.begin(), a_lower.end(), a_lower.begin(), [](unsigned char c){ return std::tolower(c); });
-        std::transform(b_lower.begin(), b_lower.end(), b_lower.begin(), [](unsigned char c){ return std::tolower(c); });
-        return a_lower < b_lower;
-    });
-
+    sort_items(items, SortCriteria::Name, SortDirection::Ascending);
     return items;
 }
 

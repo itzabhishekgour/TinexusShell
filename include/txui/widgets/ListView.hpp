@@ -35,6 +35,8 @@ public:
 
     [[nodiscard]] int32 selected_index() const noexcept { return m_selected_index; }
     void set_selected_index(int32 index) noexcept;
+    void ensure_visible(int32 index) noexcept;
+    [[nodiscard]] Ref<ScrollArea> scroll_area() const noexcept { return m_scroll_area; }
 
     bool handle_event(const Event& event) noexcept override;
 };

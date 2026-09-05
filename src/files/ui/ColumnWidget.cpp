@@ -1,10 +1,40 @@
 #include "ColumnWidget.hpp"
+#include "files/ThumbnailCache.hpp"
 #include <txui/widgets/Icon.hpp>
 #include <txui/widgets/Label.hpp>
 #include <txui/layout/FlexLayout.hpp>
 #include <txui/layout/Padding.hpp>
 
 namespace tinexus::files::ui {
+
+class MiniThumbnailWidget : public txui::Widget {
+private:
+    std::filesystem::path m_path;
+    double m_size;
+
+public:
+    MiniThumbnailWidget(std::filesystem::path path, double size = 16.0)
+        : m_path(std::move(path)), m_size(size) {}
+
+    txui::Size measure_override(const txui::Constraints& constraints) noexcept override {
+        return constraints.constrain(txui::Size(m_size, m_size));
+    }
+
+    void layout_override(const txui::Rect& /*frame*/) noexcept override {}
+
+    void paint_override(txui::Painter& painter) const noexcept override {
+        auto thumb = ThumbnailCache::instance().get_thumbnail(m_path, 32);
+        if (thumb && thumb->pixels && thumb->width > 0 && thumb->height > 0) {
+            painter.fill_rounded_rect(frame(), 3.0, txui::Color(20, 22, 30, 255));
+            double tx = frame().left() + (frame().width() - thumb->width) * 0.5;
+            double ty = frame().top() + (frame().height() - thumb->height) * 0.5;
+            painter.draw_image(txui::Rect(tx, ty, thumb->width, thumb->height), thumb->pixels, thumb->width, thumb->height);
+        } else {
+            painter.fill_rounded_rect(frame(), 3.0, txui::Color(40, 160, 180, 240));
+            painter.fill_circle(txui::Point(frame().right() - 4.0, frame().top() + 4.0), 1.5, txui::Color(255, 210, 80, 240));
+        }
+    }
+};
 
 ColumnWidget::ColumnWidget(const ColumnLevel& level, size_t col_index, bool is_last) 
     : m_model(&level), m_col_index(col_index), m_is_last_column(is_last) {
@@ -36,20 +66,23 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         row->set_main_axis_alignment(txui::MainAxisAlignment::Start);
         row->set_cross_axis_alignment(txui::CrossAxisAlignment::Center);
 
-        txui::IconType icon_type = txui::IconType::File;
-        if (item.type == FileType::Directory) {
-            icon_type = txui::IconType::Folder;
-        } else if (item.is_executable) {
-            icon_type = txui::IconType::Executable;
-        } else if (item.mime_type.starts_with("image/")) {
-            icon_type = txui::IconType::Image;
-        } else if (item.mime_type == "application/archive") {
-            icon_type = txui::IconType::Archive;
-        } else if (item.name == "Trash" || item.path.string().find("Trash") != std::string::npos) {
-            icon_type = txui::IconType::Trash;
+        txui::Ref<txui::Widget> icon_widget;
+        if (item.mime_type.starts_with("image/")) {
+            icon_widget = txui::make_ref<MiniThumbnailWidget>(item.path, 16.0);
+        } else {
+            txui::IconType icon_type = txui::IconType::File;
+            if (item.type == FileType::Directory) {
+                icon_type = txui::IconType::Folder;
+            } else if (item.mime_type == "application/archive") {
+                icon_type = txui::IconType::Archive;
+            } else if (item.name == "Trash" || item.path.string().find("Trash") != std::string::npos) {
+                icon_type = txui::IconType::Trash;
+            } else if (item.is_executable) {
+                icon_type = txui::IconType::Executable;
+            }
+            icon_widget = txui::make_ref<txui::Icon>(icon_type, 16.0);
         }
 
-        auto icon = txui::make_ref<txui::Icon>(icon_type, 16.0);
         auto label = txui::make_ref<txui::Label>(item.name);
         label->set_font_size(13.0);
         if (item.is_hidden) {
@@ -59,7 +92,7 @@ void ColumnWidget::refresh(const ColumnLevel& level) noexcept {
         // 8px padding before label
         auto padded_label = txui::make_ref<txui::Padding>(txui::Insets(0, 0, 0, 8.0), label);
 
-        row->add_child(icon);
+        row->add_child(icon_widget);
         row->add_child(padded_label);
         
         if (item.type == FileType::Directory) {
@@ -112,10 +145,8 @@ void ColumnWidget::layout_override(const txui::Rect& frame) noexcept {
 void ColumnWidget::paint_override(txui::Painter& painter) const noexcept {
     m_list_view->paint(painter);
     
-    // Draw subtle vertical column separator line on the right edge
-    if (!m_is_last_column) {
-        painter.fill_rect(txui::Rect(frame().right() - 1.0, frame().top(), 1.0, frame().height()), txui::Color(55, 58, 72, 255));
-    }
+    // Always draw subtle vertical column separator line on the right edge
+    painter.fill_rect(txui::Rect(frame().right() - 1.0, frame().top(), 1.0, frame().height()), txui::Color(52, 55, 70, 255));
 }
 
 bool ColumnWidget::handle_event(const txui::Event& event) noexcept {

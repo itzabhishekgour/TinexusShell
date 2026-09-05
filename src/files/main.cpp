@@ -28,9 +28,19 @@ int main(int argc, char* argv[]) {
         tinexus::log::info("Tinexus Files: Connected to Tinexus Platform IPC broker.");
     }
 
-    std::filesystem::path target_path = (argc > 1) ? std::filesystem::path(argv[1]) : std::filesystem::current_path();
+    std::filesystem::path target_path;
+    if (argc > 1) {
+        target_path = std::filesystem::path(argv[1]);
+    } else {
+        if (std::filesystem::exists("/usr/share/backgrounds")) {
+            target_path = "/usr/share/backgrounds";
+        } else {
+            const char* home = std::getenv("HOME");
+            target_path = (home && *home && std::filesystem::exists(home)) ? std::filesystem::path(home) : std::filesystem::current_path();
+        }
+    }
 
-    auto window = txui::Window::create(1000, 600, "tinexus-files");
+    auto window = txui::Window::create(1000, 620, "tinexus-files");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("Failed to connect to Wayland display.");
         return 1;

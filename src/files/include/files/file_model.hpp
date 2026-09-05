@@ -27,10 +27,23 @@ struct FileItem {
     std::filesystem::file_time_type last_modified;
 };
 
+enum class SortCriteria : uint8_t {
+    Name = 0,
+    DateModified = 1,
+    Size = 2,
+    Kind = 3
+};
+
+enum class SortDirection : uint8_t {
+    Ascending = 0,
+    Descending = 1
+};
+
 class FileModel {
 public:
     static std::vector<FileItem> scan_directory(const std::filesystem::path& dir_path, bool show_hidden = false);
     static FileItem stat_file(const std::filesystem::path& file_path);
+    static void sort_items(std::vector<FileItem>& items, SortCriteria criteria, SortDirection direction);
 };
 
 } // namespace tinexus::files

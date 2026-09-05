@@ -33,9 +33,33 @@ void ListView::clear_items() noexcept {
 void ListView::set_selected_index(int32 index) noexcept {
     if (m_selected_index != index) {
         m_selected_index = index;
+        ensure_visible(m_selected_index);
         mark_needs_paint();
         if (m_on_selected) {
             m_on_selected(m_selected_index);
+        }
+    }
+}
+
+void ListView::ensure_visible(int32 index) noexcept {
+    if (index < 0 || m_content_layout->children().empty() || index >= static_cast<int32>(m_content_layout->children().size())) {
+        return;
+    }
+    double item_top = 0.0;
+    const auto& kids = m_content_layout->children();
+    for (int32 i = 0; i < index; ++i) {
+        item_top += kids[static_cast<size_t>(i)]->desired_size().height;
+    }
+    double item_h = kids[static_cast<size_t>(index)]->desired_size().height;
+    if (item_h <= 0.0) item_h = 28.0;
+    double item_bottom = item_top + item_h;
+    double viewport_h = m_scroll_area->frame().height();
+    if (viewport_h <= 0.0) viewport_h = frame().height();
+    if (viewport_h > 0.0) {
+        if (item_top < m_scroll_area->scroll_y()) {
+            m_scroll_area->set_scroll_y(item_top);
+        } else if (item_bottom > m_scroll_area->scroll_y() + viewport_h) {
+            m_scroll_area->set_scroll_y(item_bottom - viewport_h);
         }
     }
 }
@@ -51,33 +75,32 @@ void ListView::layout_override(const Rect& frame) noexcept {
 
 void ListView::paint_override(Painter& painter) const noexcept {
     // Background
-    painter.fill_rect(frame(), Color(40, 40, 40, 255)); // macOS Dark mode list background
+    painter.fill_rect(frame(), Color(22, 24, 34, 255));
 
-    // Paint hover/selection highlights behind the items
-    // The items themselves are in the scroll area, so their frame is offset by scroll.
-    // We need to apply the scroll offset clip, but wait, it's easier if ListView handles the selection drawing
-    // OR the items themselves could handle it. Since items are just Widgets, ListView can paint the selection rectangles.
-    
     painter.push_clip(frame());
     
     int32 i = 0;
     for (const auto& child : m_content_layout->children()) {
         Rect item_frame = child->frame();
+        double draw_w = (item_frame.width() >= 999999.0) ? frame().width() : item_frame.width();
         
         if (i == m_selected_index) {
             // Selected row inset and custom color
-            double draw_w = (item_frame.width() >= 999999.0) ? frame().width() : item_frame.width();
             Rect inset_frame(item_frame.left() + 4.0, item_frame.top() + 2.0, 
                              std::max(0.0, draw_w - 8.0), std::max(0.0, item_frame.height() - 4.0));
-            
-            painter.fill_rounded_rect(inset_frame, 4.0, Color(0, 102, 204, 255));
+            painter.fill_rounded_rect(inset_frame, 4.0, Color(45, 110, 225, 240));
         } else if (i == m_hover_index) {
             // Hover row inset and subtle color
-            double draw_w = (item_frame.width() >= 999999.0) ? frame().width() : item_frame.width();
             Rect inset_frame(item_frame.left() + 4.0, item_frame.top() + 2.0, 
                              std::max(0.0, draw_w - 8.0), std::max(0.0, item_frame.height() - 4.0));
-            painter.fill_rounded_rect(inset_frame, 4.0, Color(255, 255, 255, 30));
+            painter.fill_rounded_rect(inset_frame, 4.0, Color(255, 255, 255, 20));
+        } else if (i % 2 == 1) {
+            // Subtle alternating zebra row shading
+            painter.fill_rect(Rect(item_frame.left(), item_frame.top(), draw_w, item_frame.height()), Color(255, 255, 255, 6));
         }
+        
+        // Subtle row bottom divider line
+        painter.fill_rect(Rect(item_frame.left(), item_frame.bottom() - 1.0, draw_w, 1.0), Color(45, 48, 62, 120));
         i++;
     }
     

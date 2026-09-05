@@ -95,6 +95,12 @@ public:
         m_buffer.push(DrawLineCommand{p1, p2, thickness, color});
     }
 
+    void draw_image(const Rect& rect, const std::shared_ptr<std::vector<uint32_t>>& pixels, uint32_t width, uint32_t height) {
+        if (pixels && width > 0 && height > 0) {
+            m_buffer.push(DrawImageCommand{rect, pixels, width, height});
+        }
+    }
+
     void push_clip(const Rect& rect) {
         m_buffer.push(PushClipCommand{rect});
     }

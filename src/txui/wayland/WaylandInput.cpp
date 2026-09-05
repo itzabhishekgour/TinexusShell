@@ -106,6 +106,8 @@ void pointer_handle_axis(void* data, struct wl_pointer* /*pointer*/, uint32_t ti
     Event event{};
     event.type = EventType::PointerScroll;
     event.timestamp_ns = static_cast<uint64>(time) * 1000000ULL;
+    event.pointer.x = input->pointer_x();
+    event.pointer.y = input->pointer_y();
     double delta = wl_fixed_to_double(value);
     if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
         event.pointer.scroll_delta_y = delta;

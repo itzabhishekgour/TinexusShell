@@ -73,6 +73,25 @@ void ScrollArea::paint_override(Painter& painter) const noexcept {
 
     painter.push_clip(frame());
     children().front()->paint(painter);
+    
+    // Draw subtle macOS-style scrollbar pill if content overflows vertically
+    if (m_max_scroll_y > 0.0) {
+        double track_h = frame().height();
+        double thumb_h = std::max(24.0, track_h * (track_h / (track_h + m_max_scroll_y)));
+        double thumb_y = frame().top() + (m_scroll_y / m_max_scroll_y) * (track_h - thumb_h);
+        Rect thumb_rect(frame().right() - 5.0, thumb_y, 3.0, thumb_h);
+        painter.fill_rounded_rect(thumb_rect, 1.5, Color(255, 255, 255, 70));
+    }
+
+    // Draw subtle scrollbar pill if content overflows horizontally
+    if (m_max_scroll_x > 0.0) {
+        double track_w = frame().width();
+        double thumb_w = std::max(24.0, track_w * (track_w / (track_w + m_max_scroll_x)));
+        double thumb_x = frame().left() + (m_scroll_x / m_max_scroll_x) * (track_w - thumb_w);
+        Rect thumb_rect(thumb_x, frame().bottom() - 5.0, thumb_w, 3.0);
+        painter.fill_rounded_rect(thumb_rect, 1.5, Color(255, 255, 255, 70));
+    }
+
     painter.pop_clip();
 }
 
@@ -84,7 +103,8 @@ bool ScrollArea::handle_event(const Event& event) noexcept {
 
     if (event.type == EventType::PointerScroll) {
         Point position(event.pointer.x, event.pointer.y);
-        if (frame().contains(position)) {
+        bool inside = frame().contains(position) || (event.pointer.x == 0.0 && event.pointer.y == 0.0);
+        if (inside) {
             // Map vertical scroll to horizontal scroll if vertical scrolling is disabled
             // This enables horizontal mouse-wheel scrolling across columns when the mouse is over the background
             double dy = event.pointer.scroll_delta_y;
@@ -97,12 +117,14 @@ bool ScrollArea::handle_event(const Event& event) noexcept {
             
             // Scroll vertical
             if (dy != 0.0 && m_allow_scroll_y && m_max_scroll_y > 0.0) {
-                set_scroll_y(m_scroll_y + dy * 30.0);
+                double step = (std::abs(dy) < 5.0) ? dy * 30.0 : dy * 3.0;
+                set_scroll_y(m_scroll_y + step);
                 return true;
             }
             // Scroll horizontal
             if (dx != 0.0 && m_allow_scroll_x && m_max_scroll_x > 0.0) {
-                set_scroll_x(m_scroll_x + dx * 30.0);
+                double step = (std::abs(dx) < 5.0) ? dx * 30.0 : dx * 3.0;
+                set_scroll_x(m_scroll_x + step);
                 return true;
             }
         }

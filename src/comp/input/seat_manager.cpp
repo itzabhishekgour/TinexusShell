@@ -46,12 +46,16 @@ void SeatManager::notify_axis(uint32_t time_msec,
                                uint32_t source,
                                uint32_t relative_direction) {
     if (!m_seat) { return; }
+    log::info("[Seat] pointer.axis orient={} delta={:.2f} discrete={} focused={}", 
+              orientation, delta, delta_discrete, 
+              static_cast<void*>(m_seat->pointer_state.focused_surface));
     wlr_seat_pointer_notify_axis(
         m_seat, time_msec,
         static_cast<wl_pointer_axis>(orientation),
         delta, delta_discrete,
         static_cast<wl_pointer_axis_source>(source),
         static_cast<wl_pointer_axis_relative_direction>(relative_direction));
+    wlr_seat_pointer_notify_frame(m_seat);
 }
 
 void SeatManager::notify_frame() {

@@ -6,6 +6,8 @@
 
 #include <txui/math/Point.hpp>
 #include <string>
+#include <memory>
+#include <vector>
 
 namespace txui {
 
@@ -100,7 +102,6 @@ struct DrawTextCommand {
     FontFamily font_family{FontFamily::UI}; // Default: Inter proportional font
 };
 
-
 struct PushClipCommand {
     Rect rect;
 };
@@ -119,7 +120,15 @@ struct DrawLineCommand {
     Color color;
 };
 
-// Phase 4.2.2+ : Solid + Rounded + Gradient + Circle + Text + Transform + Clip + Line
+// Image blit / thumbnail command (premultiplied ARGB32)
+struct DrawImageCommand {
+    Rect rect;
+    std::shared_ptr<std::vector<uint32_t>> pixels;
+    uint32_t width{0};
+    uint32_t height{0};
+};
+
+// Phase 4.2.2+ : Solid + Rounded + Gradient + Circle + Text + Transform + Clip + Line + Image
 using Command = std::variant<
     BeginFrameCommand,
     EndFrameCommand,
@@ -131,6 +140,7 @@ using Command = std::variant<
     DrawCircleCommand,
     DrawTextCommand,
     DrawLineCommand,
+    DrawImageCommand,
     ClearCommand,
     PushClipCommand,
     PopClipCommand,
@@ -151,6 +161,7 @@ using Command = std::variant<
         else if constexpr (std::is_same_v<T, DrawCircleCommand>)              return CommandType::DrawCircle;
         else if constexpr (std::is_same_v<T, DrawTextCommand>)                return CommandType::DrawText;
         else if constexpr (std::is_same_v<T, DrawLineCommand>)                return CommandType::DrawLine;
+        else if constexpr (std::is_same_v<T, DrawImageCommand>)               return CommandType::DrawImage;
         else if constexpr (std::is_same_v<T, ClearCommand>)                   return CommandType::Clear;
         else if constexpr (std::is_same_v<T, PushClipCommand>)                return CommandType::PushClip;
         else if constexpr (std::is_same_v<T, PopClipCommand>)                 return CommandType::PopClip;

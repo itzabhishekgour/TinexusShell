@@ -386,17 +386,16 @@ EOF_DBUS_POL
     # Stage custom wallpaper image from Temp directory or assets/
     info "Staging custom wallpaper image into rootfs..."
     mkdir -p "$ROOTFS_DIR/usr/share/backgrounds"
+    mkdir -p "$ROOTFS_DIR/home/tinexus/Pictures"
+    mkdir -p "$ROOTFS_DIR/home/tinexus/Desktop"
+    if [ -d "$PROJECT_DIR/assets/wallpaper" ]; then
+        cp -L "$PROJECT_DIR"/assets/wallpaper/* "$ROOTFS_DIR/usr/share/backgrounds/" 2>/dev/null || true
+        cp -L "$PROJECT_DIR"/assets/wallpaper/* "$ROOTFS_DIR/home/tinexus/Pictures/" 2>/dev/null || true
+        success "Staged wallpapers & test images to /usr/share/backgrounds/ and ~/Pictures/."
+    fi
     if [ -f "$PROJECT_DIR/Temp/tinexus-default.jpg" ]; then
         cp -L "$PROJECT_DIR/Temp/tinexus-default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
-        success "Staged wallpaper (tinexus-default.jpg from Temp/)."
-    elif [ -f "$PROJECT_DIR/Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg" ]; then
-        cp -L "$PROJECT_DIR/Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
-        success "Staged custom mountain wallpaper."
-    elif [ -f "$PROJECT_DIR/assets/wallpaper/tinexus-default.jpg" ]; then
-        cp -L "$PROJECT_DIR/assets/wallpaper/tinexus-default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
-        success "Staged wallpaper from assets/wallpaper/."
-    else
-        warn "No wallpaper found in Temp/ or assets/wallpaper/ — procedural fallback will be used."
+        cp -L "$PROJECT_DIR/Temp/tinexus-default.jpg" "$ROOTFS_DIR/home/tinexus/Pictures/tinexus-default.jpg"
     fi
 
     # Stage timezone data so localtime_r() returns correct local time
