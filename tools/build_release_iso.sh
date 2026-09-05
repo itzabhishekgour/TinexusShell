@@ -560,11 +560,31 @@ EOF_DHCP
         success "Staged busybox networking tools (udhcpc, ip, ifconfig, route, ping, wget)."
     fi
 
-    info "Staging minimal kernel modules into rootfs for runtime hardware support..."
+    # ── Stage Intel iGPU Firmware (Comet Lake / Kaby Lake / Skylake) ─────────
+    info "Staging Intel iGPU firmware for Comet Lake-H (ASUS TUF F15)..."
+    mkdir -p "$ROOTFS_DIR/lib/firmware/i915"
+    if [ -d "/lib/firmware/i915" ]; then
+        for fw in /lib/firmware/i915/cml* /lib/firmware/i915/kbl* /lib/firmware/i915/skl*; do
+            [ -e "$fw" ] || continue
+            cp -L "$fw" "$ROOTFS_DIR/lib/firmware/i915/" 2>/dev/null || true
+        done
+        for compressed in "$ROOTFS_DIR/lib/firmware/i915"/*.zst; do
+            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
+        done
+        success "Staged $(ls "$ROOTFS_DIR/lib/firmware/i915" | wc -l) Intel i915 firmware files into rootfs."
+    else
+        warn "/lib/firmware/i915 not found on host. Intel iGPU may fail to initialize without firmware."
+    fi
+
+    info "Staging real hardware kernel modules (i915, NVMe, USB, Ethernet, QEMU) into rootfs..."
     mkdir -p "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" "$ROOTFS_DIR/lib/modules"
     if [ -d "/lib/modules/7.0.0-28-generic" ]; then
         find "/lib/modules/7.0.0-28-generic" -type f \( \
             -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
+            -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
+            -o -name "uas.ko*" -o -name "usb-storage.ko*" \
+            -o -name "i915.ko*" -o -name "drm_display_helper.ko*" -o -name "ttm.ko*" -o -name "video.ko*" \
+            -o -name "drm_buddy.ko*" -o -name "cec.ko*" -o -name "rc-core.ko*" -o -name "i2c-algo-bit.ko*" -o -name "wmi.ko*" -o -name "intel-gtt.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "virtio_net.ko*" -o -name "net_failover.ko*" -o -name "failover.ko*" \
@@ -578,6 +598,9 @@ EOF_DHCP
         for compressed in "$ROOTFS_DIR/lib/modules/7.0.0-28-generic"/*.zst "$ROOTFS_DIR/lib/modules"/*.zst; do
             [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
         done
+        # Copy modules.order and modules.builtin so depmod can resolve symbols accurately
+        cp /lib/modules/7.0.0-28-generic/modules.order "$ROOTFS_DIR/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
+        cp /lib/modules/7.0.0-28-generic/modules.builtin* "$ROOTFS_DIR/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
         if [ -f "/usr/sbin/depmod" ]; then
             /usr/sbin/depmod -b "$ROOTFS_DIR" 7.0.0-28-generic 2>/dev/null || true
         fi
@@ -641,21 +664,68 @@ build_initramfs() {
         [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
     done
 
-    mkdir -p "$init_staging/lib/modules"
+    # Stage blkid for dynamic filesystem label detection
+    if [ -f "/usr/sbin/blkid" ]; then
+        cp -L "/usr/sbin/blkid" "$init_staging/bin/"
+        ldd "/usr/sbin/blkid" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
+        done
+        ldd "/usr/sbin/blkid" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
+        done
+    fi
+
+    # Stage kmod/modprobe for automatic module dependency resolution
+    if [ -f "/usr/bin/kmod" ]; then
+        cp -L "/usr/bin/kmod" "$init_staging/bin/"
+        ln -sf kmod "$init_staging/bin/modprobe"
+        ln -sf kmod "$init_staging/bin/depmod"
+        ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
+        done
+        ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
+        done
+    fi
+
+    # Stage Intel iGPU firmware into initramfs (Comet Lake-H GuC/HuC/DMC)
+    mkdir -p "$init_staging/lib/firmware/i915"
+    if [ -d "/lib/firmware/i915" ]; then
+        for fw in /lib/firmware/i915/cml* /lib/firmware/i915/kbl* /lib/firmware/i915/skl*; do
+            [ -e "$fw" ] || continue
+            cp -L "$fw" "$init_staging/lib/firmware/i915/" 2>/dev/null || true
+        done
+        for compressed in "$init_staging/lib/firmware/i915"/*.zst; do
+            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
+        done
+        success "Staged $(ls "$init_staging/lib/firmware/i915" | wc -l) Intel i915 firmware files into initramfs."
+    fi
+
+    mkdir -p "$init_staging/lib/modules/7.0.0-28-generic" "$init_staging/lib/modules"
     local kver="7.0.0-28-generic"
     if [ -d "/lib/modules/$kver" ]; then
         find "/lib/modules/$kver" -type f \( \
             -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
+            -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
+            -o -name "uas.ko*" -o -name "usb-storage.ko*" \
+            -o -name "i915.ko*" -o -name "drm_display_helper.ko*" -o -name "ttm.ko*" -o -name "video.ko*" \
+            -o -name "drm_buddy.ko*" -o -name "cec.ko*" -o -name "rc-core.ko*" -o -name "i2c-algo-bit.ko*" -o -name "wmi.ko*" -o -name "intel-gtt.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "evdev.ko*" \
             -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
         \) | while read -r mod; do
+            cp -L "$mod" "$init_staging/lib/modules/7.0.0-28-generic/"
             cp -L "$mod" "$init_staging/lib/modules/"
         done
-        for compressed in "$init_staging/lib/modules"/*.zst; do
+        for compressed in "$init_staging/lib/modules/7.0.0-28-generic"/*.zst "$init_staging/lib/modules"/*.zst; do
             [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
         done
+        cp /lib/modules/7.0.0-28-generic/modules.order "$init_staging/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
+        cp /lib/modules/7.0.0-28-generic/modules.builtin* "$init_staging/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
+        if [ -f "/usr/sbin/depmod" ]; then
+            /usr/sbin/depmod -b "$init_staging" 7.0.0-28-generic 2>/dev/null || true
+        fi
     fi
 
     cat > "$init_staging/init" << 'EOINIT'
@@ -664,21 +734,32 @@ build_initramfs() {
 /bin/mount -t sysfs sysfs /sys 2>/dev/null
 /bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null || /bin/mdev -s 2>/dev/null
 
+# Setup console redirection (mirrors to serial in QEMU, console on bare metal)
 [ -c /dev/ttyS0 ] && exec >/dev/ttyS0 2>&1
 
-echo "Tinexus OS: Loading storage and graphics kernel modules..."
-[ -f /lib/modules/libahci.ko ] && insmod /lib/modules/libahci.ko || true
-[ -f /lib/modules/ahci.ko ] && insmod /lib/modules/ahci.ko || true
-[ -f /lib/modules/isofs.ko ] && insmod /lib/modules/isofs.ko || true
-[ -f /lib/modules/virtio_dma_buf.ko ] && insmod /lib/modules/virtio_dma_buf.ko || true
-[ -f /lib/modules/virtio-gpu.ko ] && insmod /lib/modules/virtio-gpu.ko || true
-[ -f /lib/modules/virtio_input.ko ] && insmod /lib/modules/virtio_input.ko || true
-[ -f /lib/modules/evdev.ko ] && insmod /lib/modules/evdev.ko || true
-[ -f /lib/modules/hid.ko ] && insmod /lib/modules/hid.ko || true
-[ -f /lib/modules/hid-generic.ko ] && insmod /lib/modules/hid-generic.ko || true
-[ -f /lib/modules/usbhid.ko ] && insmod /lib/modules/usbhid.ko || true
-[ -f /lib/modules/bochs.ko ] && insmod /lib/modules/bochs.ko || true
-for mod in /lib/modules/*.ko; do
+echo "Tinexus OS: Loading storage, bus, and graphics kernel modules..."
+# 1. Storage & bus controllers
+modprobe -d / ahci 2>/dev/null || true
+modprobe -d / isofs 2>/dev/null || true
+modprobe -d / usb_storage 2>/dev/null || true
+modprobe -d / uas 2>/dev/null || true
+modprobe -d / nvme 2>/dev/null || true
+
+# 2. Input devices
+modprobe -d / evdev 2>/dev/null || true
+modprobe -d / hid 2>/dev/null || true
+modprobe -d / hid-generic 2>/dev/null || true
+modprobe -d / usbhid 2>/dev/null || true
+
+# 3. Graphics display (Intel Comet Lake-H primary display + QEMU fallback)
+modprobe -d / i915 2>/dev/null || true
+modprobe -d / virtio_dma_buf 2>/dev/null || true
+modprobe -d / virtio-gpu 2>/dev/null || true
+modprobe -d / virtio_input 2>/dev/null || true
+modprobe -d / bochs 2>/dev/null || true
+
+# Direct insmod fallback in case modprobe paths differ
+for mod in /lib/modules/7.0.0-28-generic/*.ko /lib/modules/*.ko; do
     [ -f "$mod" ] && insmod "$mod" 2>/dev/null
 done
 /bin/mdev -s 2>/dev/null
@@ -686,32 +767,65 @@ done
 # Graphics modules loaded, start splash screen
 if [ -x /bin/tinexus-splash ]; then
     /bin/tinexus-splash &
-    # Give it a moment to create the fifo
     sleep 0.1
     echo 20 > /tmp/splash_progress 2>/dev/null
 fi
 
-echo "Tinexus OS: Searching for Live CD rootfs..."
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    echo 30 > /tmp/splash_progress 2>/dev/null
+echo "Tinexus OS: Searching dynamically for Live CD / USB rootfs..."
+ROOT_DEV=""
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    echo $((20 + attempt * 3)) > /tmp/splash_progress 2>/dev/null
     /bin/mdev -s 2>/dev/null
-    for dev in /dev/sr0 /dev/sr1 /dev/sda /dev/sdb /dev/vda /dev/vdb /dev/sg0; do
-        if [ -b "$dev" ]; then
-            /bin/mount -o ro "$dev" /mnt 2>/dev/null
+
+    # 1. Search by filesystem label TINEXUS_LIVE via blkid
+    if [ -x /bin/blkid ]; then
+        BY_LABEL=$(/bin/blkid -L TINEXUS_LIVE 2>/dev/null || true)
+        if [ -n "$BY_LABEL" ] && [ -b "$BY_LABEL" ]; then
+            /bin/mount -o ro "$BY_LABEL" /mnt 2>/dev/null
             if [ -f /mnt/live/rootfs.squashfs ]; then
-                echo "Tinexus OS: Found rootfs on $dev!"
-                echo 50 > /tmp/splash_progress 2>/dev/null
-                break 2
-            else
-                /bin/umount /mnt 2>/dev/null
+                echo "Tinexus OS: Found rootfs via label on $BY_LABEL!"
+                ROOT_DEV="$BY_LABEL"
+                break
             fi
+            /bin/umount /mnt 2>/dev/null
         fi
+    fi
+
+    # 2. Check /dev/disk/by-label/TINEXUS_LIVE
+    if [ -b /dev/disk/by-label/TINEXUS_LIVE ]; then
+        /bin/mount -o ro /dev/disk/by-label/TINEXUS_LIVE /mnt 2>/dev/null
+        if [ -f /mnt/live/rootfs.squashfs ]; then
+            echo "Tinexus OS: Found rootfs on /dev/disk/by-label/TINEXUS_LIVE!"
+            ROOT_DEV="/dev/disk/by-label/TINEXUS_LIVE"
+            break
+        fi
+        /bin/umount /mnt 2>/dev/null
+    fi
+
+    # 3. Fully dynamic scan across all block devices in /sys/block/
+    for b in /sys/block/*; do
+        [ -e "$b" ] || continue
+        devname=$(basename "$b")
+        case "$devname" in
+            loop*|ram*|zram*) continue ;;
+        esac
+        for candidate in "/dev/$devname" "/dev/${devname}"p* "/dev/${devname}"[0-9]*; do
+            [ -b "$candidate" ] || continue
+            /bin/mount -o ro "$candidate" /mnt 2>/dev/null
+            if [ -f /mnt/live/rootfs.squashfs ]; then
+                echo "Tinexus OS: Found rootfs via dynamic scan on $candidate!"
+                ROOT_DEV="$candidate"
+                break 3
+            fi
+            /bin/umount /mnt 2>/dev/null
+        done
     done
+
     sleep 1
 done
 
-if [ -f /mnt/live/rootfs.squashfs ]; then
-    echo "Tinexus OS: Mounting SquashFS rootfs..."
+if [ -n "$ROOT_DEV" ] && [ -f /mnt/live/rootfs.squashfs ]; then
+    echo "Tinexus OS: Mounting SquashFS rootfs from $ROOT_DEV..."
     echo 70 > /tmp/splash_progress 2>/dev/null
     /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
     /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
@@ -729,16 +843,12 @@ if [ -f /mnt/live/rootfs.squashfs ]; then
     
     echo 90 > /tmp/splash_progress 2>/dev/null
     echo "Tinexus OS: Switching to Tinexus Serviced Init..."
-    
-    # We must keep the splash daemon running until wayland starts,
-    # but switch_root will kill processes holding handles to old root.
-    # To fix this, we signal 100% so it can exit on its own.
     echo 100 > /tmp/splash_progress 2>/dev/null
     sleep 0.2
     
     exec switch_root /newroot /usr/bin/tinexus-serviced
 else
-    echo "Tinexus OS: FATAL — rootfs.squashfs not found. Dropping to emergency shell."
+    echo "Tinexus OS: FATAL — rootfs.squashfs not found on any disk or partition. Dropping to emergency shell."
     exec /bin/sh
 fi
 EOINIT
@@ -762,17 +872,17 @@ insmod iso9660
 terminal_output gfxterm
 
 menuentry "Tinexus OS Live (Wayland Desktop)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs quiet loglevel=3 vt.global_cursor_default=0 logo.nologo fbcon=nodefer console=ttyS0,115200n8
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs quiet loglevel=3 vt.global_cursor_default=0 logo.nologo fbcon=nodefer console=tty0 console=ttyS0,115200n8
     initrd  /boot/initramfs.img
 }
 
 menuentry "Tinexus OS Live (Safe Graphics / nomodeset)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs nomodeset
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs nomodeset console=tty0 console=ttyS0,115200n8
     initrd  /boot/initramfs.img
 }
 
 menuentry "Tinexus OS Live (Debug Console)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs console=ttyS0,115200n8
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs console=tty0 console=ttyS0,115200n8
     initrd  /boot/initramfs.img
 }
 EOGRUB
