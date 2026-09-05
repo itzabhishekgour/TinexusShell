@@ -79,8 +79,16 @@ public:
         }
     }
 
-    void draw_text(const Point& pos, const std::string& text, const Color& color, double scale = 1.0, bool bold = false, bool italic = false) {
-        m_buffer.push(DrawTextCommand{pos, text, color, scale, bold, italic});
+    void draw_text(const Point& pos, const std::string& text, const Color& color,
+                   double scale = 1.0, bool bold = false, bool italic = false,
+                   FontFamily font_family = FontFamily::UI) {
+        m_buffer.push(DrawTextCommand{pos, text, color, scale, bold, italic, font_family});
+    }
+
+    // Convenience overload for terminal and code surfaces — always uses monospace face
+    void draw_mono_text(const Point& pos, const std::string& text, const Color& color,
+                        double scale = 1.0, bool bold = false) {
+        m_buffer.push(DrawTextCommand{pos, text, color, scale, bold, false, FontFamily::Monospace});
     }
 
     void draw_line(const Point& p1, const Point& p2, double thickness, const Color& color) {

@@ -1,0 +1,10 @@
+Inter typeface — Copyright (c) 2016-2020 The Inter Project Authors
+Licensed under the SIL Open Font License, Version 1.1.
+https://github.com/rsms/inter
+
+The SIL Open Font License, Version 1.1 permits the fonts to be:
+- Used freely for any purpose (personal, commercial, OS distribution)
+- Bundled with software products
+- Modified and redistributed under the same license
+
+Full license text: https://scripts.sil.org/OFL

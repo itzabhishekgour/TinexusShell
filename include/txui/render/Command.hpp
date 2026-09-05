@@ -81,6 +81,15 @@ struct DrawCircleCommand {
     double stroke_width{0.0};   // 0 = filled, >0 = outline only
 };
 
+
+// Font family selection for dual-font rendering strategy.
+// UI = Inter (proportional, loaded from /usr/share/tinexus/fonts/Inter-Regular.ttf)
+// Monospace = DejaVuSansMono (for terminal, code editors, path displays)
+enum class FontFamily : uint8_t {
+    UI        = 0, // Inter — default for all chrome, labels, menus
+    Monospace = 1, // DejaVuSansMono — terminal and code surfaces
+};
+
 struct DrawTextCommand {
     Point pos;
     std::string text;
@@ -88,7 +97,9 @@ struct DrawTextCommand {
     double scale;
     bool bold{false};
     bool italic{false};
+    FontFamily font_family{FontFamily::UI}; // Default: Inter proportional font
 };
+
 
 struct PushClipCommand {
     Rect rect;

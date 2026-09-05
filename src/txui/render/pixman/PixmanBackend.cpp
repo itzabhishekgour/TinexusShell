@@ -385,23 +385,29 @@ static const uint8_t s_font8x16[128][16] = {
     {0}
 };
 namespace {
-    FT_Library g_ft_library = nullptr;
-    FT_Face g_ft_face = nullptr;
+    FT_Library g_ft_library   = nullptr;
+    FT_Face    g_ft_face_ui   = nullptr; // Inter (proportional) — primary UI font
+    FT_Face    g_ft_face_mono = nullptr; // DejaVuSansMono — terminal/code font
     bool g_ft_initialized = false;
-    bool g_ft_failed = false;
+    bool g_ft_failed      = false;
 
     struct GlyphCacheKey {
         uint32_t codepoint;
         int size;
         bool bold;
+        uint8_t font_family; // 0=UI(Inter), 1=Monospace(DejaVu)
         bool operator==(const GlyphCacheKey& other) const {
-            return codepoint == other.codepoint && size == other.size && bold == other.bold;
+            return codepoint == other.codepoint && size == other.size
+                && bold == other.bold && font_family == other.font_family;
         }
     };
 
     struct GlyphCacheKeyHash {
         std::size_t operator()(const GlyphCacheKey& k) const {
-            return std::hash<uint32_t>()(k.codepoint) ^ (std::hash<int>()(k.size) << 1) ^ (std::hash<bool>()(k.bold) << 2);
+            return std::hash<uint32_t>()(k.codepoint)
+                ^ (std::hash<int>()(k.size) << 1)
+                ^ (std::hash<bool>()(k.bold) << 2)
+                ^ (std::hash<uint8_t>()(k.font_family) << 3);
         }
     };
 
@@ -425,35 +431,50 @@ namespace {
     void init_freetype() {
         if (g_ft_initialized || g_ft_failed) return;
         g_ft_initialized = true;
-        
+
         if (FT_Init_FreeType(&g_ft_library)) {
             txui::log_message(txui::LogLevel::Error, "PixmanBackend: Could not init FreeType library");
             g_ft_failed = true;
             return;
         }
-        
-        const char* font_paths[] = {
+
+        // ── UI Font: Inter (hardcoded, bundled) ──────────────────────────────────
+        // No fallback chain. If this fails, g_ft_face_ui = nullptr,
+        // UI text falls back to bitmap font (s_font8x16). Explicit logged failure.
+        const char* inter_path = "/usr/share/tinexus/fonts/Inter-Regular.ttf";
+        if (FT_New_Face(g_ft_library, inter_path, 0, &g_ft_face_ui) != 0) {
+            txui::log_message(txui::LogLevel::Error,
+                "PixmanBackend: FONT MISSING — Inter-Regular.ttf not found at " +
+                std::string(inter_path) +
+                ". UI text will use fallback bitmap font until font is staged.");
+            g_ft_face_ui = nullptr;
+        } else {
+            txui::log_message(txui::LogLevel::Info,
+                std::string("PixmanBackend: Loaded UI font: ") + inter_path);
+        }
+
+        // ── Monospace Font: DejaVuSansMono (fallback chain — terminal callers) ──
+        const char* mono_paths[] = {
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
             "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
             "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"
         };
-        
-        for (const char* path : font_paths) {
-            if (FT_New_Face(g_ft_library, path, 0, &g_ft_face) == 0) {
-                txui::log_message(txui::LogLevel::Info, std::string("PixmanBackend: Loaded FreeType font ") + path);
+        for (const char* path : mono_paths) {
+            if (FT_New_Face(g_ft_library, path, 0, &g_ft_face_mono) == 0) {
+                txui::log_message(txui::LogLevel::Info,
+                    std::string("PixmanBackend: Loaded Monospace font: ") + path);
                 break;
             }
         }
-        
-        if (!g_ft_face) {
-            txui::log_message(txui::LogLevel::Error, "PixmanBackend: Failed to load any TrueType font. Text rendering will be disabled.");
-            g_ft_failed = true;
+        if (!g_ft_face_mono) {
+            txui::log_message(txui::LogLevel::Warn,
+                "PixmanBackend: No monospace font found. Terminal text rendering disabled.");
         }
     }
 
-    const CachedGlyph* get_cached_glyph(uint32_t codepoint, int size, bool bold) {
-        GlyphCacheKey key{codepoint, size, bold};
+    const CachedGlyph* get_cached_glyph(uint32_t codepoint, int size, bool bold, uint8_t font_family) {
+        GlyphCacheKey key{codepoint, size, bold, font_family};
         auto it = g_glyph_cache.find(key);
         if (it != g_glyph_cache.end()) {
             g_cache_hits++;
@@ -466,26 +487,32 @@ namespace {
             txui::log_message(txui::LogLevel::Info, "Glyph Cache: hits=" + std::to_string(g_cache_hits) + ", misses=" + std::to_string(g_cache_misses) + ", size=" + std::to_string(g_glyph_cache.size()));
         }
 
-        if (FT_Set_Pixel_Sizes(g_ft_face, 0, static_cast<FT_UInt>(size))) {
+        // Select face based on font family
+        FT_Face active_face = (font_family == static_cast<uint8_t>(FontFamily::Monospace))
+            ? g_ft_face_mono
+            : g_ft_face_ui;
+
+        if (!active_face) return nullptr; // Font not loaded — caller falls back to bitmap
+
+        if (FT_Set_Pixel_Sizes(active_face, 0, static_cast<FT_UInt>(size))) {
             return nullptr;
         }
 
-        // We skip synthetic bolding for MVP, but the key has it for future-proofing
-        FT_UInt glyph_index = FT_Get_Char_Index(g_ft_face, static_cast<FT_ULong>(codepoint));
-        if (FT_Load_Glyph(g_ft_face, glyph_index, FT_LOAD_RENDER)) {
+        FT_UInt glyph_index = FT_Get_Char_Index(active_face, static_cast<FT_ULong>(codepoint));
+        if (FT_Load_Glyph(active_face, glyph_index, FT_LOAD_RENDER)) {
             return nullptr;
         }
 
         CachedGlyph glyph;
-        FT_Bitmap* bitmap = &g_ft_face->glyph->bitmap;
-        
+        FT_Bitmap* bitmap = &active_face->glyph->bitmap;
+
         glyph.width       = static_cast<int>(bitmap->width);
         glyph.rows        = static_cast<int>(bitmap->rows);
         glyph.pitch       = static_cast<int>(bitmap->pitch);
-        glyph.bitmap_left = static_cast<int>(g_ft_face->glyph->bitmap_left);
-        glyph.bitmap_top  = static_cast<int>(g_ft_face->glyph->bitmap_top);
-        glyph.advance_x   = static_cast<int>(g_ft_face->glyph->advance.x >> 6);
-        
+        glyph.bitmap_left = static_cast<int>(active_face->glyph->bitmap_left);
+        glyph.bitmap_top  = static_cast<int>(active_face->glyph->bitmap_top);
+        glyph.advance_x   = static_cast<int>(active_face->glyph->advance.x >> 6);
+
         if (bitmap->buffer && bitmap->rows > 0 && bitmap->pitch > 0) {
             glyph.bitmap.assign(bitmap->buffer, bitmap->buffer + (static_cast<std::size_t>(bitmap->rows) * static_cast<std::size_t>(bitmap->pitch)));
         }
@@ -502,10 +529,17 @@ namespace {
     }
 }
 
-void rasterize_text(RenderTarget& target, const Point& pos, const std::string& text, const Color& color, double scale, bool bold, bool italic, const Rect& clip) noexcept {
+void rasterize_text(RenderTarget& target, const Point& pos, const std::string& text,
+                    const Color& color, double scale, bool bold, bool italic,
+                    const Rect& clip, FontFamily font_family) noexcept {
     init_freetype();
-    if (!g_ft_face || g_ft_failed) return; // Graceful fallback (draw nothing)
-    
+
+    // Select active face; nullptr means font not loaded → graceful no-op
+    FT_Face active_face = (font_family == FontFamily::Monospace) ? g_ft_face_mono : g_ft_face_ui;
+    if (!active_face) return;
+
+    const uint8_t ff = static_cast<uint8_t>(font_family);
+
     // Handle both old scale multipliers (e.g. 1.0, 2.0) and new explicit point sizes (e.g. 14, 15)
     int size = (scale <= 5.0) ? static_cast<int>(std::round(16.0 * scale)) : static_cast<int>(std::round(scale));
     size = std::max(1, size);
@@ -549,7 +583,7 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
             continue;
         }
 
-        const CachedGlyph* glyph = get_cached_glyph(codepoint, size, bold);
+        const CachedGlyph* glyph = get_cached_glyph(codepoint, size, bold, ff);
         if (!glyph) continue;
 
         int32 draw_x = pen_x + glyph->bitmap_left;
@@ -811,7 +845,7 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
             } else if constexpr (::std::is_same_v<T, DrawCircleCommand>) {
                 rasterize_circle(target, current_clip, cmd.center, cmd.radius, cmd.color, cmd.stroke_width);
             } else if constexpr (::std::is_same_v<T, DrawTextCommand>) {
-                rasterize_text(target, cmd.pos, cmd.text, cmd.color, cmd.scale, cmd.bold, cmd.italic, current_clip);
+                rasterize_text(target, cmd.pos, cmd.text, cmd.color, cmd.scale, cmd.bold, cmd.italic, current_clip, cmd.font_family);
             } else if constexpr (::std::is_same_v<T, DrawLineCommand>) {
                 if (cmd.p1.x == cmd.p2.x) {
                     // Vertical line
