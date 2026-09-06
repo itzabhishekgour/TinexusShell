@@ -90,6 +90,9 @@ bool ProcessManager::start_service(const std::string& service_id) {
         // Compositor needs a clean environment to start its own backend
         if (service_id == "comp") {
             unsetenv("WAYLAND_DISPLAY");
+            setenv("XDG_SEAT", "seat0", 1);
+            setenv("XDG_VTNR", "1", 1);
+            setenv("WLR_LOG", "debug", 1);
             setenv("LIBSEAT_BACKEND", "builtin", 1);
             setenv("WLR_LIBSEAT_BACKEND", "builtin", 1);
             setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);

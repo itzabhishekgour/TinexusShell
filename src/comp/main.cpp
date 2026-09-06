@@ -30,6 +30,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    server.run();
+    if (!server.run()) {
+        tinexus::log::error("Tinexus Compositor run failed");
+        return 1;
+    }
     return 0;
 }

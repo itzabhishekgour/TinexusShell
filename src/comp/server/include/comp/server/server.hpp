@@ -28,7 +28,7 @@ public:
     ~TinexusServer();
 
     bool initialize();
-    void run();
+    bool run();
     void stop();
     
     void trigger_minimize(uint64_t surface_id);

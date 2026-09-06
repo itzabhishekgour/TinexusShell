@@ -7,6 +7,7 @@
 extern "C" {
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/util/log.h>
 #include <wlr/types/wlr_shm.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/allocator.h>
@@ -37,9 +38,43 @@ extern "C" {
 #include "comp/server/server.hpp"
 #include <unistd.h>
 #include <cstdlib>
+#include <cstdarg>
+#include <cstring>
+#include <filesystem>
 #include <sys/wait.h>
 
 namespace tinexus::comp {
+
+namespace {
+void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, va_list args) {
+    char buf[1024];
+    va_list args_copy;
+    va_copy(args_copy, args);
+    vsnprintf(buf, sizeof(buf), fmt, args_copy);
+    va_end(args_copy);
+
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') {
+        buf[len - 1] = '\0';
+    }
+
+    fprintf(stderr, "[wlr] %s\n", buf);
+    fflush(stderr);
+
+    switch (importance) {
+        case WLR_ERROR:
+            tinexus::log::error("[wlr] {}", buf);
+            break;
+        case WLR_INFO:
+            tinexus::log::info("[wlr] {}", buf);
+            break;
+        case WLR_DEBUG:
+        default:
+            tinexus::log::debug("[wlr] {}", buf);
+            break;
+    }
+}
+} // namespace
 
 class WlrootsBackend : public Backend {
 public:
@@ -50,6 +85,29 @@ public:
     }
 
     bool initialize() override {
+        // Initialize wlroots logging early with maximum verbosity
+        wlr_log_init(WLR_DEBUG, wlroots_log_callback);
+        log::info("[Backend] wlroots logging initialized at WLR_DEBUG level.");
+
+        // Diagnostic inspection of DRI devices
+        if (std::filesystem::exists("/dev/dri")) {
+            log::info("[Backend] Scanning /dev/dri directory:");
+            for (const auto& entry : std::filesystem::directory_iterator("/dev/dri")) {
+                log::info("[Backend]   Device node: {}", entry.path().string());
+            }
+        } else {
+            log::warn("[Backend] /dev/dri directory does not exist!");
+        }
+
+        if (std::filesystem::exists("/sys/class/drm")) {
+            log::info("[Backend] Scanning /sys/class/drm connectors/cards:");
+            for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm")) {
+                log::info("[Backend]   DRM sysfs: {}", entry.path().filename().string());
+            }
+        } else {
+            log::warn("[Backend] /sys/class/drm does not exist!");
+        }
+
         log::info("[Backend] Creating wlroots backend...");
 
         // 1. Create the wlroots backend
@@ -173,6 +231,7 @@ public:
             log::error("[Backend] Failed to start wlroots backend.");
             return false;
         }
+        log::info("[Backend] wlroots backend started successfully.");
         return true;
     }
 

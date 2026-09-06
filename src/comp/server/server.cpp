@@ -265,11 +265,11 @@ bool TinexusServer::initialize() {
     return true;
 }
 
-void TinexusServer::run() {
+bool TinexusServer::run() {
     log::info("TinexusServer: Starting backend...");
     if (!m_backend->start()) {
         log::error("TinexusServer: Failed to start backend.");
-        return;
+        return false;
     }
 
     m_running = true;
@@ -277,6 +277,7 @@ void TinexusServer::run() {
     
     // Hand over control to the Wayland event loop
     wl_display_run(m_wl_display);
+    return true;
 }
 
 void TinexusServer::stop() {

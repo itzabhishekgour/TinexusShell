@@ -8,6 +8,7 @@
 #include "serviced/ipcd_client.hpp"
 #include "serviced/logind_mimic.hpp"
 #include <iostream>
+#include <fstream>
 #include <csignal>
 #include <cstdlib>
 #include <sys/wait.h>
@@ -73,6 +74,40 @@ void run_udev_setup() {
         }
     } else {
         tinexus::log::error("/dev/input directory does NOT exist!");
+    }
+
+    tinexus::log::info("--- CHECKING /dev/dri NODES ---");
+    if (std::filesystem::exists("/dev/dri")) {
+        for (const auto& entry : std::filesystem::directory_iterator("/dev/dri")) {
+            tinexus::log::info("Found DRI node: {}", entry.path().string());
+            run_cmd("/usr/bin/udevadm", {
+                const_cast<char*>("/usr/bin/udevadm"),
+                const_cast<char*>("info"),
+                const_cast<char*>("--query=property"),
+                const_cast<char*>("--name"),
+                const_cast<char*>(entry.path().string().c_str()),
+                nullptr
+            });
+        }
+    } else {
+        tinexus::log::error("/dev/dri directory does NOT exist!");
+    }
+
+    tinexus::log::info("--- CHECKING /sys/class/drm ---");
+    if (std::filesystem::exists("/sys/class/drm")) {
+        for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm")) {
+            tinexus::log::info("Found DRM node: {}", entry.path().filename().string());
+            std::filesystem::path status_file = entry.path() / "status";
+            if (std::filesystem::exists(status_file)) {
+                std::ifstream ifs(status_file);
+                std::string conn_status;
+                if (ifs >> conn_status) {
+                    tinexus::log::info("  Status of {}: {}", entry.path().filename().string(), conn_status);
+                }
+            }
+        }
+    } else {
+        tinexus::log::error("/sys/class/drm directory does NOT exist!");
     }
 }
 

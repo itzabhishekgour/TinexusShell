@@ -612,6 +612,19 @@ EOF_DHCP
         warn "tinexus-serviced not found in rootfs! System may not boot properly."
     fi
 
+    # Ensure dynamic linker cache is populated for all staged binaries and libraries
+    mkdir -p "$ROOTFS_DIR/etc"
+    cat > "$ROOTFS_DIR/etc/ld.so.conf" << 'EOF_LD'
+/lib
+/usr/lib
+/lib/x86_64-linux-gnu
+/usr/lib/x86_64-linux-gnu
+/usr/local/lib
+EOF_LD
+    if command -v ldconfig >/dev/null 2>&1; then
+        ldconfig -r "$ROOTFS_DIR" 2>/dev/null || true
+    fi
+
     info "Compressing rootfs with mksquashfs..."
     mkdir -p "$ISO_TREE/live"
     export SQUASHFS_OUT="$ISO_TREE/live/rootfs.squashfs"
@@ -655,7 +668,9 @@ build_initramfs() {
 
     local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
     cp -L "$bb_bin" "$init_staging/bin/busybox"
-    for cmd in sh cat ls mkdir mount umount mdev switch_root sleep; do ln -sf busybox "$init_staging/bin/$cmd" || true; done
+    for cmd in sh cat ls mkdir mount umount mdev switch_root sleep chroot grep dmesg clear head tail uname; do 
+        ln -sf busybox "$init_staging/bin/$cmd" || true
+    done
 
     (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
         [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
@@ -730,48 +745,119 @@ build_initramfs() {
 
     cat > "$init_staging/init" << 'EOINIT'
 #!/bin/sh
+# ── Tinexus OS Early Boot Initramfs Script ─────────────────────────────────────
+# Mount essential virtual filesystems
 /bin/mount -t proc proc /proc 2>/dev/null
 /bin/mount -t sysfs sysfs /sys 2>/dev/null
 /bin/mount -t devtmpfs devtmpfs /dev 2>/dev/null || /bin/mdev -s 2>/dev/null
 
-# Setup console redirection (mirrors to serial in QEMU, console on bare metal)
-[ -c /dev/ttyS0 ] && exec >/dev/ttyS0 2>&1
+# Re-open stdin, stdout, stderr on /dev/console so that all user-space output appears on the laptop screen
+if [ -c /dev/console ]; then
+    exec </dev/console >/dev/console 2>&1
+fi
 
-echo "Tinexus OS: Loading storage, bus, and graphics kernel modules..."
-# 1. Storage & bus controllers
-modprobe -d / ahci 2>/dev/null || true
-modprobe -d / isofs 2>/dev/null || true
-modprobe -d / usb_storage 2>/dev/null || true
-modprobe -d / uas 2>/dev/null || true
-modprobe -d / nvme 2>/dev/null || true
+log_step() {
+    echo ">>> [TINEXUS-STEP] $1"
+    echo "<6>>>> [TINEXUS-STEP] $1" > /dev/kmsg 2>/dev/null || true
+    echo ">>> [TINEXUS-STEP] $1" > /dev/console 2>/dev/null || true
+    [ -c /dev/tty0 ] && echo ">>> [TINEXUS-STEP] $1" > /dev/tty0 2>/dev/null || true
+}
+
+log_step "STEP 1: Initramfs mounted /proc, /sys, /dev successfully."
+
+# Check if debug mode was requested on the kernel command line
+IS_DEBUG=0
+if [ -f /proc/cmdline ]; then
+    CMDLINE=$(cat /proc/cmdline)
+    case "$CMDLINE" in
+        *tinexus.debug*|*rd.break*|*break*|*single*)
+            IS_DEBUG=1
+            ;;
+    esac
+fi
+
+if [ "$IS_DEBUG" = "1" ]; then
+    log_step "DEBUG MODE ACTIVE (detected in cmdline: $CMDLINE)"
+fi
+
+log_step "STEP 2: Loading hardware drivers in strict dependency order..."
+
+load_mod() {
+    local m="$1"
+    # Try modprobe first
+    modprobe -d / "$m" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        return 0
+    fi
+    # Direct insmod fallback
+    for p in /lib/modules/7.0.0-28-generic /lib/modules; do
+        if [ -f "$p/$m.ko" ]; then
+            insmod "$p/$m.ko" 2>/dev/null && return 0
+        fi
+    done
+    return 1
+}
+
+# 1. Storage & bus controllers (with sub-dependencies)
+for m in libahci ahci isofs hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas; do
+    load_mod "$m" || true
+done
 
 # 2. Input devices
-modprobe -d / evdev 2>/dev/null || true
-modprobe -d / hid 2>/dev/null || true
-modprobe -d / hid-generic 2>/dev/null || true
-modprobe -d / usbhid 2>/dev/null || true
-
-# 3. Graphics display (Intel Comet Lake-H primary display + QEMU fallback)
-modprobe -d / i915 2>/dev/null || true
-modprobe -d / virtio_dma_buf 2>/dev/null || true
-modprobe -d / virtio-gpu 2>/dev/null || true
-modprobe -d / virtio_input 2>/dev/null || true
-modprobe -d / bochs 2>/dev/null || true
-
-# Direct insmod fallback in case modprobe paths differ
-for mod in /lib/modules/7.0.0-28-generic/*.ko /lib/modules/*.ko; do
-    [ -f "$mod" ] && insmod "$mod" 2>/dev/null
+for m in hid hid-generic usbhid evdev; do
+    load_mod "$m" || true
 done
+
+# 3. Graphics display: strict topological dependency order for Intel i915
+# rc-core -> cec -> drm_display_helper
+# wmi -> video
+# ttm, drm_buddy, i2c-algo-bit -> i915
+for m in rc-core cec drm_display_helper wmi video ttm drm_buddy i2c-algo-bit i915; do
+    load_mod "$m" || true
+done
+
+# 4. Virtualization / fallback graphics drivers
+for m in virtio_dma_buf virtio-gpu virtio_input bochs; do
+    load_mod "$m" || true
+done
+
 /bin/mdev -s 2>/dev/null
 
-# Graphics modules loaded, start splash screen
-if [ -x /bin/tinexus-splash ]; then
+log_step "STEP 3: Hardware drivers loaded. Verifying DRI / DRM subsystem..."
+if [ -d /dev/dri ]; then
+    log_step "Found /dev/dri directory with nodes:"
+    for node in /dev/dri/*; do
+        [ -e "$node" ] && log_step "  - $node"
+    done
+else
+    log_step "WARNING: /dev/dri directory not found after driver load!"
+fi
+
+if [ -d /sys/class/drm ]; then
+    log_step "Found /sys/class/drm entries:"
+    for conn in /sys/class/drm/*; do
+        [ -e "$conn" ] || continue
+        cname=$(basename "$conn")
+        if [ -f "$conn/status" ]; then
+            cstat=$(cat "$conn/status" 2>/dev/null || echo "unknown")
+            log_step "  - $cname (status: $cstat)"
+        else
+            log_step "  - $cname"
+        fi
+    done
+else
+    log_step "WARNING: /sys/class/drm not found!"
+fi
+
+log_step "STEP 4: Scanning for Live CD / USB media..."
+
+# Graphics modules loaded, start splash screen if present (skip in debug mode)
+if [ "$IS_DEBUG" != "1" ] && [ -x /bin/tinexus-splash ]; then
     /bin/tinexus-splash &
     sleep 0.1
     echo 20 > /tmp/splash_progress 2>/dev/null
 fi
 
-echo "Tinexus OS: Searching dynamically for Live CD / USB rootfs..."
 ROOT_DEV=""
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     echo $((20 + attempt * 3)) > /tmp/splash_progress 2>/dev/null
@@ -783,7 +869,7 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         if [ -n "$BY_LABEL" ] && [ -b "$BY_LABEL" ]; then
             /bin/mount -o ro "$BY_LABEL" /mnt 2>/dev/null
             if [ -f /mnt/live/rootfs.squashfs ]; then
-                echo "Tinexus OS: Found rootfs via label on $BY_LABEL!"
+                log_step "Found rootfs via label on $BY_LABEL (attempt $attempt)"
                 ROOT_DEV="$BY_LABEL"
                 break
             fi
@@ -795,7 +881,7 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     if [ -b /dev/disk/by-label/TINEXUS_LIVE ]; then
         /bin/mount -o ro /dev/disk/by-label/TINEXUS_LIVE /mnt 2>/dev/null
         if [ -f /mnt/live/rootfs.squashfs ]; then
-            echo "Tinexus OS: Found rootfs on /dev/disk/by-label/TINEXUS_LIVE!"
+            log_step "Found rootfs on /dev/disk/by-label/TINEXUS_LIVE"
             ROOT_DEV="/dev/disk/by-label/TINEXUS_LIVE"
             break
         fi
@@ -813,7 +899,7 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
             [ -b "$candidate" ] || continue
             /bin/mount -o ro "$candidate" /mnt 2>/dev/null
             if [ -f /mnt/live/rootfs.squashfs ]; then
-                echo "Tinexus OS: Found rootfs via dynamic scan on $candidate!"
+                log_step "Found rootfs via dynamic scan on $candidate (attempt $attempt)"
                 ROOT_DEV="$candidate"
                 break 3
             fi
@@ -824,33 +910,77 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     sleep 1
 done
 
-if [ -n "$ROOT_DEV" ] && [ -f /mnt/live/rootfs.squashfs ]; then
-    echo "Tinexus OS: Mounting SquashFS rootfs from $ROOT_DEV..."
-    echo 70 > /tmp/splash_progress 2>/dev/null
-    /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
-    /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
-    mkdir -p /newroot/dev/shm
-    mkdir -p /newroot/dev/pts
-    /bin/mount -t tmpfs tmpfs /newroot/dev/shm 2>/dev/null || true
-    /bin/mount -t devpts devpts /newroot/dev/pts 2>/dev/null || true
-    /bin/mount -t proc proc /newroot/proc 2>/dev/null || true
-    /bin/mount -t sysfs sysfs /newroot/sys 2>/dev/null || true
-    /bin/mount -t tmpfs tmpfs /newroot/run 2>/dev/null || true
-    /bin/mount -t tmpfs tmpfs /newroot/tmp 2>/dev/null || true
-    /bin/mount -t tmpfs tmpfs /newroot/var 2>/dev/null || true
-    /bin/mount -t tmpfs tmpfs /newroot/root 2>/dev/null || true
-    /bin/mount -t tmpfs tmpfs /newroot/home 2>/dev/null || true
-    
-    echo 90 > /tmp/splash_progress 2>/dev/null
-    echo "Tinexus OS: Switching to Tinexus Serviced Init..."
-    echo 100 > /tmp/splash_progress 2>/dev/null
-    sleep 0.2
-    
-    exec switch_root /newroot /usr/bin/tinexus-serviced
-else
-    echo "Tinexus OS: FATAL — rootfs.squashfs not found on any disk or partition. Dropping to emergency shell."
-    exec /bin/sh
+if [ -z "$ROOT_DEV" ] || [ ! -f /mnt/live/rootfs.squashfs ]; then
+    log_step "FATAL: rootfs.squashfs not found on any storage device after 15s!"
+    log_step "Dropping to emergency recovery shell..."
+    exec /bin/sh </dev/console >/dev/console 2>&1
 fi
+
+log_step "STEP 5: Storage media located on $ROOT_DEV."
+mkdir -p /newroot
+
+log_step "STEP 6: About to mount SquashFS rootfs to /newroot via loop..."
+/bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
+MNT_STATUS=$?
+if [ $MNT_STATUS -ne 0 ]; then
+    log_step "FATAL: mount -t squashfs failed with exit code $MNT_STATUS!"
+    exec /bin/sh </dev/console >/dev/console 2>&1
+fi
+log_step "STEP 7: SquashFS mounted successfully on /newroot."
+
+log_step "STEP 8: Mounting virtual filesystems into /newroot..."
+/bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
+mkdir -p /newroot/dev/shm /newroot/dev/pts
+/bin/mount -t tmpfs tmpfs /newroot/dev/shm 2>/dev/null || true
+/bin/mount -t devpts devpts /newroot/dev/pts 2>/dev/null || true
+/bin/mount -t proc proc /newroot/proc 2>/dev/null || true
+/bin/mount -t sysfs sysfs /newroot/sys 2>/dev/null || true
+/bin/mount -t tmpfs tmpfs /newroot/run 2>/dev/null || true
+/bin/mount -t tmpfs tmpfs /newroot/tmp 2>/dev/null || true
+/bin/mount -t tmpfs tmpfs /newroot/var 2>/dev/null || true
+/bin/mount -t tmpfs tmpfs /newroot/root 2>/dev/null || true
+/bin/mount -t tmpfs tmpfs /newroot/home 2>/dev/null || true
+
+log_step "STEP 9: Setting up live session directories (/home/tinexus, /root)..."
+mkdir -p /newroot/home/tinexus/Desktop /newroot/home/tinexus/Pictures /newroot/home/tinexus/.config
+chown -R 1000:1000 /newroot/home/tinexus 2>/dev/null || true
+mkdir -p /newroot/root
+
+log_step "STEP 10: Verifying /newroot/usr/bin/tinexus-serviced and dynamic environment..."
+if [ ! -f /newroot/usr/bin/tinexus-serviced ]; then
+    log_step "FATAL: /newroot/usr/bin/tinexus-serviced DOES NOT EXIST!"
+    ls -la /newroot/usr/bin/ > /dev/console 2>&1 || true
+    exec /bin/sh </dev/console >/dev/console 2>&1
+fi
+if [ ! -x /newroot/usr/bin/tinexus-serviced ]; then
+    log_step "WARNING: Setting chmod 0755 on /newroot/usr/bin/tinexus-serviced..."
+    chmod 0755 /newroot/usr/bin/tinexus-serviced
+fi
+
+chroot_test=$(chroot /newroot /bin/sh -c "echo OK" 2>&1)
+log_step "Chroot environment check into /newroot: $chroot_test"
+
+# If debug was requested, drop to interactive shell before switch_root
+if [ "$IS_DEBUG" = "1" ]; then
+    log_step "================================================================"
+    log_step "DEBUG SHELL ACTIVATED (triggered by kernel cmdline)"
+    log_step "System state: SquashFS mounted at /newroot, USB at /mnt"
+    log_step "Type 'exit' to resume boot and proceed to switch_root."
+    log_step "================================================================"
+    /bin/sh </dev/console >/dev/console 2>&1
+    log_step "Debug shell exited. Resuming switch_root handoff..."
+fi
+
+log_step "STEP 11: ABOUT TO EXECUTE switch_root -c /dev/console /newroot /usr/bin/tinexus-serviced..."
+echo 100 > /tmp/splash_progress 2>/dev/null
+sleep 0.5
+
+exec switch_root -c /dev/console /newroot /usr/bin/tinexus-serviced
+
+# Fallback: if switch_root returns or fails
+log_step "FATAL: switch_root failed or returned unexpectedly! Exit code: $?"
+log_step "Dropping to emergency fallback shell on /dev/console..."
+exec /bin/sh </dev/console >/dev/console 2>&1
 EOINIT
     chmod 0755 "$init_staging/init"
     (cd "$init_staging" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRAMFS_OUT")
@@ -872,17 +1002,17 @@ insmod iso9660
 terminal_output gfxterm
 
 menuentry "Tinexus OS Live (Wayland Desktop)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs quiet loglevel=3 vt.global_cursor_default=0 logo.nologo fbcon=nodefer console=tty0 console=ttyS0,115200n8
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs quiet loglevel=3 vt.global_cursor_default=0 logo.nologo fbcon=nodefer console=ttyS0,115200n8 console=tty0
     initrd  /boot/initramfs.img
 }
 
 menuentry "Tinexus OS Live (Safe Graphics / nomodeset)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs nomodeset console=tty0 console=ttyS0,115200n8
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs nomodeset console=ttyS0,115200n8 console=tty0
     initrd  /boot/initramfs.img
 }
 
-menuentry "Tinexus OS Live (Debug Console)" {
-    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs console=tty0 console=ttyS0,115200n8
+menuentry "Tinexus OS Live (Debug Console & Shell Break)" {
+    linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs tinexus.debug=1 console=ttyS0,115200n8 console=tty0
     initrd  /boot/initramfs.img
 }
 EOGRUB
