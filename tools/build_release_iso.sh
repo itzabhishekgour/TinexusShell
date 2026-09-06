@@ -576,15 +576,112 @@ EOF_DHCP
         warn "/lib/firmware/i915 not found on host. Intel iGPU may fail to initialize without firmware."
     fi
 
-    info "Staging real hardware kernel modules (i915, NVMe, USB, Ethernet, QEMU) into rootfs..."
+    # ── Stage MediaTek Wi-Fi 6 MT7921 / MT7922 / MT7961 Firmware ────────────
+    info "Staging MediaTek Wi-Fi 6 firmware (MT7921 / MT7922 / MT7961)..."
+    mkdir -p "$ROOTFS_DIR/lib/firmware/mediatek"
+    if [ -d "/lib/firmware/mediatek" ]; then
+        for fw in /lib/firmware/mediatek/*MT7922* /lib/firmware/mediatek/*MT7961*; do
+            [ -e "$fw" ] || continue
+            cp -L "$fw" "$ROOTFS_DIR/lib/firmware/mediatek/" 2>/dev/null || true
+        done
+        for compressed in "$ROOTFS_DIR/lib/firmware/mediatek"/*.zst; do
+            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
+        done
+        success "Staged $(ls "$ROOTFS_DIR/lib/firmware/mediatek" | wc -l) MediaTek firmware files into rootfs."
+    else
+        warn "/lib/firmware/mediatek not found on host."
+    fi
+
+    # ── Stage Wireless Utilities (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill) ──
+    info "Staging wireless tools (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill)..."
+    for tool in wpa_supplicant wpa_passphrase wpa_cli iw rfkill; do
+        tool_path="$(command -v "$tool" || true)"
+        if [ -n "$tool_path" ] && [ -f "$tool_path" ]; then
+            cp -L "$tool_path" "$ROOTFS_DIR/usr/sbin/" 2>/dev/null || true
+            cp -L "$tool_path" "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
+            ldd "$tool_path" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+            ldd "$tool_path" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+            done
+        fi
+    done
+    mkdir -p "$ROOTFS_DIR/etc/wpa_supplicant" "$ROOTFS_DIR/var/run/wpa_supplicant" "$ROOTFS_DIR/usr/share/dbus-1/system-services" "$ROOTFS_DIR/usr/share/dbus-1/system.d" "$ROOTFS_DIR/etc/dbus-1/system.d"
+    cat > "$ROOTFS_DIR/etc/wpa_supplicant/wpa_supplicant.conf" << 'EOF_WPA'
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+EOF_WPA
+    [ -f "/usr/share/dbus-1/system-services/fi.w1.wpa_supplicant1.service" ] && cp -L "/usr/share/dbus-1/system-services/fi.w1.wpa_supplicant1.service" "$ROOTFS_DIR/usr/share/dbus-1/system-services/" 2>/dev/null || true
+    [ -f "/usr/share/dbus-1/system.d/wpa_supplicant.conf" ] && cp -L "/usr/share/dbus-1/system.d/wpa_supplicant.conf" "$ROOTFS_DIR/usr/share/dbus-1/system.d/" 2>/dev/null || true
+    [ -f "/usr/share/dbus-1/system.d/wpa_supplicant.conf" ] && cp -L "/usr/share/dbus-1/system.d/wpa_supplicant.conf" "$ROOTFS_DIR/etc/dbus-1/system.d/" 2>/dev/null || true
+
+    cat > "$ROOTFS_DIR/usr/bin/tinexus-wifi" << 'EOF_WIFI'
+#!/bin/sh
+rfkill unblock all 2>/dev/null || true
+ip link set wlan0 up 2>/dev/null || true
+case "$1" in
+    scan)
+        echo "Scanning available Wi-Fi networks on wlan0..."
+        iw dev wlan0 scan 2>/dev/null | grep -E "SSID: " | sed 's/^[ \t]*SSID: //' | sort -u
+        ;;
+    connect)
+        SSID="$2"
+        PASS="$3"
+        if [ -z "$SSID" ]; then
+            echo "Usage: tinexus-wifi connect <SSID> [password]"
+            exit 1
+        fi
+        killall wpa_supplicant 2>/dev/null || true
+        CONF="/tmp/wpa_connect.conf"
+        if [ -n "$PASS" ]; then
+            wpa_passphrase "$SSID" "$PASS" > "$CONF" 2>/dev/null
+        else
+            cat > "$CONF" << EOF_OPEN
+network={
+    ssid="$SSID"
+    key_mgmt=NONE
+}
+EOF_OPEN
+        fi
+        echo "Connecting to '$SSID'..."
+        wpa_supplicant -B -i wlan0 -c "$CONF"
+        sleep 2
+        echo "Obtaining IP address via DHCP..."
+        udhcpc -i wlan0 -n -q
+        echo "Testing internet connectivity..."
+        ping -c 3 -W 3 1.1.1.1 || ping -c 3 -W 3 8.8.8.8
+        ;;
+    status)
+        ip addr show wlan0
+        iw dev wlan0 link
+        ;;
+    *)
+        echo "Tinexus OS Wi-Fi Manager"
+        echo "Usage: tinexus-wifi scan"
+        echo "       tinexus-wifi connect <SSID> [password]"
+        echo "       tinexus-wifi status"
+        ;;
+esac
+EOF_WIFI
+    chmod 0755 "$ROOTFS_DIR/usr/bin/tinexus-wifi"
+
+    info "Staging real hardware kernel modules (i915, NVMe, USB, Ethernet, Touchpad, Wi-Fi, QEMU) into rootfs..."
     mkdir -p "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" "$ROOTFS_DIR/lib/modules"
     if [ -d "/lib/modules/7.0.0-28-generic" ]; then
         find "/lib/modules/7.0.0-28-generic" -type f \( \
             -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
             -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
             -o -name "uas.ko*" -o -name "usb-storage.ko*" \
+            -o -name "overlay.ko*" \
             -o -name "i915.ko*" -o -name "drm_display_helper.ko*" -o -name "ttm.ko*" -o -name "video.ko*" \
             -o -name "drm_buddy.ko*" -o -name "cec.ko*" -o -name "rc-core.ko*" -o -name "i2c-algo-bit.ko*" -o -name "wmi.ko*" -o -name "intel-gtt.ko*" \
+            -o -name "intel-lpss.ko*" -o -name "intel-lpss-pci.ko*" \
+            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" -o -name "i2c-ccgx-ucsi.ko*" \
+            -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" -o -name "hid-multitouch.ko*" \
+            -o -name "pinctrl-cannonlake.ko*" \
+            -o -name "mt7921e.ko*" -o -name "mt7921-common.ko*" -o -name "mt792x-lib.ko*" -o -name "mt76-connac-lib.ko*" -o -name "mt76.ko*" \
+            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "rfkill.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "virtio_net.ko*" -o -name "net_failover.ko*" -o -name "failover.ko*" \
@@ -668,7 +765,7 @@ build_initramfs() {
 
     local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
     cp -L "$bb_bin" "$init_staging/bin/busybox"
-    for cmd in sh cat ls mkdir mount umount mdev switch_root sleep chroot grep dmesg clear head tail uname; do 
+    for cmd in sh cat ls mkdir mount umount mdev switch_root sleep chroot grep dmesg clear head tail uname df; do 
         ln -sf busybox "$init_staging/bin/$cmd" || true
     done
 
@@ -716,6 +813,19 @@ build_initramfs() {
         success "Staged $(ls "$init_staging/lib/firmware/i915" | wc -l) Intel i915 firmware files into initramfs."
     fi
 
+    # Stage MediaTek Wi-Fi 6 firmware into initramfs (MT7921 / MT7922 / MT7961)
+    mkdir -p "$init_staging/lib/firmware/mediatek"
+    if [ -d "/lib/firmware/mediatek" ]; then
+        for fw in /lib/firmware/mediatek/*MT7922* /lib/firmware/mediatek/*MT7961*; do
+            [ -e "$fw" ] || continue
+            cp -L "$fw" "$init_staging/lib/firmware/mediatek/" 2>/dev/null || true
+        done
+        for compressed in "$init_staging/lib/firmware/mediatek"/*.zst; do
+            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
+        done
+        success "Staged $(ls "$init_staging/lib/firmware/mediatek" | wc -l) MediaTek firmware files into initramfs."
+    fi
+
     mkdir -p "$init_staging/lib/modules/7.0.0-28-generic" "$init_staging/lib/modules"
     local kver="7.0.0-28-generic"
     if [ -d "/lib/modules/$kver" ]; then
@@ -723,8 +833,15 @@ build_initramfs() {
             -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
             -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
             -o -name "uas.ko*" -o -name "usb-storage.ko*" \
+            -o -name "overlay.ko*" \
             -o -name "i915.ko*" -o -name "drm_display_helper.ko*" -o -name "ttm.ko*" -o -name "video.ko*" \
             -o -name "drm_buddy.ko*" -o -name "cec.ko*" -o -name "rc-core.ko*" -o -name "i2c-algo-bit.ko*" -o -name "wmi.ko*" -o -name "intel-gtt.ko*" \
+            -o -name "intel-lpss.ko*" -o -name "intel-lpss-pci.ko*" \
+            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" -o -name "i2c-ccgx-ucsi.ko*" \
+            -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" -o -name "hid-multitouch.ko*" \
+            -o -name "pinctrl-cannonlake.ko*" \
+            -o -name "mt7921e.ko*" -o -name "mt7921-common.ko*" -o -name "mt792x-lib.ko*" -o -name "mt76-connac-lib.ko*" -o -name "mt76.ko*" \
+            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "rfkill.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "evdev.ko*" \
@@ -799,12 +916,12 @@ load_mod() {
 }
 
 # 1. Storage & bus controllers (with sub-dependencies)
-for m in libahci ahci isofs hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas; do
+for m in libahci ahci isofs hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas overlay; do
     load_mod "$m" || true
 done
 
-# 2. Input devices
-for m in hid hid-generic usbhid evdev; do
+# 2. Input devices & Touchpad (ASUS ELAN1203 on Intel Serial IO I2C Host 06E8)
+for m in hid hid-generic usbhid evdev intel-lpss intel-lpss-pci pinctrl-cannonlake i2c-ccgx-ucsi i2c-designware-pci i2c-hid i2c-hid-acpi hid-multitouch; do
     load_mod "$m" || true
 done
 
@@ -816,7 +933,14 @@ for m in rc-core cec drm_display_helper wmi video ttm drm_buddy i2c-algo-bit i91
     load_mod "$m" || true
 done
 
-# 4. Virtualization / fallback graphics drivers
+# 4. Wireless network (MediaTek Wi-Fi 6 MT7921)
+# rfkill -> cfg80211 -> mac80211 -> mt76 -> mt76-connac-lib -> mt792x-lib -> mt7921-common -> mt7921e
+for m in rfkill cfg80211 mac80211 mt76 mt76-connac-lib mt792x-lib mt7921-common mt7921e; do
+    load_mod "$m" || true
+done
+[ -x /bin/rfkill ] && rfkill unblock all 2>/dev/null || true
+
+# 5. Virtualization / fallback graphics drivers
 for m in virtio_dma_buf virtio-gpu virtio_input bochs; do
     load_mod "$m" || true
 done
@@ -919,14 +1043,29 @@ fi
 log_step "STEP 5: Storage media located on $ROOT_DEV."
 mkdir -p /newroot
 
-log_step "STEP 6: About to mount SquashFS rootfs to /newroot via loop..."
-/bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
+log_step "STEP 6: Setting up writable OverlayFS (RAM tmpfs + SquashFS lowerdir)..."
+mkdir -p /rofs /cow /newroot
+/bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /rofs
 MNT_STATUS=$?
 if [ $MNT_STATUS -ne 0 ]; then
     log_step "FATAL: mount -t squashfs failed with exit code $MNT_STATUS!"
     exec /bin/sh </dev/console >/dev/console 2>&1
 fi
-log_step "STEP 7: SquashFS mounted successfully on /newroot."
+
+# Mount dynamic tmpfs for copy-on-write upper and work directories (up to 4GB dynamic RAM ceiling)
+/bin/mount -t tmpfs -o size=4G,mode=0755 tmpfs /cow
+mkdir -p /cow/upper /cow/work
+
+# Mount OverlayFS uniting read-only SquashFS and writable tmpfs into /newroot
+/bin/mount -t overlay overlay -o lowerdir=/rofs,upperdir=/cow/upper,workdir=/cow/work /newroot
+OVERLAY_STATUS=$?
+if [ $OVERLAY_STATUS -ne 0 ]; then
+    log_step "WARNING: OverlayFS mount failed ($OVERLAY_STATUS)! Falling back to direct SquashFS read-only mount..."
+    /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
+else
+    log_step "STEP 7: Writable OverlayFS mounted successfully on /newroot."
+    df -h /newroot > /dev/console 2>&1 || true
+fi
 
 log_step "STEP 8: Mounting virtual filesystems into /newroot..."
 /bin/mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null || true
@@ -937,9 +1076,6 @@ mkdir -p /newroot/dev/shm /newroot/dev/pts
 /bin/mount -t sysfs sysfs /newroot/sys 2>/dev/null || true
 /bin/mount -t tmpfs tmpfs /newroot/run 2>/dev/null || true
 /bin/mount -t tmpfs tmpfs /newroot/tmp 2>/dev/null || true
-/bin/mount -t tmpfs tmpfs /newroot/var 2>/dev/null || true
-/bin/mount -t tmpfs tmpfs /newroot/root 2>/dev/null || true
-/bin/mount -t tmpfs tmpfs /newroot/home 2>/dev/null || true
 
 log_step "STEP 9: Setting up live session directories (/home/tinexus, /root)..."
 mkdir -p /newroot/home/tinexus/Desktop /newroot/home/tinexus/Pictures /newroot/home/tinexus/.config
