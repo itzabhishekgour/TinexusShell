@@ -3,6 +3,9 @@
 #include <txui/render/Painter.hpp>
 #include <txui/render/PixmanBackend.hpp>
 #include <txui/render/ImageWriter.hpp>
+#include <txui/wayland/WaylandInput.hpp>
+#include <linux/input-event-codes.h>
+#include <cassert>
 #include <iostream>
 #include <cstdlib>
 #include <unistd.h>
@@ -11,9 +14,23 @@
 
 int main() {
     tinexus::log::set_component_name("terminal_test");
+
+    // Verify keycode translation for KEY_BACKSLASH and punctuation
+    assert(txui::wayland::translate_linux_keycode(KEY_BACKSLASH) == txui::Key::Backslash);
+    assert(txui::wayland::translate_linux_keycode(KEY_COMMA) == txui::Key::Comma);
+    assert(txui::wayland::translate_linux_keycode(KEY_SEMICOLON) == txui::Key::Semicolon);
+    assert(txui::wayland::translate_linux_keycode(KEY_EQUAL) == txui::Key::Equal);
+    assert(txui::wayland::translate_linux_keycode(KEY_DELETE) == txui::Key::Delete);
     
     // Create widget
     auto widget = txui::make_ref<tinexus::terminal::TerminalWidget>();
+
+    // Verify Shift + Backslash produces '|' (pipe)
+    txui::Event ep;
+    ep.type = txui::EventType::KeyDown;
+    ep.keyboard.modifiers = txui::KeyModifier::Shift;
+    ep.keyboard.key = txui::Key::Backslash;
+    assert(widget->handle_event(ep));
     
     // Inject "ls --color\n"
     txui::Event e;

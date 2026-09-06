@@ -51,4 +51,5 @@ artifacts/
 .cache/
 Temp/
 qemu_out.txt
-*.deb
+*.deb
+scratch/

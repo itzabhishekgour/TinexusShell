@@ -30,6 +30,24 @@ target_link_libraries(unit_test_txui_clipboard PRIVATE
 
 add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
 
+add_executable(unit_test_wifi_contracts
+    unit/test_wifi_backend_contracts.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings-ui/WifiManager.cpp
+)
+
+target_include_directories(unit_test_wifi_contracts PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/settings-ui/include
+)
+
+target_link_libraries(unit_test_wifi_contracts PRIVATE
+    txui
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME unit_test_wifi_contracts COMMAND unit_test_wifi_contracts)
+
 add_executable(unit_test_searchd
     unit/test_searchd.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp

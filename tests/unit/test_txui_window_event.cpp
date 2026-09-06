@@ -37,6 +37,10 @@ static void test_linux_code_translations() {
     assert(wayland::translate_linux_keycode(KEY_Z) == Key::Z);
     assert(wayland::translate_linux_keycode(KEY_ESC) == Key::Escape);
     assert(wayland::translate_linux_keycode(KEY_ENTER) == Key::Enter);
+    assert(wayland::translate_linux_keycode(KEY_BACKSLASH) == Key::Backslash);
+    assert(wayland::translate_linux_keycode(KEY_COMMA) == Key::Comma);
+    assert(wayland::translate_linux_keycode(KEY_SEMICOLON) == Key::Semicolon);
+    assert(wayland::translate_linux_keycode(KEY_DELETE) == Key::Delete);
     assert(wayland::translate_linux_keycode(KEY_F1) == Key::F1);
     assert(wayland::translate_linux_keycode(9999) == Key::Unknown);
 

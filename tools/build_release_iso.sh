@@ -77,7 +77,7 @@ ID=tinexus
 PRETTY_NAME="Tinexus OS 1.0 (Live)"
 HOME_URL="https://github.com/itzabhishekgour/TinexusShell"
 EOF
-    echo "tinexus-live" > "$ROOTFS_DIR/etc/hostname"
+    echo "Tinexus-Desktop" > "$ROOTFS_DIR/etc/hostname"
     echo "tmpfs   /tmp    tmpfs   defaults,nosuid,nodev   0 0" > "$ROOTFS_DIR/etc/fstab"
 
     # Create minimal users and groups for Tinexus
@@ -616,14 +616,36 @@ EOF_WPA
     [ -f "/usr/share/dbus-1/system.d/wpa_supplicant.conf" ] && cp -L "/usr/share/dbus-1/system.d/wpa_supplicant.conf" "$ROOTFS_DIR/usr/share/dbus-1/system.d/" 2>/dev/null || true
     [ -f "/usr/share/dbus-1/system.d/wpa_supplicant.conf" ] && cp -L "/usr/share/dbus-1/system.d/wpa_supplicant.conf" "$ROOTFS_DIR/etc/dbus-1/system.d/" 2>/dev/null || true
 
+    # ── Hostname Configuration (Option 12 Registration on DHCP) ──
+    echo "Tinexus-Desktop" > "$ROOTFS_DIR/etc/hostname"
+    cat > "$ROOTFS_DIR/etc/hosts" << 'EOF_HOSTS'
+127.0.0.1   localhost Tinexus-Desktop
+::1         localhost ip6-localhost ip6-loopback
+EOF_HOSTS
+
     cat > "$ROOTFS_DIR/usr/bin/tinexus-wifi" << 'EOF_WIFI'
 #!/bin/sh
 rfkill unblock all 2>/dev/null || true
-ip link set wlan0 up 2>/dev/null || true
+
+# Dynamically discover primary Wi-Fi interface (wlo1, wlp3s0, wlan0, etc.)
+IFACE=""
+if [ -d /sys/class/net ]; then
+    for d in /sys/class/net/*; do
+        dev=$(basename "$d")
+        [ "$dev" = "lo" ] && continue
+        if [ -d "$d/wireless" ] || [ -d "$d/phy80211" ]; then
+            IFACE="$dev"
+            break
+        fi
+    done
+fi
+[ -z "$IFACE" ] && IFACE="wlan0"
+
+ip link set "$IFACE" up 2>/dev/null || true
 case "$1" in
     scan)
-        echo "Scanning available Wi-Fi networks on wlan0..."
-        iw dev wlan0 scan 2>/dev/null | grep -E "SSID: " | sed 's/^[ \t]*SSID: //' | sort -u
+        echo "Scanning available Wi-Fi networks on $IFACE..."
+        iw dev "$IFACE" scan 2>/dev/null | grep -E "SSID: " | sed 's/^[ \t]*SSID: //' | sort -u
         ;;
     connect)
         SSID="$2"
@@ -644,20 +666,21 @@ network={
 }
 EOF_OPEN
         fi
-        echo "Connecting to '$SSID'..."
-        wpa_supplicant -B -i wlan0 -c "$CONF"
+        echo "Connecting to '$SSID' on interface '$IFACE'..."
+        wpa_supplicant -B -i "$IFACE" -c "$CONF"
         sleep 2
-        echo "Obtaining IP address via DHCP..."
-        udhcpc -i wlan0 -n -q
+        echo "Obtaining IP address via DHCP with hostname 'Tinexus-Desktop'..."
+        udhcpc -i "$IFACE" -s /usr/share/udhcpc/default.script -x hostname:Tinexus-Desktop -q -n
         echo "Testing internet connectivity..."
         ping -c 3 -W 3 1.1.1.1 || ping -c 3 -W 3 8.8.8.8
         ;;
     status)
-        ip addr show wlan0
-        iw dev wlan0 link
+        echo "Interface: $IFACE"
+        ip addr show "$IFACE"
+        iw dev "$IFACE" link
         ;;
     *)
-        echo "Tinexus OS Wi-Fi Manager"
+        echo "Tinexus OS Wi-Fi Manager (Active Interface: $IFACE)"
         echo "Usage: tinexus-wifi scan"
         echo "       tinexus-wifi connect <SSID> [password]"
         echo "       tinexus-wifi status"
@@ -681,7 +704,7 @@ EOF_WIFI
             -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" -o -name "hid-multitouch.ko*" \
             -o -name "pinctrl-cannonlake.ko*" \
             -o -name "mt7921e.ko*" -o -name "mt7921-common.ko*" -o -name "mt792x-lib.ko*" -o -name "mt76-connac-lib.ko*" -o -name "mt76.ko*" \
-            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "rfkill.ko*" \
+            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "libarc4.ko*" -o -name "rfkill.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "virtio_net.ko*" -o -name "net_failover.ko*" -o -name "failover.ko*" \
@@ -841,7 +864,7 @@ build_initramfs() {
             -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" -o -name "hid-multitouch.ko*" \
             -o -name "pinctrl-cannonlake.ko*" \
             -o -name "mt7921e.ko*" -o -name "mt7921-common.ko*" -o -name "mt792x-lib.ko*" -o -name "mt76-connac-lib.ko*" -o -name "mt76.ko*" \
-            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "rfkill.ko*" \
+            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "libarc4.ko*" -o -name "rfkill.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "evdev.ko*" \
@@ -934,8 +957,8 @@ for m in rc-core cec drm_display_helper wmi video ttm drm_buddy i2c-algo-bit i91
 done
 
 # 4. Wireless network (MediaTek Wi-Fi 6 MT7921)
-# rfkill -> cfg80211 -> mac80211 -> mt76 -> mt76-connac-lib -> mt792x-lib -> mt7921-common -> mt7921e
-for m in rfkill cfg80211 mac80211 mt76 mt76-connac-lib mt792x-lib mt7921-common mt7921e; do
+# libarc4 -> rfkill -> cfg80211 -> mac80211 -> mt76 -> mt76-connac-lib -> mt792x-lib -> mt7921-common -> mt7921e
+for m in libarc4 rfkill cfg80211 mac80211 mt76 mt76-connac-lib mt792x-lib mt7921-common mt7921e; do
     load_mod "$m" || true
 done
 [ -x /bin/rfkill ] && rfkill unblock all 2>/dev/null || true
@@ -1128,14 +1151,46 @@ EOINIT
 
 # ── GRUB Configurations ───────────────────────────────────────────────────────
 generate_grub_config() {
-    mkdir -p "$ISO_TREE/boot/grub"
+    mkdir -p "$ISO_TREE/boot/grub/fonts"
+    
+    # Stage unicode font for gfxterm graphical rendering
+    local font_src=""
+    for candidate in /usr/share/grub/unicode.pf2 /boot/grub/unicode.pf2 /boot/grub/fonts/unicode.pf2; do
+        if [ -f "$candidate" ]; then
+            font_src="$candidate"
+            break
+        fi
+    done
+    if [ -n "$font_src" ]; then
+        cp -L "$font_src" "$ISO_TREE/boot/grub/fonts/unicode.pf2"
+        mkdir -p "$ROOTFS_DIR/boot/grub/fonts"
+        cp -L "$font_src" "$ROOTFS_DIR/boot/grub/fonts/unicode.pf2"
+        info "Staged unicode.pf2 font ($font_src) for gfxterm."
+    else
+        warn "unicode.pf2 not found! GRUB gfxterm box borders may render as ???."
+    fi
+
     cat > "$ISO_TREE/boot/grub/grub.cfg" << 'EOGRUB'
 set default=0
 set timeout=5
+
+# Modern graphical high-definition display configuration
+set gfxmode=1920x1080,1366x768,auto
+set gfxpayload=keep
 insmod all_video
 insmod gfxterm
-insmod iso9660
-terminal_output gfxterm
+insmod gettext
+insmod font
+
+if loadfont ($root)/boot/grub/fonts/unicode.pf2 ; then
+    terminal_output gfxterm
+fi
+
+# High-definition dark macOS-style palette
+set menu_color_normal=light-gray/black
+set menu_color_highlight=white/blue
+set color_normal=light-gray/black
+set color_highlight=white/blue
 
 menuentry "Tinexus OS Live (Wayland Desktop)" {
     linux   /boot/vmlinuz root=live:CDLABEL=TINEXUS_LIVE boot=live rd.live.image rd.live.dir=/live rd.live.squashimg=rootfs.squashfs quiet loglevel=3 vt.global_cursor_default=0 logo.nologo fbcon=nodefer console=ttyS0,115200n8 console=tty0
@@ -1163,13 +1218,20 @@ EOEMBEDDED
 
 # ── GRUB EFI Generation ───────────────────────────────────────────────────────
 build_grub_efi_x64() {
-    info "Building GRUB EFI image (BOOTX64.EFI)..."
+    info "Verifying & Building GRUB EFI image (BOOTX64.EFI)..."
     mkdir -p "$ISO_TREE/EFI/BOOT"
+
+    # Explicit dual-tree module check for EFI
+    local req_efi_mods=(gfxterm all_video gettext efi_gop font)
+    for mod in "${req_efi_mods[@]}"; do
+        [ -f "$GRUB_EFI_MODS/${mod}.mod" ] || fatal "Required GRUB EFI module missing: $GRUB_EFI_MODS/${mod}.mod"
+    done
+
     local efi_modules=(
         part_gpt part_msdos fat exfat iso9660
         normal boot linux linux16 configfile
         search search_fs_uuid search_fs_file search_label
-        gfxterm gfxterm_background all_video video_fb video efi_gop
+        gfxterm gfxterm_background all_video video_fb video efi_gop font gettext
         echo test true ls cat reboot halt
     )
 
@@ -1183,16 +1245,23 @@ build_grub_efi_x64() {
     if ! file -b "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" | grep -qi "PE32\|EFI"; then
         fatal "BOOTX64.EFI is not a valid PE32+ EFI binary."
     fi
-    success "BOOTX64.EFI generated."
+    success "BOOTX64.EFI generated with full graphical modules embedded."
 }
 
 # ── GRUB BIOS Generation ──────────────────────────────────────────────────────
 build_grub_bios() {
-    info "Building GRUB BIOS image (eltorito.img)..."
+    info "Verifying & Building GRUB BIOS image (eltorito.img)..."
     mkdir -p "$ISO_TREE/boot/grub/i386-pc"
+
+    # Explicit dual-tree module check for BIOS
+    local req_bios_mods=(gfxterm all_video gettext vbe vga font)
+    for mod in "${req_bios_mods[@]}"; do
+        [ -f "$GRUB_BIOS_MODS/${mod}.mod" ] || fatal "Required GRUB BIOS module missing: $GRUB_BIOS_MODS/${mod}.mod"
+    done
+
     local bios_modules=(
         biosdisk iso9660 normal linux search search_label search_fs_uuid
-        configfile echo test reboot halt gfxterm all_video video video_fb
+        configfile echo test reboot halt gfxterm all_video video video_fb vbe vga font gettext
     )
 
     grub-mkimage -O i386-pc \
@@ -1212,7 +1281,7 @@ build_grub_bios() {
     for mod in "${bios_modules[@]}"; do
         [ -f "$GRUB_BIOS_MODS/${mod}.mod" ] && cp "$GRUB_BIOS_MODS/${mod}.mod" "$ISO_TREE/boot/grub/i386-pc/" || true
     done
-    success "BIOS eltorito.img and hybrid MBR staged."
+    success "BIOS eltorito.img and hybrid MBR staged with full graphical modules."
 }
 
 # ── EFI System Partition ──────────────────────────────────────────────────────

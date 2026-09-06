@@ -36,6 +36,14 @@ static char key_to_char(txui::Key key, bool shift_pressed) {
     if (key == txui::Key::Slash) return shift_pressed ? '?' : '/';
     if (key == txui::Key::Period) return shift_pressed ? '>' : '.';
     if (key == txui::Key::Minus) return shift_pressed ? '_' : '-';
+    if (key == txui::Key::Backslash) return shift_pressed ? '|' : '\\';
+    if (key == txui::Key::Comma) return shift_pressed ? '<' : ',';
+    if (key == txui::Key::Semicolon) return shift_pressed ? ':' : ';';
+    if (key == txui::Key::Apostrophe) return shift_pressed ? '"' : '\'';
+    if (key == txui::Key::Grave) return shift_pressed ? '~' : '`';
+    if (key == txui::Key::Equal) return shift_pressed ? '+' : '=';
+    if (key == txui::Key::LeftBracket) return shift_pressed ? '{' : '[';
+    if (key == txui::Key::RightBracket) return shift_pressed ? '}' : ']';
     return '\0';
 }
 

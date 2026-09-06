@@ -1,5 +1,7 @@
 #include "settings/SettingsWidget.hpp"
+#include "settings/WifiManager.hpp"
 #include "guard/crypto_validator.hpp"
+#include "common/NetUtils.hpp"
 #include <txui/render/Painter.hpp>
 #include <txui/math/Rect.hpp>
 #include <txui/math/Point.hpp>
@@ -65,22 +67,24 @@ const tinexus::settings_ui::AccentOption ACCENT_PALETTE[] = {
 constexpr int ACCENT_COUNT = sizeof(ACCENT_PALETTE) / sizeof(ACCENT_PALETTE[0]);
 
 inline float64 estimate_text_width(const std::string& text, float64 font_scale = 1.0, bool bold = true) {
-    float64 size = 13.0 * font_scale;
+    float64 size = (font_scale <= 5.0) ? (16.0 * font_scale) : font_scale;
     float64 total_w = 0.0;
     for (char c : text) {
-        if (c == ' ' || c == '.' || c == ':' || c == '-' || c == '(' || c == ')') {
-            total_w += size * 0.38;
+        if (c == '*') {
+            total_w += std::round(size * 0.533); // Exact FreeType advance (8px at 15px / 0.95 scale)
+        } else if (c == ' ' || c == '.' || c == ':' || c == '-' || c == '(' || c == ')') {
+            total_w += size * 0.32;
         } else if (c == 'i' || c == 'l' || c == 'I' || c == 'j' || c == 't' || c == 'r' || c == 'f') {
             total_w += size * 0.36;
         } else if (c == 'm' || c == 'M' || c == 'w' || c == 'W') {
-            total_w += size * 0.88;
+            total_w += size * 0.85;
         } else if (c >= 'A' && c <= 'Z') {
-            total_w += size * 0.70;
+            total_w += size * 0.65;
         } else {
-            total_w += size * 0.58;
+            total_w += size * 0.54;
         }
     }
-    if (bold) total_w *= 1.10;
+    if (bold && text.find('*') == std::string::npos) total_w *= 1.10;
     return std::ceil(total_w);
 }
 
@@ -161,6 +165,58 @@ inline void draw_keycap(txui::Painter& p, float64 x, float64 y, const std::strin
     p.draw_text(txui::Point(x + (w - tw) * 0.5, y + 4.0), key, TXT_PRI, 0.82, true);
 }
 
+// ── macOS Wi-Fi Signal Bars (Proportional Heights 5, 8.5, 12, 16) ───────────
+void SettingsWidget::draw_wifi_signal_bars(txui::Painter& p, float64 x, float64 y, int bars, const txui::Color& active_col) const noexcept {
+    const float64 bar_w = 3.5;
+    const float64 gap = 2.5;
+    const float64 heights[4] = {5.0, 8.5, 12.0, 16.0};
+    const txui::Color inactive_col = txui::Color(255, 255, 255, 45);
+
+    for (int i = 0; i < 4; ++i) {
+        float64 bx = x + static_cast<double>(i) * (bar_w + gap);
+        float64 bh = heights[i];
+        float64 by = y + (16.0 - bh);
+        txui::Color col = (i < bars) ? active_col : inactive_col;
+        p.fill_rounded_rect(txui::Rect(bx, by, bar_w, bh), 1.5, col);
+    }
+}
+
+// ── Lock Icon (Secured Wi-Fi Network Glyph) ──────────────────────────────────
+void SettingsWidget::draw_lock_icon(txui::Painter& p, float64 x, float64 y, const txui::Color& col) const noexcept {
+    // Arch shackle: loop arched above padlock body
+    p.draw_circle(txui::Point(x + 5.0, y + 4.0), 3.0, 1.4, col);
+    // Padlock body: rounded rect with keyhole dot
+    p.fill_rounded_rect(txui::Rect(x + 1.0, y + 5.0, 8.0, 7.0), 1.8, col);
+}
+
+// ── Key to ASCII Converter for Password Input ────────────────────────────────
+static char key_to_ascii(txui::Key key, bool shift) {
+    if (key >= txui::Key::A && key <= txui::Key::Z) {
+        char c = 'a' + static_cast<char>(static_cast<uint16_t>(key) - static_cast<uint16_t>(txui::Key::A));
+        return shift ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
+    }
+    if (key >= txui::Key::N0 && key <= txui::Key::N9) {
+        if (shift) {
+            const char shift_nums[] = ")!@#$%^&*(";
+            return shift_nums[static_cast<uint16_t>(key) - static_cast<uint16_t>(txui::Key::N0)];
+        }
+        return '0' + static_cast<char>(static_cast<uint16_t>(key) - static_cast<uint16_t>(txui::Key::N0));
+    }
+    if (key == txui::Key::Space) return ' ';
+    if (key == txui::Key::Slash) return shift ? '?' : '/';
+    if (key == txui::Key::Period) return shift ? '>' : '.';
+    if (key == txui::Key::Minus) return shift ? '_' : '-';
+    if (key == txui::Key::Backslash) return shift ? '|' : '\\';
+    if (key == txui::Key::Comma) return shift ? '<' : ',';
+    if (key == txui::Key::Semicolon) return shift ? ':' : ';';
+    if (key == txui::Key::Apostrophe) return shift ? '"' : '\'';
+    if (key == txui::Key::Grave) return shift ? '~' : '`';
+    if (key == txui::Key::Equal) return shift ? '+' : '=';
+    if (key == txui::Key::LeftBracket) return shift ? '{' : '[';
+    if (key == txui::Key::RightBracket) return shift ? '}' : ']';
+    return 0;
+}
+
 // ── Drop Shadow & Gradient Helper for Category Icons ────────────────────────
 static void draw_icon_badge_base(txui::Painter& p, float64 x, float64 y,
                                  const txui::Color& top_c, const txui::Color& bot_c,
@@ -175,6 +231,20 @@ SettingsWidget::SettingsWidget() {
     scan_wallpapers();
     scan_network_ifaces();
     load_config();
+}
+
+void SettingsWidget::open_wifi_password_modal(const std::string& ssid) {
+    m_wifi_modal_open = true;
+    m_wifi_modal_ssid = ssid;
+    m_wifi_modal_password.clear();
+    m_wifi_modal_show_password = false;
+    m_wifi_modal_error.clear();
+    m_wifi_modal_cancel_hovered = false;
+    m_wifi_modal_connect_hovered = false;
+    m_wifi_modal_eye_hovered = false;
+    m_wifi_modal_scroll_offset = 0;
+    m_wifi_modal_cursor_pos = 0;
+    mark_needs_paint();
 }
 
 void SettingsWidget::read_compositor_info() {
@@ -229,45 +299,16 @@ void SettingsWidget::scan_wallpapers() {
 
 void SettingsWidget::scan_network_ifaces() {
     m_network_ifaces.clear();
-    struct ifaddrs* ifaddr = nullptr;
-    if (getifaddrs(&ifaddr) == -1) return;
-
-    for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr) continue;
-        if (ifa->ifa_addr->sa_family != AF_INET) continue;
-        std::string name = ifa->ifa_name;
-        if (name == "lo") continue;
-
-        char ip_buf[INET_ADDRSTRLEN];
-        auto* sa = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
-        inet_ntop(AF_INET, &(sa->sin_addr), ip_buf, INET_ADDRSTRLEN);
-
+    auto phys = tinexus::net::get_physical_interfaces("/sys/class/net");
+    for (const auto& p : phys) {
         NetworkIface iface;
-        iface.name = name;
-        iface.ip4_addr = ip_buf;
-        iface.state = (ifa->ifa_flags & IFF_UP) ? "up" : "down";
-        iface.rx_mb = 0;
-        iface.tx_mb = 0;
-
-        std::string rx_path = "/sys/class/net/" + name + "/statistics/rx_bytes";
-        std::ifstream rx_f(rx_path);
-        if (rx_f.is_open()) {
-            uint64_t bytes = 0;
-            rx_f >> bytes;
-            iface.rx_mb = bytes / (1024 * 1024);
-        }
-
-        std::string tx_path = "/sys/class/net/" + name + "/statistics/tx_bytes";
-        std::ifstream tx_f(tx_path);
-        if (tx_f.is_open()) {
-            uint64_t bytes = 0;
-            tx_f >> bytes;
-            iface.tx_mb = bytes / (1024 * 1024);
-        }
-
-        m_network_ifaces.push_back(iface);
+        iface.name = p.name;
+        iface.ip4_addr = p.ip4_addr;
+        iface.state = p.operstate;
+        iface.rx_mb = p.rx_mb;
+        iface.tx_mb = p.tx_mb;
+        m_network_ifaces.push_back(std::move(iface));
     }
-    freeifaddrs(ifaddr);
 }
 
 void SettingsWidget::load_config() {
@@ -460,6 +501,129 @@ void SettingsWidget::layout_override(const txui::Rect& f) noexcept {
 
 // ── Event Handler ────────────────────────────────────────────────────────────
 bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
+    // ── 0. Wi-Fi Password Connect Modal Interception ─────────────────────────
+    if (m_wifi_modal_open) {
+        if (event.type == txui::EventType::KeyDown) {
+            if (event.keyboard.key == txui::Key::Escape) {
+                m_wifi_modal_open = false;
+                m_wifi_modal_password.clear();
+                m_wifi_modal_error.clear();
+                mark_needs_paint();
+                return true;
+            }
+            if (event.keyboard.key == txui::Key::Enter) {
+                if (m_wifi_modal_password.empty()) {
+                    m_wifi_modal_error = "Password cannot be empty";
+                    mark_needs_paint();
+                } else {
+                    WifiManager::instance().connect(m_wifi_modal_ssid, m_wifi_modal_password);
+                    m_wifi_modal_open = false;
+                    m_wifi_modal_password.clear();
+                    m_wifi_modal_error.clear();
+                    mark_needs_paint();
+                }
+                return true;
+            }
+            if (event.keyboard.key == txui::Key::Backspace) {
+                if (!m_wifi_modal_password.empty()) {
+                    m_wifi_modal_password.pop_back();
+                    m_wifi_modal_error.clear();
+                    mark_needs_paint();
+                }
+                return true;
+            }
+            bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
+            char c = key_to_ascii(event.keyboard.key, shift);
+            if (c != 0) {
+                if (m_wifi_modal_password.size() < 64) {
+                    m_wifi_modal_password.push_back(c);
+                    m_wifi_modal_error.clear();
+                    mark_needs_paint();
+                }
+                return true;
+            }
+            return true; // Consume any other keys while modal is open
+        }
+
+        if (event.type == txui::EventType::PointerMove) {
+            double px = event.pointer.x;
+            double py = event.pointer.y;
+            bool cancel_h = m_wifi_modal_cancel_btn.contains(px, py);
+            bool conn_h   = m_wifi_modal_connect_btn.contains(px, py);
+            bool eye_h    = m_wifi_modal_eye_btn.contains(px, py);
+            if (cancel_h != m_wifi_modal_cancel_hovered ||
+                conn_h   != m_wifi_modal_connect_hovered ||
+                eye_h    != m_wifi_modal_eye_hovered) {
+                m_wifi_modal_cancel_hovered  = cancel_h;
+                m_wifi_modal_connect_hovered = conn_h;
+                m_wifi_modal_eye_hovered     = eye_h;
+                mark_needs_paint();
+            }
+            return true;
+        }
+
+        if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
+            double px = event.pointer.x;
+            double py = event.pointer.y;
+            if (m_wifi_modal_cancel_btn.contains(px, py)) {
+                m_wifi_modal_open = false;
+                m_wifi_modal_password.clear();
+                m_wifi_modal_error.clear();
+                mark_needs_paint();
+                return true;
+            }
+            if (m_wifi_modal_connect_btn.contains(px, py)) {
+                if (m_wifi_modal_password.empty()) {
+                    m_wifi_modal_error = "Password cannot be empty";
+                    mark_needs_paint();
+                } else {
+                    WifiManager::instance().connect(m_wifi_modal_ssid, m_wifi_modal_password);
+                    m_wifi_modal_open = false;
+                    m_wifi_modal_password.clear();
+                    m_wifi_modal_error.clear();
+                    mark_needs_paint();
+                }
+                return true;
+            }
+            if (m_wifi_modal_eye_btn.contains(px, py)) {
+                m_wifi_modal_show_password = !m_wifi_modal_show_password;
+                mark_needs_paint();
+                return true;
+            }
+            if (m_wifi_modal_input_rect.contains(px, py)) {
+                float64 rel_x = px - (m_wifi_modal_input_rect.x() + 12.0);
+                if (rel_x <= 0.0) {
+                    m_wifi_modal_cursor_pos = m_wifi_modal_scroll_offset;
+                } else {
+                    std::string visible_pw = m_wifi_modal_show_password ? m_wifi_modal_password : std::string(m_wifi_modal_password.size(), '*');
+                    if (m_wifi_modal_scroll_offset < visible_pw.size()) {
+                        visible_pw = visible_pw.substr(m_wifi_modal_scroll_offset);
+                    }
+                    size_t idx = 0;
+                    while (idx < visible_pw.size() && estimate_text_width(visible_pw.substr(0, idx + 1), 0.95, true) < rel_x) {
+                        idx++;
+                    }
+                    m_wifi_modal_cursor_pos = m_wifi_modal_scroll_offset + idx;
+                    if (m_wifi_modal_cursor_pos > m_wifi_modal_password.size()) {
+                        m_wifi_modal_cursor_pos = m_wifi_modal_password.size();
+                    }
+                }
+                mark_needs_paint();
+                return true;
+            }
+            // Clicking outside modal dialog dismisses it
+            if (!m_wifi_modal_rect.contains(px, py)) {
+                m_wifi_modal_open = false;
+                m_wifi_modal_password.clear();
+                m_wifi_modal_error.clear();
+                mark_needs_paint();
+                return true;
+            }
+            return true; // Click inside modal area but not on buttons
+        }
+        return true;
+    }
+
     if (event.type == txui::EventType::KeyDown) {
         if (event.keyboard.key == txui::Key::N1) {
             select_page(SettingsPage::Display);
@@ -514,6 +678,24 @@ bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
         if (new_hover != m_hovered_tab) {
             m_hovered_tab = new_hover;
             mark_needs_paint();
+        }
+
+        if (m_current_page == SettingsPage::Network) {
+            bool scan_h = m_wifi_scan_btn_rect.contains(px, py);
+            bool disc_h = m_wifi_disconnect_btn_rect.contains(px, py);
+            int net_h = -1;
+            for (size_t i = 0; i < m_network_item_rects.size(); ++i) {
+                if (m_network_item_rects[i].contains(px, py)) {
+                    net_h = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (scan_h != m_wifi_scan_hovered || disc_h != m_wifi_disconnect_hovered || net_h != m_hovered_network_idx) {
+                m_wifi_scan_hovered       = scan_h;
+                m_wifi_disconnect_hovered = disc_h;
+                m_hovered_network_idx     = net_h;
+                mark_needs_paint();
+            }
         }
 
         if (m_current_page == SettingsPage::PrivacySecurity) {
@@ -617,6 +799,62 @@ bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
                         save_config();
                         mark_needs_paint();
                         return true;
+                    }
+                }
+            }
+        }
+
+        // 3. Network Page (Wi-Fi interactive controls)
+        if (m_current_page == SettingsPage::Network) {
+            // Wi-Fi Master Toggle
+            if (m_wifi_toggle_rect.contains(px, py)) {
+                bool enabled = WifiManager::instance().is_wifi_enabled();
+                WifiManager::instance().set_wifi_enabled(!enabled);
+                mark_needs_paint();
+                return true;
+            }
+
+            // Wi-Fi Scan Button
+            if (m_wifi_scan_btn_rect.contains(px, py)) {
+                WifiManager::instance().trigger_scan();
+                mark_needs_paint();
+                return true;
+            }
+
+            // Disconnect Button
+            if (m_wifi_disconnect_btn_rect.contains(px, py)) {
+                WifiManager::instance().disconnect();
+                mark_needs_paint();
+                return true;
+            }
+
+            // Click on network item in the list
+            for (size_t i = 0; i < m_network_item_rects.size(); ++i) {
+                if (m_network_item_rects[i].contains(px, py)) {
+                    auto networks = WifiManager::instance().get_networks();
+                    if (i < networks.size()) {
+                        const auto& net = networks[i];
+                        if (net.is_connected) {
+                            return true; // Already connected
+                        }
+                        if (!net.is_secured) {
+                            // Open network: connect directly without password prompt
+                            WifiManager::instance().connect(net.ssid, "");
+                            mark_needs_paint();
+                            return true;
+                        } else {
+                            // Secured network: summon macOS-style password modal
+                            m_wifi_modal_open = true;
+                            m_wifi_modal_ssid = net.ssid;
+                            m_wifi_modal_password.clear();
+                            m_wifi_modal_show_password = false;
+                            m_wifi_modal_error.clear();
+                            m_wifi_modal_cancel_hovered = false;
+                            m_wifi_modal_connect_hovered = false;
+                            m_wifi_modal_eye_hovered = false;
+                            mark_needs_paint();
+                            return true;
+                        }
                     }
                 }
             }
@@ -783,6 +1021,11 @@ void SettingsWidget::paint_override(txui::Painter& painter) const noexcept {
         case SettingsPage::About:
             paint_about_page(painter, content_area);
             break;
+    }
+
+    // Modal overlay on top of active page
+    if (m_wifi_modal_open) {
+        paint_wifi_modal(painter);
     }
 }
 
@@ -1118,43 +1361,313 @@ void SettingsWidget::paint_personalization_page(txui::Painter& p, const txui::Re
     }
 }
 
-// ── 3. Page: Network ─────────────────────────────────────────────────────────
+// ── 3. Page: Network (macOS Tahoe/Sonoma Style Wi-Fi & Adapters) ─────────────
 void SettingsWidget::paint_network_page(txui::Painter& p, const txui::Rect& area) const noexcept {
+    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
+    const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
+
     draw_page_header(p, area, "Network",
-                     "Network adapters, live link states, and IP configuration",
+                     "Wi-Fi networks, live signal quality, adapter states, and IP routing",
                      SettingsPage::Network);
 
-    float64 cx = area.x();
-    float64 cw = area.width();
+    float64 cw = std::min(area.width() - 40.0, 760.0);
+    float64 cx = area.x() + (area.width() - cw) * 0.5;
     float64 y1 = area.y() + 94.0;
 
-    for (size_t i = 0; i < m_network_ifaces.size() && i < 3; ++i) {
-        const auto& iface = m_network_ifaces[i];
-        float64 iy = y1 + static_cast<double>(i) * 112.0;
-        draw_card(p, txui::Rect(cx, iy, cw, 98.0));
+    auto& wm = WifiManager::instance();
+    bool wifi_on = wm.is_wifi_enabled();
+    std::string conn_ssid = wm.get_connected_ssid();
+    std::string ip_addr = wm.get_ip_address();
+    std::string status_msg = wm.get_status_message();
+    bool is_connecting = wm.is_connecting();
+    std::string connecting_ssid = wm.get_connecting_ssid();
+    bool is_scanning = wm.is_scanning();
 
-        bool is_up = (iface.state == "up");
-        p.fill_circle(txui::Point(cx + 24.0, iy + 26.0), 5.0,
-                      is_up ? txui::Color(72, 205, 120, 255) : txui::Color(140, 140, 160, 200));
-        p.draw_text(txui::Point(cx + 36.0, iy + 18.0), iface.name, TXT_PRI, 1.1, true);
+    // ── Card 1: Master Wi-Fi Switch Card ──────────────────────────────────────
+    float64 card1_h = 76.0;
+    draw_card(p, txui::Rect(cx, y1, cw, card1_h));
 
-        draw_badge_pill(p, cx + cw - 95.0, iy + 18.0,
-                        is_up ? "Connected" : "Inactive",
-                        is_up ? SUCCESS_BG : txui::Color(36, 36, 48, 200),
-                        is_up ? SUCCESS_TXT : TXT_SEC);
+    // Wi-Fi Icon Badge
+    p.fill_circle(txui::Point(cx + 32.0, y1 + 38.0), 16.0, wifi_on ? active_accent : txui::Color(44, 44, 58, 255));
+    draw_wifi_signal_bars(p, cx + 21.0, y1 + 30.0, wifi_on ? 4 : 1, txui::Color(255, 255, 255, 255));
 
-        std::string ip_str = "IPv4 Address: " + iface.ip4_addr;
-        p.draw_text(txui::Point(cx + 36.0, iy + 48.0), ip_str, TXT_SEC, 0.88);
+    p.draw_text(txui::Point(cx + 60.0, y1 + 20.0), "Wi-Fi", TXT_PRI, 1.15, true);
+    std::string wifi_subtitle;
+    if (!wifi_on) {
+        wifi_subtitle = "Wi-Fi is turned off";
+    } else if (!conn_ssid.empty()) {
+        wifi_subtitle = "Connected to \"" + conn_ssid + "\" (" + (ip_addr.empty() ? "Obtaining IP..." : ip_addr) + ")";
+    } else if (is_connecting) {
+        wifi_subtitle = "Connecting to \"" + connecting_ssid + "\"...";
+    } else {
+        wifi_subtitle = "Not Connected — Choose a network below";
+    }
+    p.draw_text(txui::Point(cx + 60.0, y1 + 46.0), wifi_subtitle, wifi_on ? TXT_SEC : TXT_DIM, 0.88);
 
-        std::string stats_str = "Traffic: RX " + std::to_string(iface.rx_mb) + " MB  •  TX " + std::to_string(iface.tx_mb) + " MB";
-        p.draw_text(txui::Point(cx + 36.0, iy + 70.0), stats_str, TXT_DIM, 0.82);
+    // Refresh / Scan Button (if Wi-Fi is ON)
+    if (wifi_on) {
+        float64 scan_w = 80.0;
+        float64 scan_x = cx + cw - 60.0 - scan_w - 16.0;
+        float64 scan_y = y1 + 24.0;
+        m_wifi_scan_btn_rect = txui::Rect(scan_x, scan_y, scan_w, 28.0);
+        txui::Color scan_bg = m_wifi_scan_hovered ? txui::Color(55, 55, 75, 255) : txui::Color(38, 38, 52, 220);
+        p.fill_rounded_rect(m_wifi_scan_btn_rect, 6.0, scan_bg);
+        std::string scan_label = is_scanning ? "Scanning..." : "Scan";
+        float64 slw = estimate_text_width(scan_label, 0.82, true);
+        p.draw_text(txui::Point(scan_x + (scan_w - slw) * 0.5, scan_y + 7.0),
+                    scan_label, is_scanning ? active_accent : TXT_PRI, 0.82, true);
+    } else {
+        m_wifi_scan_btn_rect = txui::Rect(0, 0, 0, 0);
     }
 
-    float64 y_dns = y1 + static_cast<double>(std::min(size_t(3), m_network_ifaces.size())) * 112.0 + 8.0;
-    draw_card(p, txui::Rect(cx, y_dns, cw, 104.0));
-    p.draw_text(txui::Point(cx + 20.0, y_dns + 20.0), "DNS & Platform Networking Policy", TXT_PRI, 1.05, true);
-    p.draw_text(txui::Point(cx + 20.0, y_dns + 48.0), "Resolver: udhcpc (minimal DHCP client, manages /etc/resolv.conf)", TXT_SEC, 0.88);
-    p.draw_text(txui::Point(cx + 20.0, y_dns + 72.0), "Daemons Policy: Strict offline-first — no external network calls from core services", TXT_DIM, 0.82);
+    // Toggle Switch on far right
+    float64 toggle_x = cx + cw - 56.0;
+    float64 toggle_y = y1 + 27.0;
+    m_wifi_toggle_rect = txui::Rect(toggle_x - 4.0, toggle_y - 4.0, 48.0, 30.0);
+    draw_toggle(p, toggle_x, toggle_y, wifi_on, active_accent);
+
+    // ── Card 2: Connected Network Details (if connected & Wi-Fi ON) ───────────
+    float64 current_y = y1 + card1_h + 16.0;
+    if (wifi_on && !conn_ssid.empty()) {
+        float64 card_conn_h = 104.0;
+        draw_card(p, txui::Rect(cx, current_y, cw, card_conn_h));
+
+        // Row 1: Green active badge + SSID on left, Disconnect button on right
+        draw_badge_pill(p, cx + 20.0, current_y + 18.0, "Connected", SUCCESS_BG, SUCCESS_TXT, 0.80);
+        p.draw_text(txui::Point(cx + 120.0, current_y + 18.0), conn_ssid, TXT_PRI, 1.1, true);
+
+        // Disconnect button on right
+        float64 disc_w = 92.0;
+        float64 disc_x = cx + cw - 20.0 - disc_w;
+        float64 disc_y = current_y + 16.0;
+        m_wifi_disconnect_btn_rect = txui::Rect(disc_x, disc_y, disc_w, 28.0);
+        txui::Color disc_bg = m_wifi_disconnect_hovered ? DANGER_BG : txui::Color(44, 44, 58, 220);
+        p.fill_rounded_rect(m_wifi_disconnect_btn_rect, 6.0, disc_bg);
+        p.draw_text(txui::Point(disc_x + 14.0, disc_y + 7.0), "Disconnect",
+                    m_wifi_disconnect_hovered ? DANGER_TXT : TXT_SEC, 0.82, true);
+
+        p.fill_rect(txui::Rect(cx + 20.0, current_y + 54.0, cw - 40.0, 1.0), DIVIDER);
+
+        // Row 2: Left: IP Address & Interface | Right: Security label & Signal meter
+        std::string active_iface = wm.get_active_interface();
+        std::string ip_label = "IP Address: " + (ip_addr.empty() ? "Configuring..." : ip_addr) + "   •   Interface: " + (active_iface.empty() ? "Wi-Fi" : active_iface);
+        p.draw_text(txui::Point(cx + 20.0, current_y + 68.0), ip_label, TXT_SEC, 0.84);
+
+        float64 sig_x = cx + cw - 40.0;
+        int conn_bars = wm.get_connected_signal_bars();
+        if (conn_bars == 0) conn_bars = 4;
+        draw_wifi_signal_bars(p, sig_x, current_y + 68.0, conn_bars, SUCCESS_TXT);
+
+        std::string sec_label = "WPA2/WPA3";
+        float64 sec_w = estimate_text_width(sec_label, 0.80, false);
+        p.draw_text(txui::Point(sig_x - sec_w - 12.0, current_y + 68.0), sec_label, TXT_DIM, 0.80);
+
+        current_y += card_conn_h + 16.0;
+    } else {
+        m_wifi_disconnect_btn_rect = txui::Rect(0, 0, 0, 0);
+    }
+
+    // ── Card 3: Available Networks List (if Wi-Fi ON) ─────────────────────────
+    if (wifi_on) {
+        auto networks = wm.get_networks();
+        float64 item_h = 46.0;
+        size_t max_visible = std::min(size_t(6), networks.size());
+        float64 list_header_h = 42.0;
+        float64 card_list_h = list_header_h + (max_visible > 0 ? (static_cast<double>(max_visible) * item_h) : 52.0) + 12.0;
+
+        draw_card(p, txui::Rect(cx, current_y, cw, card_list_h));
+
+        // Header label
+        p.draw_text(txui::Point(cx + 20.0, current_y + 16.0), "Known & Available Networks", TXT_PRI, 0.95, true);
+        std::string count_str = std::to_string(networks.size()) + " networks detected";
+        p.draw_text(txui::Point(cx + 230.0, current_y + 18.0), count_str, TXT_DIM, 0.80);
+
+        p.fill_rect(txui::Rect(cx + 20.0, current_y + list_header_h, cw - 40.0, 1.0), DIVIDER);
+
+        m_network_item_rects.clear();
+        float64 ny = current_y + list_header_h + 6.0;
+
+        if (networks.empty()) {
+            std::string empty_msg = is_scanning ? "Scanning for available wireless networks..." : "No networks detected in range. Click 'Scan' above.";
+            p.draw_text(txui::Point(cx + 20.0, ny + 14.0), empty_msg, TXT_DIM, 0.88);
+        } else {
+            for (size_t i = 0; i < max_visible; ++i) {
+                const auto& net = networks[i];
+                txui::Rect item_rect(cx + 8.0, ny, cw - 16.0, item_h);
+                m_network_item_rects.push_back(item_rect);
+
+                bool hovered = (m_hovered_network_idx == static_cast<int>(i));
+                if (hovered) {
+                    p.fill_rounded_rect(item_rect, 7.0, txui::Color(44, 44, 62, 160));
+                }
+
+                // 1. Signal Bars (1..4 bars based on RSSI!)
+                draw_wifi_signal_bars(p, cx + 22.0, ny + 14.0, net.signal_bars,
+                                      net.is_connected ? SUCCESS_TXT : TXT_PRI);
+
+                // 2. Network SSID
+                p.draw_text(txui::Point(cx + 52.0, ny + 14.0), net.ssid,
+                            net.is_connected ? SUCCESS_TXT : TXT_PRI, 0.96, net.is_connected);
+
+                // 3. Band badge (2.4 GHz vs 5 GHz)
+                std::string band_str = (net.frequency_mhz >= 5000) ? "5 GHz" : "2.4 GHz";
+                float64 band_x = cx + cw - 195.0;
+                draw_badge_pill(p, band_x, ny + 13.0, band_str, txui::Color(32, 32, 44, 200), TXT_DIM, 0.72);
+
+                // 4. Security Lock Icon (aligned in column before band badge)
+                if (net.is_secured) {
+                    draw_lock_icon(p, band_x - 22.0, ny + 17.0, TXT_DIM);
+                }
+
+                // 5. Status / Action on Right
+                if (net.is_connected) {
+                    draw_badge_pill(p, cx + cw - 105.0, ny + 13.0, "Connected", SUCCESS_BG, SUCCESS_TXT, 0.78);
+                } else if (is_connecting && connecting_ssid == net.ssid) {
+                    draw_badge_pill(p, cx + cw - 115.0, ny + 13.0, "Connecting...", WARNING_BG, WARNING_TXT, 0.78);
+                } else {
+                    float64 btn_w = 72.0;
+                    float64 btn_h = 24.0;
+                    float64 btn_x = cx + cw - 18.0 - btn_w;
+                    float64 btn_y = ny + 11.0;
+                    txui::Color btn_bg = hovered ? active_accent : txui::Color(44, 44, 58, 180);
+                    p.fill_rounded_rect(txui::Rect(btn_x, btn_y, btn_w, btn_h), 5.0, btn_bg);
+                    float64 clw = estimate_text_width("Connect", 0.78, true);
+                    p.draw_text(txui::Point(btn_x + (btn_w - clw) * 0.5, btn_y + 4.0), "Connect",
+                                hovered ? txui::Color(255, 255, 255, 255) : TXT_SEC, 0.78, true);
+                }
+
+                ny += item_h;
+            }
+        }
+
+        current_y += card_list_h + 16.0;
+    } else {
+        m_network_item_rects.clear();
+    }
+
+    // ── Card 4: Hardware Interfaces & Ethernet (Physical Adapters) ────────────
+    float64 iface_card_h = 92.0;
+    draw_card(p, txui::Rect(cx, current_y, cw, iface_card_h));
+    p.draw_text(txui::Point(cx + 20.0, current_y + 16.0), "Physical Network Adapters", TXT_PRI, 0.95, true);
+
+    std::string ifaces_summary = "Active adapters: ";
+    if (m_network_ifaces.empty()) {
+        ifaces_summary += "None detected";
+    } else {
+        for (size_t i = 0; i < m_network_ifaces.size(); ++i) {
+            bool is_wifi = (m_network_ifaces[i].name.rfind("wl", 0) == 0);
+            std::string state_info = m_network_ifaces[i].ip4_addr.empty() ? m_network_ifaces[i].state : m_network_ifaces[i].ip4_addr;
+            ifaces_summary += std::string(is_wifi ? "[Wi-Fi] " : "[Ethernet] ") + m_network_ifaces[i].name + " (" + state_info + ")";
+            if (i + 1 < m_network_ifaces.size()) ifaces_summary += "  •  ";
+        }
+    }
+    p.draw_text(txui::Point(cx + 20.0, current_y + 44.0), ifaces_summary, TXT_SEC, 0.88);
+    p.draw_text(txui::Point(cx + 20.0, current_y + 68.0), "DNS Resolver: udhcpc active  •  Core daemons: strict offline-first boundary", TXT_DIM, 0.80);
+}
+
+// ── macOS-Style Wi-Fi Password Connect Modal Dialog ──────────────────────────
+void SettingsWidget::paint_wifi_modal(txui::Painter& p) const noexcept {
+    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
+    const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
+
+    // 1. Semi-transparent backdrop scrim over the whole window
+    p.fill_rect(frame(), txui::Color(0, 0, 0, 175));
+
+    // 2. Centered Modal Card (width 450, height 260)
+    float64 mw = 450.0;
+    float64 mh = 260.0;
+    float64 mx = frame().x() + (frame().width() - mw) * 0.5;
+    float64 my = frame().y() + (frame().height() - mh) * 0.5;
+    m_wifi_modal_rect = txui::Rect(mx, my, mw, mh);
+
+    // Outer subtle border
+    p.fill_rounded_rect(txui::Rect(mx - 1.0, my - 1.0, mw + 2.0, mh + 2.0), 13.0, txui::Color(65, 65, 90, 200));
+    p.fill_gradient_rounded_rect(m_wifi_modal_rect, 12.0, txui::Color(32, 32, 46, 255), txui::Color(22, 22, 32, 255));
+
+    // Lock Icon Badge (40x40) with icon centered at (40-14)/2 = 13.0
+    float64 icon_x = mx + 24.0;
+    float64 icon_y = my + 24.0;
+    p.fill_rounded_rect(txui::Rect(icon_x, icon_y, 40.0, 40.0), 9.0, active_accent);
+    draw_lock_icon(p, icon_x + 13.0, icon_y + 13.0, txui::Color(255, 255, 255, 255));
+
+    // Modal Title & Subtitle
+    std::string title_text = "Join \"" + m_wifi_modal_ssid + "\"";
+    p.draw_text(txui::Point(mx + 76.0, my + 24.0), title_text, TXT_PRI, 1.15, true);
+    p.draw_text(txui::Point(mx + 76.0, my + 50.0), "Enter the WPA2/WPA3 password for this network.", TXT_SEC, 0.85);
+
+    // Password Input Field
+    float64 fx = mx + 24.0;
+    float64 fy = my + 92.0;
+    float64 fw = mw - 48.0;
+    float64 fh = 36.0;
+    m_wifi_modal_input_rect = txui::Rect(fx, fy, fw, fh);
+
+    // Outer focus glow (active accent)
+    p.fill_rounded_rect(txui::Rect(fx - 1.0, fy - 1.0, fw + 2.0, fh + 2.0), 7.0, active_accent);
+    p.fill_rounded_rect(txui::Rect(fx, fy, fw, fh), 6.0, txui::Color(18, 18, 26, 255));
+
+    // Render password characters (either bullets or visible) with horizontal scrolling
+    float64 eye_w = 64.0;
+    float64 max_text_w = fw - eye_w - 24.0;
+
+    std::string display_pw;
+    if (m_wifi_modal_show_password) {
+        display_pw = m_wifi_modal_password;
+    } else {
+        display_pw = std::string(m_wifi_modal_password.size(), '*');
+    }
+
+    size_t scroll_offset = 0;
+    std::string visible_pw = display_pw;
+    while (!visible_pw.empty() && estimate_text_width(visible_pw, 0.95, true) > max_text_w) {
+        visible_pw.erase(0, 1);
+        scroll_offset++;
+    }
+    m_wifi_modal_scroll_offset = scroll_offset;
+
+    if (display_pw.empty()) {
+        p.draw_text(txui::Point(fx + 12.0, fy + 9.0), "Password", TXT_DIM, 0.95);
+        p.fill_rect(txui::Rect(fx + 14.0, fy + 8.0, 1.5, 20.0), active_accent);
+    } else {
+        p.draw_text(txui::Point(fx + 12.0, fy + 9.0), visible_pw, TXT_PRI, 0.95, true);
+        float64 cursor_x = fx + 12.0 + estimate_text_width(visible_pw, 0.95, true);
+        p.fill_rect(txui::Rect(cursor_x + 2.0, fy + 8.0, 1.5, 20.0), active_accent);
+    }
+
+    // Show Password toggle button on right of field
+    float64 eye_x = fx + fw - eye_w - 6.0;
+    float64 eye_y = fy + 6.0;
+    m_wifi_modal_eye_btn = txui::Rect(eye_x, eye_y, eye_w, 24.0);
+    p.fill_rounded_rect(m_wifi_modal_eye_btn, 4.0, m_wifi_modal_eye_hovered ? txui::Color(45, 45, 60, 220) : txui::Color(30, 30, 42, 200));
+    std::string eye_label = m_wifi_modal_show_password ? "Hide" : "Show";
+    p.draw_text(txui::Point(eye_x + 16.0, eye_y + 5.0), eye_label, TXT_SEC, 0.78, true);
+
+    // Error message (if any)
+    if (!m_wifi_modal_error.empty()) {
+        p.draw_text(txui::Point(fx, fy + 44.0), m_wifi_modal_error, DANGER_TXT, 0.82);
+    }
+
+    // Action Buttons at bottom
+    float64 btn_h = 32.0;
+    float64 btn_w = 96.0;
+    float64 btn_y = my + mh - btn_h - 20.0;
+
+    // Cancel Button
+    float64 cancel_x = mx + mw - 24.0 - (btn_w * 2.0 + 12.0);
+    m_wifi_modal_cancel_btn = txui::Rect(cancel_x, btn_y, btn_w, btn_h);
+    txui::Color cancel_bg = m_wifi_modal_cancel_hovered ? txui::Color(55, 55, 75, 255) : txui::Color(44, 44, 58, 220);
+    p.fill_rounded_rect(m_wifi_modal_cancel_btn, 6.0, cancel_bg);
+    p.draw_text(txui::Point(cancel_x + 26.0, btn_y + 8.0), "Cancel", TXT_PRI, 0.88, true);
+
+    // Connect Button
+    float64 conn_x = mx + mw - 24.0 - btn_w;
+    m_wifi_modal_connect_btn = txui::Rect(conn_x, btn_y, btn_w, btn_h);
+    bool can_connect = !m_wifi_modal_password.empty();
+    txui::Color conn_bg = can_connect ? (m_wifi_modal_connect_hovered ? txui::Color(active_accent.r(), active_accent.g(), active_accent.b(), 220) : active_accent)
+                                      : txui::Color(44, 44, 58, 140);
+    p.fill_rounded_rect(m_wifi_modal_connect_btn, 6.0, conn_bg);
+    p.draw_text(txui::Point(conn_x + 22.0, btn_y + 8.0), "Connect",
+                can_connect ? txui::Color(255, 255, 255, 255) : TXT_DIM, 0.88, true);
 }
 
 // ── 4. Page: System & Power ──────────────────────────────────────────────────

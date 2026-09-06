@@ -27,6 +27,7 @@ class SettingsWidget : public txui::Widget {
 public:
     SettingsWidget();
     void select_page(SettingsPage page);
+    void open_wifi_password_modal(const std::string& ssid);
     bool handle_event(const txui::Event& event) noexcept override;
 
 protected:
@@ -71,9 +72,41 @@ private:
     bool m_clipboard_enabled{true};
     int  m_clipboard_history_size{50};
 
-    // ── Network (live /sys reads, no popen) ───────────────────────────────
+    // ── Network & Wi-Fi Subsystem ─────────────────────────────────────────
     std::vector<NetworkIface> m_network_ifaces;
     void scan_network_ifaces();
+
+    // Wi-Fi Interactive state
+    int  m_hovered_network_idx{-1};
+    bool m_wifi_scan_hovered{false};
+    bool m_wifi_disconnect_hovered{false};
+
+    // Wi-Fi Password Modal state
+    bool        m_wifi_modal_open{false};
+    std::string m_wifi_modal_ssid;
+    std::string m_wifi_modal_password;
+    bool        m_wifi_modal_show_password{false};
+    std::string m_wifi_modal_error;
+    bool        m_wifi_modal_connect_hovered{false};
+    bool        m_wifi_modal_cancel_hovered{false};
+    bool        m_wifi_modal_eye_hovered{false};
+
+    mutable txui::Rect m_wifi_toggle_rect;
+    mutable txui::Rect m_wifi_scan_btn_rect;
+    mutable txui::Rect m_wifi_disconnect_btn_rect;
+    mutable std::vector<txui::Rect> m_network_item_rects;
+
+    mutable txui::Rect m_wifi_modal_rect;
+    mutable txui::Rect m_wifi_modal_input_rect;
+    mutable txui::Rect m_wifi_modal_connect_btn;
+    mutable txui::Rect m_wifi_modal_cancel_btn;
+    mutable txui::Rect m_wifi_modal_eye_btn;
+    mutable size_t     m_wifi_modal_scroll_offset{0};
+    size_t             m_wifi_modal_cursor_pos{0};
+
+    void paint_wifi_modal(txui::Painter& p) const noexcept;
+    void draw_wifi_signal_bars(txui::Painter& p, txui::float64 x, txui::float64 y, int bars, const txui::Color& active_col) const noexcept;
+    void draw_lock_icon(txui::Painter& p, txui::float64 x, txui::float64 y, const txui::Color& col) const noexcept;
 
     // ── Privacy/Security ──────────────────────────────────────────────────
     struct UnverifiedApp {

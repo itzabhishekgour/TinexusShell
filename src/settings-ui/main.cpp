@@ -54,7 +54,7 @@ int main(int /*argc*/, char** /*argv*/) {
         }
 
         window->present();
-        window->wait();
+        window->wait_timeout(200);
     }
 
     tinexus::log::info("[settings-ui] Exiting.");

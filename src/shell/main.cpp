@@ -20,6 +20,7 @@
 #include <txui/theme/Theme.hpp>
 #include <txui/render/WaylandRenderTarget.hpp>
 #include <common/logger.hpp>
+#include <common/NetUtils.hpp>
 #include <indexer/desktop_entry.hpp>
 #include <unistd.h>
 #include <sys/reboot.h>
@@ -38,6 +39,12 @@
 #include <sys/un.h>
 #include <thread>
 #include <atomic>
+#include <fstream>
+#include <cstring>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/stat.h>
 
 using namespace tinexus;
 namespace fs = std::filesystem;
@@ -325,49 +332,146 @@ static double read_battery_percent() {
     return -1.0; // no battery (VM/desktop)
 }
 
-// Returns 0-3: number of WiFi signal bars (0=no signal/no WiFi, 1-3=strength)
-static int read_wifi_bars() {
-    FILE* f = fopen("/proc/net/wireless", "r");
-    if (!f) return 0;
-    char line[256];
+// Returns 0-4 signal bars and real connection state from dynamic wireless / ethernet
+static void read_network_status(int& out_bars, bool& out_connected) {
+    static int s_cached_bars = 0;
+    static bool s_cached_conn = false;
+    static auto s_last_check = std::chrono::steady_clock::time_point{};
+
+    auto now = std::chrono::steady_clock::now();
+    if (s_last_check.time_since_epoch().count() != 0 &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_check).count() < 1200) {
+        out_bars = s_cached_bars;
+        out_connected = s_cached_conn;
+        return;
+    }
+    s_last_check = now;
+
     int bars = 0;
-    while (fgets(line, sizeof(line), f)) {
-        // Lines starting with interface name (not header lines)
-        if (strchr(line, ':') == nullptr) continue;
-        float link = 0.0f;
-        // Format: iface: status link level noise ...
-        char iface[32];
-        int status = 0;
-        if (sscanf(line, " %31[^:]: %d %f", iface, &status, &link) >= 3) {
-            // link is 0-70 typically
-            if      (link >= 50.0f) bars = 3;
-            else if (link >= 25.0f) bars = 2;
-            else if (link >  0.0f)  bars = 1;
-            else                    bars = 0;
-            break;
+    bool connected = false;
+
+    // 1. Check wired Ethernet interfaces for carrier/operstate UP
+    try {
+        if (fs::exists("/sys/class/net")) {
+            for (const auto& entry : fs::directory_iterator("/sys/class/net")) {
+                std::string ifname = entry.path().filename().string();
+                if (ifname == "lo" || ifname.rfind("wlan", 0) == 0 || ifname.rfind("wlo", 0) == 0 || ifname.rfind("wlp", 0) == 0) continue;
+                std::ifstream op(entry.path() / "operstate");
+                std::string st;
+                if (op >> st && st == "up") {
+                    connected = true;
+                    bars = 4;
+                    s_cached_bars = bars;
+                    s_cached_conn = connected;
+                    out_bars = bars;
+                    out_connected = connected;
+                    return;
+                }
+            }
+        }
+    } catch (...) {}
+
+    // 2. Primary Ground Truth: dynamically probe for Wi-Fi interface and check wpa_supplicant socket
+    auto wifi_res = tinexus::net::probe_primary_wifi_interface("/sys/class/net", "/sys/class/rfkill", 0);
+    std::string wifi_iface = wifi_res.iface_name;
+
+    if (!wifi_iface.empty()) {
+        std::string sock_path = "/var/run/wpa_supplicant/" + wifi_iface;
+        if (fs::exists(sock_path)) {
+            int sock = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+            if (sock >= 0) {
+                struct sockaddr_un local;
+                memset(&local, 0, sizeof(local));
+                local.sun_family = AF_UNIX;
+                static std::atomic<uint32_t> s_cnt{0};
+                snprintf(local.sun_path, sizeof(local.sun_path), "/tmp/aura_wpa_%d_%u", getpid(), s_cnt.fetch_add(1));
+                unlink(local.sun_path);
+
+                if (bind(sock, reinterpret_cast<struct sockaddr*>(&local), sizeof(local)) == 0) {
+                    chmod(local.sun_path, 0700);
+
+                    struct sockaddr_un remote;
+                    memset(&remote, 0, sizeof(remote));
+                    remote.sun_family = AF_UNIX;
+                    strncpy(remote.sun_path, sock_path.c_str(), sizeof(remote.sun_path) - 1);
+
+                    if (connect(sock, reinterpret_cast<struct sockaddr*>(&remote), sizeof(remote)) == 0) {
+                        struct timeval tv{0, 200000}; // 200ms timeout
+                        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+                        const char* cmd = "STATUS";
+                        send(sock, cmd, strlen(cmd), 0);
+                        char buf[2048];
+                        ssize_t n = recv(sock, buf, sizeof(buf) - 1, 0);
+                        if (n > 0) {
+                            buf[n] = '\0';
+                            if (strstr(buf, "wpa_state=COMPLETED") != nullptr) {
+                                connected = true;
+                                bars = 4; // default strong
+
+                                const char* pcmd = "SIGNAL_POLL";
+                                send(sock, pcmd, strlen(pcmd), 0);
+                                ssize_t pn = recv(sock, buf, sizeof(buf) - 1, 0);
+                                if (pn > 0) {
+                                    buf[pn] = '\0';
+                                    char* rptr = strstr(buf, "RSSI=");
+                                    if (rptr) {
+                                        int rssi = std::atoi(rptr + 5);
+                                        if (rssi >= -55)      bars = 4;
+                                        else if (rssi >= -67) bars = 3;
+                                        else if (rssi >= -80) bars = 2;
+                                        else                  bars = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                close(sock);
+                unlink(local.sun_path);
+            }
         }
     }
-    fclose(f);
-    return bars;
-}
 
-// Returns true if any wired/wireless network interface is UP (excluding lo)
-static bool read_network_connected() {
-    FILE* f = fopen("/proc/net/if_inet6", "r");
-    if (!f) f = fopen("/proc/net/fib_trie", "r"); // fallback
-    // Simpler: check /sys/class/net/*/operstate
-    if (f) { fclose(f); }
-    // Check /proc/net/dev for non-loopback interfaces with traffic
-    FILE* dev = fopen("/proc/net/dev", "r");
-    if (!dev) return false;
-    char line[256];
-    bool connected = false;
-    while (fgets(line, sizeof(line), dev)) {
-        if (strstr(line, "lo:") || strstr(line, "Inter-") || strstr(line, "face")) continue;
-        if (strchr(line, ':')) { connected = true; break; }
+    // 3. Fast-Path Fallback: Check if active Wi-Fi holds an active, assigned non-loopback IPv4 address
+    if (!connected && !wifi_iface.empty()) {
+        struct ifaddrs* ifaddr = nullptr;
+        if (getifaddrs(&ifaddr) == 0 && ifaddr != nullptr) {
+            for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+                if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+                std::string ifname = ifa->ifa_name ? ifa->ifa_name : "";
+                if (ifname == wifi_iface) {
+                    auto* sa = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
+                    uint32_t ip = ntohl(sa->sin_addr.s_addr);
+                    // Ensure not 127.0.0.1 (0x7F000001) or 0.0.0.0
+                    if (ip != 0 && (ip & 0xFF000000) != 0x7F000000) {
+                        connected = true;
+                        bars = 4;
+                        break;
+                    }
+                }
+            }
+            freeifaddrs(ifaddr);
+        }
     }
-    fclose(dev);
-    return connected;
+
+    // 4. Secondary Fallback: check operstate / carrier of detected Wi-Fi interface
+    if (!connected && !wifi_iface.empty()) {
+        std::string op_path = "/sys/class/net/" + wifi_iface + "/operstate";
+        if (fs::exists(op_path)) {
+            std::ifstream op(op_path);
+            std::string st;
+            if (op >> st && st == "up") {
+                connected = true;
+                bars = 3;
+            }
+        }
+    }
+
+    s_cached_bars = bars;
+    s_cached_conn = connected;
+    out_bars = bars;
+    out_connected = connected;
 }
 
 namespace pulse_ui {
@@ -423,14 +527,16 @@ public:
         strftime(ts, sizeof(ts), "%H:%M", &tb);
         painter.draw_text({f.x() + PAD_H, cy - 7.5}, ts, TXT_PRI, 15);
 
-        // WiFi bars — real signal from /proc/net/wireless
-        double wx = f.x() + PAD_H + 54.0;
-        int wifi_bars = read_wifi_bars();
-        bool has_net  = (wifi_bars > 0) || read_network_connected();
-        for (int b = 0; b < 3; ++b) {
-            double bh = 6.0 + static_cast<double>(b) * 3.0;
+        // WiFi bars — real signal from wlan0 / ethernet
+        double wx = f.x() + PAD_H + 52.0;
+        int wifi_bars = 0;
+        bool has_net = false;
+        read_network_status(wifi_bars, has_net);
+
+        for (int b = 0; b < 4; ++b) {
+            double bh = 4.5 + static_cast<double>(b) * 3.5;
             // Light bar if signal reaches this level, dim otherwise
-            txui::Color bc = (b < wifi_bars || (b == 0 && has_net))
+            txui::Color bc = (has_net && b < wifi_bars)
                               ? WIFI_COL : WIFI_DIM;
             painter.fill_rounded_rect(
                 {wx + static_cast<double>(b) * 5.0, cy - bh / 2.0, 3.0, bh},

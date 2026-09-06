@@ -3,6 +3,7 @@ add_library(tinexus_common SHARED
     string_interner.cpp
     peer_credentials.cpp
     dbus_power.cpp
+    NetUtils.cpp
 )
 
 target_include_directories(tinexus_common PUBLIC
