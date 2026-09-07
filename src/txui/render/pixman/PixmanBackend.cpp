@@ -905,12 +905,50 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                     double half_w = cmd.thickness * 0.5;
                     rasterize_solid_rect(target, Rect(x1, cmd.p1.y - half_w, x2 - x1, cmd.thickness), cmd.color, current_clip);
                 } else {
-                    // Fallback to bounding box for arbitrary lines (only axis-aligned are fully supported in MVP)
-                    double x1 = std::min(cmd.p1.x, cmd.p2.x);
-                    double x2 = std::max(cmd.p1.x, cmd.p2.x);
-                    double y1 = std::min(cmd.p1.y, cmd.p2.y);
-                    double y2 = std::max(cmd.p1.y, cmd.p2.y);
-                    rasterize_solid_rect(target, Rect(x1, y1, x2 - x1, y2 - y1), cmd.color, current_clip);
+                    // Proper arbitrary line drawing using Bresenham algorithm with thickness and alpha blending
+                    int x0 = static_cast<int>(std::round(cmd.p1.x));
+                    int y0 = static_cast<int>(std::round(cmd.p1.y));
+                    int x1 = static_cast<int>(std::round(cmd.p2.x));
+                    int y1 = static_cast<int>(std::round(cmd.p2.y));
+
+                    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+                    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+                    int err = dx + dy, e2;
+
+                    int rad = static_cast<int>(std::max(0.0, std::round(cmd.thickness * 0.5 - 0.5)));
+                    const int tw = static_cast<int>(target.width());
+                    const int th = static_cast<int>(target.height());
+                    uint32* buf = target.data();
+                    const uint32 src = cmd.color.to_argb32_premultiplied();
+                    const uint32 sa = (src >> 24) & 0xFF;
+                    const uint32 inv_sa = 255 - sa;
+
+                    while (true) {
+                        for (int rx = -rad; rx <= rad; ++rx) {
+                            for (int ry = -rad; ry <= rad; ++ry) {
+                                int px = x0 + rx, py = y0 + ry;
+                                if (px >= current_clip.left() && px < current_clip.right() &&
+                                    py >= current_clip.top() && py < current_clip.bottom() &&
+                                    px >= 0 && px < tw && py >= 0 && py < th) {
+                                    if (sa == 255) {
+                                        buf[py * tw + px] = src;
+                                    } else if (sa > 0) {
+                                        uint32 dst = buf[py * tw + px];
+                                        uint32 da = (dst >> 24) & 0xFF;
+                                        uint32 r = ((src >> 16) & 0xFF) + (((dst >> 16) & 0xFF) * inv_sa + 127) / 255;
+                                        uint32 g = ((src >> 8) & 0xFF) + (((dst >> 8) & 0xFF) * inv_sa + 127) / 255;
+                                        uint32 b = (src & 0xFF) + ((dst & 0xFF) * inv_sa + 127) / 255;
+                                        uint32 a = sa + ((da * inv_sa + 127) / 255);
+                                        buf[py * tw + px] = (a << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+                                    }
+                                }
+                            }
+                        }
+                        if (x0 == x1 && y0 == y1) break;
+                        e2 = 2 * err;
+                        if (e2 >= dy) { err += dy; x0 += sx; }
+                        if (e2 <= dx) { err += dx; y0 += sy; }
+                    }
                 }
             } else if constexpr (::std::is_same_v<T, DrawImageCommand>) {
                 rasterize_image(target, cmd.rect, cmd.pixels, cmd.width, cmd.height, current_clip);

@@ -174,7 +174,8 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
                     const int32_t side_margin = static_cast<int32_t>((1920 - static_cast<int32_t>(width)) / 2);
-                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, 12, side_margin, 0, side_margin);
+                    const int32_t top_margin = (win->m_title == "Aura" || win->m_title == "TopBar" || win->m_title == "shell" || win->m_title == "tinexus-shell") ? 0 : 12;
+                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, top_margin, side_margin > 0 ? side_margin : 0, 0, side_margin > 0 ? side_margin : 0);
                     zwlr_layer_surface_v1_set_keyboard_interactivity(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
                     zwlr_layer_surface_v1_set_exclusive_zone(win->m_layer_surface, -1);
                 }
@@ -446,12 +447,11 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
                 // m_output_width defaults to 1920 until configure event updates it.
                 const int32_t side_margin = static_cast<int32_t>((m_output_width - static_cast<int32_t>(width)) / 2);
                 const int32_t clamped = side_margin > 0 ? side_margin : 0;
-                if (m_title == "shell") {
-                    zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
-                } else if (m_title == "dock") {
+                const int32_t top_margin = (m_title == "Aura" || m_title == "TopBar" || m_title == "shell" || m_title == "tinexus-shell") ? 0 : 12;
+                if (m_title == "dock") {
                     zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, clamped, 12, clamped);
                 } else {
-                    zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, clamped, 0, clamped);
+                    zwlr_layer_surface_v1_set_margin(m_layer_surface, top_margin, clamped, 0, clamped);
                 }
                 // NOTE: Do NOT commit here. The size/margin changes are Wayland
                 // pending state that will be atomically applied with the next pixel

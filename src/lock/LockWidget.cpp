@@ -3,6 +3,7 @@
 // Premium Glassmorphism Design: Ultra-fast <1ms render time, clean geometry
 // ─────────────────────────────────────────────────────────────────────────────
 #include "lock/LockWidget.hpp"
+#include <common/TinexusLogo.hpp>
 #include <txui/render/Painter.hpp>
 #include <txui/graphics/Color.hpp>
 #include <txui/math/Point.hpp>
@@ -146,12 +147,20 @@ void LockWidget::paint_override(txui::Painter& painter) const noexcept {
         20.0, CARD_BORDER);
     painter.fill_rounded_rect(card_rect, 19.0, CARD_BG);
 
-    // ── 4. Avatar Icon inside Card
+    // ── 4. Brand Logo / Avatar inside Card
     const double avatar_y = card_y + 44.0;
-    painter.fill_circle(txui::Point(cx, avatar_y), 24.0, txui::Color(255, 255, 255, 25));
-    painter.draw_circle(txui::Point(cx, avatar_y), 24.0, 1.5, txui::Color(255, 255, 255, 60));
-    painter.fill_circle(txui::Point(cx, avatar_y - 7.0), 8.0, txui::Color(200, 215, 255, 200));
-    painter.fill_circle(txui::Point(cx, avatar_y + 14.0), 12.0, txui::Color(200, 215, 255, 140));
+    auto logo_buf = logo::get_logo(64);
+    if (logo_buf.is_valid()) {
+        painter.draw_glow(txui::Point(cx, avatar_y), 14.0, 32.0, txui::Color(124, 58, 237, 75));
+        constexpr double logo_sz = 48.0;
+        painter.draw_image(txui::Rect(cx - logo_sz * 0.5, avatar_y - logo_sz * 0.5, logo_sz, logo_sz),
+                           logo_buf.pixels, logo_buf.width, logo_buf.height);
+    } else {
+        painter.fill_circle(txui::Point(cx, avatar_y), 24.0, txui::Color(255, 255, 255, 25));
+        painter.draw_circle(txui::Point(cx, avatar_y), 24.0, 1.5, txui::Color(255, 255, 255, 60));
+        painter.fill_circle(txui::Point(cx, avatar_y - 7.0), 8.0, txui::Color(200, 215, 255, 200));
+        painter.fill_circle(txui::Point(cx, avatar_y + 14.0), 12.0, txui::Color(200, 215, 255, 140));
+    }
 
     // User greeting
     const std::string user_name = "Tinexus User";

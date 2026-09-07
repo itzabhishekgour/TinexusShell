@@ -1,0 +1,66 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="f1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#4C1D95"/>
+    </linearGradient>
+    <linearGradient id="f2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="f3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="f4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#4338CA"/>
+    </linearGradient>
+    <linearGradient id="f5" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#5B21B6"/>
+      <stop offset="100%" stop-color="#312E81"/>
+    </linearGradient>
+    <linearGradient id="f6" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="60%" stop-color="#C4B5FD" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#C4B5FD" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="dropGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#2E1065" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Faceted prism / nexus star: 6 triangular facets converging to a bright core, evoking a crystal formed at a connection point -->
+  <g filter="url(#dropGlow)">
+    <!-- Top facet -->
+    <polygon points="256,40 340,196 256,240 172,196" fill="url(#f2)"/>
+    <!-- Upper-right facet -->
+    <polygon points="340,196 472,158 400,290 256,240" fill="url(#f3)"/>
+    <!-- Lower-right facet -->
+    <polygon points="400,290 472,158 388,432 256,240" fill="url(#f1)"/>
+    <!-- Bottom facet -->
+    <polygon points="256,240 388,432 256,472 124,432" fill="url(#f5)"/>
+    <!-- Lower-left facet -->
+    <polygon points="124,432 40,158 112,290 256,240" fill="url(#f4)"/>
+    <!-- Upper-left facet -->
+    <polygon points="172,196 40,158 112,290 256,240" fill="url(#f6)"/>
+  </g>
+
+  <!-- Fine edge lines to sharpen the faceted look -->
+  <g stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="2.5" fill="none" stroke-linejoin="round">
+    <polygon points="256,40 340,196 256,240 172,196"/>
+    <polygon points="340,196 472,158 400,290 256,240"/>
+    <polygon points="400,290 472,158 388,432 256,240"/>
+    <polygon points="256,240 388,432 256,472 124,432"/>
+    <polygon points="124,432 40,158 112,290 256,240"/>
+    <polygon points="172,196 40,158 112,290 256,240"/>
+  </g>
+
+  <!-- Bright convergence core at the nexus point -->
+  <circle cx="256" cy="240" r="46" fill="url(#coreGlow)"/>
+  <circle cx="256" cy="240" r="9" fill="#FFFFFF"/>
+</svg>

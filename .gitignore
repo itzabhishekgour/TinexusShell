@@ -46,6 +46,7 @@ integration_test_*
 *.log
 *.tmp
 *.png
+!assets/logo/*.png
 boot_logs.txt
 artifacts/
 .cache/

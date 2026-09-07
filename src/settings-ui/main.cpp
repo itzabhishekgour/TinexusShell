@@ -5,7 +5,7 @@
 #include <txui/widgets/ChromeWidget.hpp>
 #include <txui/input/Event.hpp>
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
     tinexus::log::set_component_name("tinexus-settings-ui");
     tinexus::log::info("Starting Tinexus Control Center v{}", tinexus::VERSION_STRING);
 
@@ -16,6 +16,30 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
     auto root = txui::make_ref<tinexus::settings_ui::SettingsWidget>();
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--page" && i + 1 < argc) {
+            std::string page = argv[++i];
+            if (page == "network" || page == "wifi") {
+                root->select_page(tinexus::settings_ui::SettingsPage::Network);
+            } else if (page == "display") {
+                root->select_page(tinexus::settings_ui::SettingsPage::Display);
+            } else if (page == "personalization") {
+                root->select_page(tinexus::settings_ui::SettingsPage::Personalization);
+            } else if (page == "system") {
+                root->select_page(tinexus::settings_ui::SettingsPage::System);
+            } else if (page == "shortcuts") {
+                root->select_page(tinexus::settings_ui::SettingsPage::KeyboardShortcuts);
+            } else if (page == "privacy") {
+                root->select_page(tinexus::settings_ui::SettingsPage::PrivacySecurity);
+            } else if (page == "about") {
+                root->select_page(tinexus::settings_ui::SettingsPage::About);
+            }
+        } else if (arg == "-n" || arg == "--network" || arg == "--wifi") {
+            root->select_page(tinexus::settings_ui::SettingsPage::Network);
+        }
+    }
 
     // Wrap in ChromeWidget — provides macOS-style window chrome with
     // fully functional close, minimize, and maximize buttons.

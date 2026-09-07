@@ -172,6 +172,30 @@ Type=Application
 Categories=System;Utility;Core;
 EOF
 
+    # Generate .desktop file for About Tinexus
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-about.desktop" << 'EOF'
+[Desktop Entry]
+Name=About Tinexus
+Comment=System Profiler and Hardware Specifications
+Exec=/usr/bin/tinexus-about
+Icon=tinexus-logo
+Terminal=false
+Type=Application
+Categories=System;Core;
+EOF
+
+    # Generate .desktop file for Settings
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-settings.desktop" << 'EOF'
+[Desktop Entry]
+Name=Settings
+Comment=Tinexus System Settings
+Exec=/usr/bin/tinexus-settings-ui
+Icon=preferences-system
+Terminal=false
+Type=Application
+Categories=System;Settings;
+EOF
+
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
     mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin" "$ROOTFS_DIR/etc"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
@@ -367,6 +391,40 @@ EOF_DBUS_POL
     cp -v "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" "$ROOTFS_DIR/usr/share/tinexus/fonts/"
     cp -v "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf"    "$ROOTFS_DIR/usr/share/tinexus/fonts/"
     success "Staged Inter-Regular.ttf + Inter-Bold.ttf → /usr/share/tinexus/fonts/"
+
+    # ── Stage Tinexus Brand Logo & Icons into rootfs ──────────────────────────
+    info "Staging Tinexus brand logo and hicolor icons into rootfs..."
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus"
+    mkdir -p "$ROOTFS_DIR/usr/share/pixmaps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/scalable/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/512x512/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/128x128/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/64x64/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/48x48/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/24x24/apps"
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/16x16/apps"
+
+    if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.svg" ]; then
+        cp "$PROJECT_DIR/assets/logo/tinexus-logo.svg" "$ROOTFS_DIR/usr/share/tinexus/tinexus-logo.svg"
+        cp "$PROJECT_DIR/assets/logo/tinexus-logo.svg" "$ROOTFS_DIR/usr/share/icons/hicolor/scalable/apps/tinexus-logo.svg"
+    fi
+    if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ]; then
+        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/tinexus-logo.png"
+        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/tinexus/tinexus-logo.png"
+        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/pixmaps/tinexus.png"
+        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/pixmaps/tinexus-logo.png"
+    fi
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-512.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-512.png" "$ROOTFS_DIR/usr/share/icons/hicolor/512x512/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-128.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-128.png" "$ROOTFS_DIR/usr/share/icons/hicolor/128x128/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-64.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-64.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/64x64/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-48.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-48.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/48x48/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-32.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-32.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-24.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-24.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/24x24/apps/tinexus-logo.png"
+    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-16.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-16.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/16x16/apps/tinexus-logo.png"
+    success "Staged Tinexus brand logo and hicolor icons."
 
 
     # fontconfig — so foot can discover fonts at runtime
