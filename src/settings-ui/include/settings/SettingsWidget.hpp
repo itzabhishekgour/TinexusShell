@@ -1,6 +1,14 @@
 #pragma once
 
 #include <txui/widgets/Widget.hpp>
+#include <txui/widgets/NavItem.hpp>
+#include <txui/widgets/ColorPicker.hpp>
+#include <txui/widgets/Badge.hpp>
+#include <txui/widgets/Button.hpp>
+#include <txui/widgets/ToggleSwitch.hpp>
+#include <txui/widgets/Slider.hpp>
+#include <txui/widgets/SegmentedControl.hpp>
+#include <txui/widgets/TextInput.hpp>
 #include <txui/core/Types.hpp>
 #include <txui/math/Rect.hpp>
 #include <string>
@@ -38,13 +46,54 @@ protected:
 private:
     // ── Navigation ────────────────────────────────────────────────────────
     SettingsPage m_current_page{SettingsPage::Display};
-    int          m_hovered_tab{-1};
 
     txui::Rect m_sidebar_rect;
     txui::Rect m_content_rect;
-    static constexpr txui::float64 SIDEBAR_W    = 222.0;
-    static constexpr txui::float64 ITEM_H       = 44.0;
+    static constexpr txui::float64 SIDEBAR_W     = 222.0;
+    static constexpr txui::float64 ITEM_H        = 44.0;
     static constexpr int           SIDEBAR_PAGES = 7;
+
+    // ── Modern Child Widgets ──────────────────────────────────────────────
+    // Sidebar
+    std::vector<txui::Ref<txui::NavItem>> m_nav_items;
+
+    // Display Page
+    txui::Ref<txui::SegmentedControl> m_display_scale_control;
+    txui::Ref<txui::ToggleSwitch>     m_night_light_toggle;
+    txui::Ref<txui::ToggleSwitch>     m_vrr_toggle;
+
+    // Personalization Page
+    txui::Ref<txui::ColorPicker>      m_accent_picker;
+    txui::Ref<txui::Button>           m_theme_toggle_btn;
+
+    // Network Page
+    txui::Ref<txui::ToggleSwitch>     m_wifi_master_toggle;
+    txui::Ref<txui::Button>           m_wifi_scan_btn;
+    txui::Ref<txui::Button>           m_wifi_disconnect_btn;
+
+    // Wi-Fi Password Modal
+    txui::Ref<txui::TextInput>        m_wifi_password_input;
+    txui::Ref<txui::Button>           m_wifi_modal_connect_btn;
+    txui::Ref<txui::Button>           m_wifi_modal_cancel_btn;
+    txui::Ref<txui::Button>           m_wifi_modal_eye_btn;
+
+    // System Page
+    txui::Ref<txui::Slider>           m_timeout_slider;
+    txui::Ref<txui::Slider>           m_sleep_slider;
+    txui::Ref<txui::SegmentedControl> m_power_profile_control;
+    txui::Ref<txui::SegmentedControl> m_clipboard_size_control;
+    txui::Ref<txui::ToggleSwitch>     m_lock_sleep_toggle;
+    txui::Ref<txui::ToggleSwitch>     m_pam_auth_toggle;
+    txui::Ref<txui::Button>           m_session_lock_btn;
+    txui::Ref<txui::Button>           m_session_suspend_btn;
+    txui::Ref<txui::Button>           m_session_reboot_btn;
+    txui::Ref<txui::Button>           m_session_shutdown_btn;
+
+    // Privacy & Security Page
+    txui::Ref<txui::Button>           m_rescan_btn;
+
+    void init_child_widgets();
+    void update_accent_styling() noexcept;
 
     // ── System Info ───────────────────────────────────────────────────────
     std::string m_os_version, m_mem_info, m_cpu_model, m_comp_info;
@@ -68,7 +117,7 @@ private:
     bool        m_pam_auth{true};
     std::string m_session_status_msg;
 
-    // ── Clipboard (stored in TOML; tinexus-clip daemon history is Phase 2) ─
+    // ── Clipboard ─────────────────────────────────────────────────────────
     bool m_clipboard_enabled{true};
     int  m_clipboard_history_size{50};
 
@@ -78,31 +127,14 @@ private:
 
     // Wi-Fi Interactive state
     int  m_hovered_network_idx{-1};
-    bool m_wifi_scan_hovered{false};
-    bool m_wifi_disconnect_hovered{false};
 
     // Wi-Fi Password Modal state
     bool        m_wifi_modal_open{false};
     std::string m_wifi_modal_ssid;
-    std::string m_wifi_modal_password;
-    bool        m_wifi_modal_show_password{false};
     std::string m_wifi_modal_error;
-    bool        m_wifi_modal_connect_hovered{false};
-    bool        m_wifi_modal_cancel_hovered{false};
-    bool        m_wifi_modal_eye_hovered{false};
+    txui::Rect  m_wifi_modal_rect;
 
-    mutable txui::Rect m_wifi_toggle_rect;
-    mutable txui::Rect m_wifi_scan_btn_rect;
-    mutable txui::Rect m_wifi_disconnect_btn_rect;
     mutable std::vector<txui::Rect> m_network_item_rects;
-
-    mutable txui::Rect m_wifi_modal_rect;
-    mutable txui::Rect m_wifi_modal_input_rect;
-    mutable txui::Rect m_wifi_modal_connect_btn;
-    mutable txui::Rect m_wifi_modal_cancel_btn;
-    mutable txui::Rect m_wifi_modal_eye_btn;
-    mutable size_t     m_wifi_modal_scroll_offset{0};
-    size_t             m_wifi_modal_cursor_pos{0};
 
     void paint_wifi_modal(txui::Painter& p) const noexcept;
     void draw_wifi_signal_bars(txui::Painter& p, txui::float64 x, txui::float64 y, int bars, const txui::Color& active_col) const noexcept;
@@ -114,18 +146,19 @@ private:
         bool is_hovered{false};
         txui::Rect btn_rect;
     };
-    std::vector<UnverifiedApp> m_unverified_apps;
-    mutable txui::Rect m_rescan_btn_rect;
-    bool m_rescan_hovered{false};
+    mutable std::vector<UnverifiedApp> m_unverified_apps;
     void refresh_unverified_apps();
     void trust_app(const std::string& hash);
 
+    // ── Event helpers ─────────────────────────────────────────────────────
+    bool handle_wallpaper_event(const txui::Event& event) noexcept;
+    bool handle_network_list_event(const txui::Event& event) noexcept;
+    bool handle_privacy_event(const txui::Event& event) noexcept;
+
     // ── Sidebar paint ─────────────────────────────────────────────────────
     void paint_sidebar(txui::Painter& p) const noexcept;
-    void paint_sidebar_item(txui::Painter& p, const char* label,
-                             SettingsPage page, txui::float64 y) const noexcept;
 
-    // ── Icon glyphs (drawn relative to 28×28 tile origin tx, ty) ─────────
+    // ── Icon glyphs (drawn relative to 20×20 tile origin) ─────────────────
     void draw_icon_display        (txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
     void draw_icon_personalization(txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
     void draw_icon_network        (txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
@@ -152,4 +185,3 @@ private:
 };
 
 } // namespace tinexus::settings_ui
-

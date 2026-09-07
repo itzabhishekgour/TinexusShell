@@ -1,227 +1,95 @@
 #include "settings/SettingsWidget.hpp"
-#include "settings/WifiManager.hpp"
-#include "guard/crypto_validator.hpp"
-#include "common/NetUtils.hpp"
-#include <txui/render/Painter.hpp>
-#include <txui/math/Rect.hpp>
-#include <txui/math/Point.hpp>
-#include <txui/math/Size.hpp>
-#include <txui/graphics/Color.hpp>
+#include <txui/render/FontMetrics.hpp>
 #include <txui/input/Event.hpp>
+#include <common/NetUtils.hpp>
+#include "settings/WifiManager.hpp"
+#include <guard/crypto_validator.hpp>
 
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
 #include <sys/reboot.h>
 #include <linux/reboot.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <net/if.h>
-
 #include <fstream>
 #include <sstream>
-#include <cmath>
-#include <algorithm>
-#include <vector>
 #include <iomanip>
 #include <filesystem>
+#include <algorithm>
+#include <cmath>
+
+using namespace txui;
 
 namespace tinexus::settings_ui {
 
-using float64 = txui::float64;
+// ── Color Palette & macOS Tokens ─────────────────────────────────────────────
+static const txui::Color BG_DARK      (14, 14, 20, 255);
+static const txui::Color SIDEBAR_BG   (19, 19, 27, 255);
+static const txui::Color CARD_TOP     (26, 26, 38, 255);
+static const txui::Color CARD_BOT     (20, 20, 30, 255);
+static const txui::Color TXT_PRI      (245, 245, 252, 255);
+static const txui::Color TXT_SEC      (165, 165, 185, 255);
+static const txui::Color TXT_DIM      (105, 105, 125, 255);
+static const txui::Color DIVIDER      (38, 38, 52, 255);
+static const txui::Color BORDER_SUBTLE(48, 48, 66, 180);
 
-// ── macOS High Sierra / Big Sur Dark Palette ─────────────────────────────────
-constexpr txui::Color BG_BASE        { 18,  18,  24, 255};
-constexpr txui::Color BG_SIDEBAR     { 26,  26,  36, 255};
-constexpr txui::Color CARD_TOP       { 30,  30,  42, 230};
-constexpr txui::Color CARD_BOT       { 24,  24,  34, 240};
-constexpr txui::Color CARD_BORDER    { 46,  46,  64, 180};
+static const txui::Color SUCCESS_BG   (30, 70, 45, 220);
+static const txui::Color SUCCESS_TXT  (80, 220, 120, 255);
+static const txui::Color WARNING_BG   (75, 55, 20, 220);
+static const txui::Color WARNING_TXT  (240, 180, 50, 255);
+static const txui::Color DANGER_BG    (85, 25, 25, 220);
+static const txui::Color DANGER_TXT   (255, 90, 90, 255);
 
-constexpr txui::Color TXT_PRI        {245, 245, 250, 255};
-constexpr txui::Color TXT_SEC        {160, 160, 178, 255};
-constexpr txui::Color TXT_DIM        {110, 110, 128, 255};
-
-constexpr txui::Color SUCCESS_BG     { 24,  54,  36, 230};
-constexpr txui::Color SUCCESS_TXT    { 72, 205, 120, 255};
-
-constexpr txui::Color WARNING_BG     { 58,  42,  16, 230};
-constexpr txui::Color WARNING_TXT    {245, 185,  45, 255};
-
-constexpr txui::Color DANGER_BG      { 58,  22,  24, 220};
-constexpr txui::Color DANGER_TXT     {240,  70,  70, 255};
-
-constexpr txui::Color DIVIDER        { 34,  34,  48, 200};
-
-// Accent Palette Options
+// ── Accent Palette Options ───────────────────────────────────────────────────
 const tinexus::settings_ui::AccentOption ACCENT_PALETTE[] = {
-    {  0, 122, 255, "Blue"   },
-    {175,  82, 222, "Purple" },
-    {255,  45,  85, "Pink"   },
-    {255,  59,  48, "Red"    },
-    {255, 149,   0, "Orange" },
-    { 52, 199,  89, "Green"  },
+    {0,   195, 255, "Electric Cyan"},
+    {0,   122, 255, "macOS Blue"},
+    {88,  86,  214, "Deep Violet"},
+    {255, 45,  85,  "Hot Pink"},
+    {255, 149, 0,   "Vibrant Orange"},
+    {52,  199, 89,  "Mint Green"}
 };
 constexpr int ACCENT_COUNT = sizeof(ACCENT_PALETTE) / sizeof(ACCENT_PALETTE[0]);
 
-inline float64 estimate_text_width(const std::string& text, float64 font_scale = 1.0, bool bold = true) {
-    float64 size = (font_scale <= 5.0) ? (16.0 * font_scale) : font_scale;
-    float64 total_w = 0.0;
-    for (char c : text) {
-        if (c == '*') {
-            total_w += std::round(size * 0.533); // Exact FreeType advance (8px at 15px / 0.95 scale)
-        } else if (c == ' ' || c == '.' || c == ':' || c == '-' || c == '(' || c == ')') {
-            total_w += size * 0.32;
-        } else if (c == 'i' || c == 'l' || c == 'I' || c == 'j' || c == 't' || c == 'r' || c == 'f') {
-            total_w += size * 0.36;
-        } else if (c == 'm' || c == 'M' || c == 'w' || c == 'W') {
-            total_w += size * 0.85;
-        } else if (c >= 'A' && c <= 'Z') {
-            total_w += size * 0.65;
-        } else {
-            total_w += size * 0.54;
-        }
-    }
-    if (bold && text.find('*') == std::string::npos) total_w *= 1.10;
-    return std::ceil(total_w);
-}
-
+// ── Shared UI Utilities ──────────────────────────────────────────────────────
 inline void draw_badge_pill(txui::Painter& p, float64 x, float64 y,
                             const std::string& text, const txui::Color& bg,
-                            const txui::Color& fg, float64 font_scale = 0.76) {
-    float64 w = std::max(48.0, static_cast<double>(text.size()) * 6.8 + 14.0);
-    float64 h = 18.0;
-    p.fill_rounded_rect(txui::Rect(x, y, w, h), 5.0, bg);
-    p.draw_text(txui::Point(x + 7.0, y + 3.0), text, fg, font_scale, true);
+                            const txui::Color& fg, float64 font_size = 11.0) {
+    txui::Badge::render(p, txui::Point(x, y), text, bg, fg, font_size, 4.0, 7.0, 2.5);
 }
 
-inline void draw_inactive_badge(txui::Painter& p, float64 x, float64 y) {
-    draw_badge_pill(p, x, y, "Not yet active", WARNING_BG, WARNING_TXT, 0.74);
+inline void draw_inactive_badge(txui::Painter& p, float64 x, float64 y, float64 font_size = 10.0) {
+    draw_badge_pill(p, x, y, "Not yet active", WARNING_BG, WARNING_TXT, font_size);
 }
 
 inline void draw_label_and_inactive_badge(
-    txui::Painter& p,
-    float64 x, float64 y,
-    const std::string& label,
-    float64 scale = 1.0, bool bold = true,
-    const txui::Color& text_col = TXT_PRI,
-    float64 badge_y_offset = -1.0
+    txui::Painter& p, float64 x, float64 y,
+    const std::string& label, float64 font_size = 13.0, bool bold = true
 ) {
-    p.draw_text(txui::Point(x, y), label, text_col, scale, bold);
-    float64 text_w = estimate_text_width(label, scale, bold);
-    float64 badge_x = x + text_w + 12.0; // 12px clean gap, never overlaps!
-    float64 by = (badge_y_offset >= 0.0) ? (y + badge_y_offset) : (y - 1.0);
-    draw_badge_pill(p, badge_x, by, "Not yet active", WARNING_BG, WARNING_TXT, 0.74);
-}
-
-inline void draw_toggle(txui::Painter& p, float64 x, float64 y, bool enabled,
-                        const txui::Color& accent_col) {
-    float64 tw = 40.0;
-    float64 th = 22.0;
-    txui::Color track = enabled ? accent_col : txui::Color(44, 44, 58, 255);
-    p.fill_rounded_rect(txui::Rect(x, y, tw, th), 11.0, track);
-    float64 kx = enabled ? (x + tw - 19.0) : (x + 3.0);
-    p.fill_circle(txui::Point(kx + 8.0, y + 11.0), 8.0, txui::Color(255, 255, 255, 255));
+    p.draw_text(txui::Point(x, y), label, TXT_PRI, font_size, bold);
+    float64 text_w = txui::FontMetrics::measure(label, font_size).width;
+    float64 badge_x = x + text_w + 10.0;
+    float64 by = y - 1.0;
+    draw_inactive_badge(p, badge_x, by, 9.5);
 }
 
 inline void draw_card(txui::Painter& p, const txui::Rect& rect) {
     p.fill_gradient_rounded_rect(rect, 10.0, CARD_TOP, CARD_BOT);
 }
 
-// ── macOS-Style Unified Segmented Track ──────────────────────────────────────
-inline void draw_segmented_track(
-    txui::Painter& p,
-    float64 x, float64 y, float64 w, float64 h,
-    const char* options[], int count, int selected_idx,
-    const txui::Color& active_accent
-) {
-    // Outer container pill with subtle border
-    p.fill_rounded_rect(txui::Rect(x, y, w, h), 7.0, txui::Color(46, 46, 64, 180));
-    p.fill_rounded_rect(txui::Rect(x + 1.0, y + 1.0, w - 2.0, h - 2.0), 6.0, txui::Color(22, 22, 32, 255));
-
-    float64 seg_w = (w - 4.0) / static_cast<double>(count);
-    for (int i = 0; i < count; ++i) {
-        float64 sx = x + 2.0 + static_cast<double>(i) * seg_w;
-        bool sel = (selected_idx == i);
-        if (sel) {
-            p.fill_rounded_rect(txui::Rect(sx, y + 2.0, seg_w, h - 4.0), 5.0, active_accent);
-        }
-        float64 tw = estimate_text_width(options[i], 0.82, sel);
-        float64 tx = sx + std::max(2.0, (seg_w - tw) * 0.5);
-        float64 ty = y + (h - 14.0) * 0.5;
-        p.draw_text(txui::Point(tx, ty), options[i],
-                    sel ? txui::Color(255, 255, 255, 255) : TXT_SEC,
-                    0.82, sel);
-    }
-}
-
 inline void draw_keycap(txui::Painter& p, float64 x, float64 y, const std::string& key) {
-    float64 w = std::max(26.0, static_cast<double>(key.size()) * 7.5 + 14.0);
+    float64 tw = txui::FontMetrics::measure(key, 11.0).width;
+    float64 w = std::max(26.0, tw + 14.0);
     p.fill_rounded_rect(txui::Rect(x, y, w, 22.0), 5.0, txui::Color(44, 44, 58, 255));
     p.fill_rounded_rect(txui::Rect(x + 1.0, y + 1.0, w - 2.0, 19.0), 4.0, txui::Color(32, 32, 42, 255));
-    float64 tw = estimate_text_width(key, 0.82, true);
-    p.draw_text(txui::Point(x + (w - tw) * 0.5, y + 4.0), key, TXT_PRI, 0.82, true);
+    p.draw_text(txui::Point(x + (w - tw) * 0.5, y + 4.0), key, TXT_PRI, 11.0, true);
 }
 
-// ── macOS Wi-Fi Signal Bars (Proportional Heights 5, 8.5, 12, 16) ───────────
-void SettingsWidget::draw_wifi_signal_bars(txui::Painter& p, float64 x, float64 y, int bars, const txui::Color& active_col) const noexcept {
-    const float64 bar_w = 3.5;
-    const float64 gap = 2.5;
-    const float64 heights[4] = {5.0, 8.5, 12.0, 16.0};
-    const txui::Color inactive_col = txui::Color(255, 255, 255, 45);
-
-    for (int i = 0; i < 4; ++i) {
-        float64 bx = x + static_cast<double>(i) * (bar_w + gap);
-        float64 bh = heights[i];
-        float64 by = y + (16.0 - bh);
-        txui::Color col = (i < bars) ? active_col : inactive_col;
-        p.fill_rounded_rect(txui::Rect(bx, by, bar_w, bh), 1.5, col);
-    }
-}
-
-// ── Lock Icon (Secured Wi-Fi Network Glyph) ──────────────────────────────────
-void SettingsWidget::draw_lock_icon(txui::Painter& p, float64 x, float64 y, const txui::Color& col) const noexcept {
-    // Arch shackle: loop arched above padlock body
-    p.draw_circle(txui::Point(x + 5.0, y + 4.0), 3.0, 1.4, col);
-    // Padlock body: rounded rect with keyhole dot
-    p.fill_rounded_rect(txui::Rect(x + 1.0, y + 5.0, 8.0, 7.0), 1.8, col);
-}
-
-// ── Key to ASCII Converter for Password Input ────────────────────────────────
-static char key_to_ascii(txui::Key key, bool shift) {
-    if (key >= txui::Key::A && key <= txui::Key::Z) {
-        char c = 'a' + static_cast<char>(static_cast<uint16_t>(key) - static_cast<uint16_t>(txui::Key::A));
-        return shift ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c;
-    }
-    if (key >= txui::Key::N0 && key <= txui::Key::N9) {
-        if (shift) {
-            const char shift_nums[] = ")!@#$%^&*(";
-            return shift_nums[static_cast<uint16_t>(key) - static_cast<uint16_t>(txui::Key::N0)];
-        }
-        return '0' + static_cast<char>(static_cast<uint16_t>(key) - static_cast<uint16_t>(txui::Key::N0));
-    }
-    if (key == txui::Key::Space) return ' ';
-    if (key == txui::Key::Slash) return shift ? '?' : '/';
-    if (key == txui::Key::Period) return shift ? '>' : '.';
-    if (key == txui::Key::Minus) return shift ? '_' : '-';
-    if (key == txui::Key::Backslash) return shift ? '|' : '\\';
-    if (key == txui::Key::Comma) return shift ? '<' : ',';
-    if (key == txui::Key::Semicolon) return shift ? ':' : ';';
-    if (key == txui::Key::Apostrophe) return shift ? '"' : '\'';
-    if (key == txui::Key::Grave) return shift ? '~' : '`';
-    if (key == txui::Key::Equal) return shift ? '+' : '=';
-    if (key == txui::Key::LeftBracket) return shift ? '{' : '[';
-    if (key == txui::Key::RightBracket) return shift ? '}' : ']';
-    return 0;
-}
-
-// ── Drop Shadow & Gradient Helper for Category Icons ────────────────────────
+// ── Category Icon Badge ──────────────────────────────────────────────────────
 static void draw_icon_badge_base(txui::Painter& p, float64 x, float64 y,
                                  const txui::Color& top_c, const txui::Color& bot_c,
-                                 float64 size = 28.0, float64 radius = 6.5) {
-    p.fill_rounded_rect(txui::Rect(x - 0.5, y + 1.5, size + 1.0, size + 1.0), radius + 0.5, txui::Color(0, 0, 0, 75));
+                                 float64 size = 20.0, float64 radius = 5.0) {
+    p.fill_rounded_rect(txui::Rect(x - 0.5, y + 1.0, size + 1.0, size + 1.0), radius + 0.5, txui::Color(0, 0, 0, 75));
     p.fill_gradient_rounded_rect(txui::Rect(x, y, size, size), radius, top_c, bot_c);
 }
 
@@ -231,19 +99,241 @@ SettingsWidget::SettingsWidget() {
     scan_wallpapers();
     scan_network_ifaces();
     load_config();
+    init_child_widgets();
+    update_accent_styling();
+}
+
+void SettingsWidget::init_child_widgets() {
+    // 1. Sidebar Navigation Items (7 items)
+    m_nav_items.clear();
+    const struct NavDef { const char* label; SettingsPage page; } nav_defs[] = {
+        {"Display",            SettingsPage::Display},
+        {"Personalization",    SettingsPage::Personalization},
+        {"Network",            SettingsPage::Network},
+        {"System & Power",     SettingsPage::System},
+        {"Keyboard Shortcuts", SettingsPage::KeyboardShortcuts},
+        {"Privacy & Security", SettingsPage::PrivacySecurity},
+        {"About",              SettingsPage::About}
+    };
+
+    for (const auto& def : nav_defs) {
+        auto item = make_ref<NavItem>(
+            def.label,
+            [this, page = def.page](Painter& p, const Rect& r) {
+                switch (page) {
+                    case SettingsPage::Display:           draw_icon_display(p, r.x(), r.y()); break;
+                    case SettingsPage::Personalization:   draw_icon_personalization(p, r.x(), r.y()); break;
+                    case SettingsPage::Network:           draw_icon_network(p, r.x(), r.y()); break;
+                    case SettingsPage::System:            draw_icon_system(p, r.x(), r.y()); break;
+                    case SettingsPage::KeyboardShortcuts: draw_icon_keyboard(p, r.x(), r.y()); break;
+                    case SettingsPage::PrivacySecurity:   draw_icon_privacy(p, r.x(), r.y()); break;
+                    case SettingsPage::About:             draw_icon_about(p, r.x(), r.y()); break;
+                }
+            },
+            [this, page = def.page]() {
+                select_page(page);
+            }
+        );
+        item->set_selected(def.page == m_current_page);
+        m_nav_items.push_back(item);
+    }
+
+    // 2. Display Page Widgets
+    m_display_scale_control = make_ref<SegmentedControl>(
+        std::vector<std::string>{"100%", "125%", "150%", "200%"},
+        static_cast<size_t>(m_display_scale_idx)
+    );
+    m_display_scale_control->set_on_segment_selected([this](size_t idx) {
+        m_display_scale_idx = static_cast<int>(idx);
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_night_light_toggle = make_ref<ToggleSwitch>(m_night_light_enabled, [this](bool checked) {
+        m_night_light_enabled = checked;
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_vrr_toggle = make_ref<ToggleSwitch>(m_vrr_enabled, [this](bool checked) {
+        m_vrr_enabled = checked;
+        save_config();
+        mark_needs_paint();
+    });
+
+    // 3. Personalization Page Widgets
+    std::vector<Color> swatch_colors;
+    for (int i = 0; i < ACCENT_COUNT; ++i) {
+        swatch_colors.emplace_back(ACCENT_PALETTE[i].r, ACCENT_PALETTE[i].g, ACCENT_PALETTE[i].b, 255);
+    }
+    m_accent_picker = make_ref<ColorPicker>(
+        swatch_colors,
+        static_cast<size_t>(m_selected_accent_idx),
+        [this](size_t idx, Color) {
+            m_selected_accent_idx = static_cast<int>(idx);
+            update_accent_styling();
+            save_config();
+            mark_needs_paint();
+        }
+    );
+
+    m_theme_toggle_btn = make_ref<Button>(
+        m_theme_mode == "Dark" ? "Dark Mode" : "Light Mode",
+        [this]() {
+            m_theme_mode = (m_theme_mode == "Dark") ? "Light" : "Dark";
+            m_theme_toggle_btn->set_text(m_theme_mode == "Dark" ? "Dark Mode" : "Light Mode");
+            save_config();
+            mark_needs_paint();
+        }
+    );
+    m_theme_toggle_btn->set_style(Button::Style::Standard);
+
+    // 4. Network Page Widgets
+    m_wifi_master_toggle = make_ref<ToggleSwitch>(
+        WifiManager::instance().is_wifi_enabled(),
+        [this](bool checked) {
+            WifiManager::instance().set_wifi_enabled(checked);
+            mark_needs_paint();
+        }
+    );
+
+    m_wifi_scan_btn = make_ref<Button>("Scan Networks", [this]() {
+        WifiManager::instance().trigger_scan();
+        mark_needs_paint();
+    });
+    m_wifi_scan_btn->set_style(Button::Style::Standard);
+
+    m_wifi_disconnect_btn = make_ref<Button>("Disconnect", [this]() {
+        WifiManager::instance().disconnect();
+        mark_needs_paint();
+    });
+    m_wifi_disconnect_btn->set_style(Button::Style::Danger);
+
+    // 5. Wi-Fi Password Modal Widgets
+    m_wifi_password_input = make_ref<TextInput>("Enter network password...");
+    m_wifi_password_input->set_secure_mode(true);
+
+    m_wifi_modal_eye_btn = make_ref<Button>("Show", [this]() {
+        bool sec = m_wifi_password_input->is_secure_mode();
+        m_wifi_password_input->set_secure_mode(!sec);
+        m_wifi_modal_eye_btn->set_text(!sec ? "Hide" : "Show");
+        mark_needs_paint();
+    });
+    m_wifi_modal_eye_btn->set_style(Button::Style::Ghost);
+
+    m_wifi_modal_connect_btn = make_ref<Button>("Connect", [this]() {
+        std::string pw = m_wifi_password_input->text();
+        if (pw.empty()) {
+            m_wifi_modal_error = "Password cannot be empty";
+            mark_needs_paint();
+        } else {
+            WifiManager::instance().connect(m_wifi_modal_ssid, pw);
+            m_wifi_modal_open = false;
+            m_wifi_password_input->set_text("");
+            m_wifi_modal_error.clear();
+            mark_needs_paint();
+        }
+    });
+    m_wifi_modal_connect_btn->set_style(Button::Style::Primary);
+
+    m_wifi_modal_cancel_btn = make_ref<Button>("Cancel", [this]() {
+        m_wifi_modal_open = false;
+        m_wifi_password_input->set_text("");
+        m_wifi_modal_error.clear();
+        mark_needs_paint();
+    });
+    m_wifi_modal_cancel_btn->set_style(Button::Style::Ghost);
+
+    // 6. System Page Widgets
+    m_timeout_slider = make_ref<Slider>(1.0, 60.0, static_cast<double>(m_screen_timeout_min));
+    m_timeout_slider->set_on_value_changed([this](double val) {
+        m_screen_timeout_min = std::max(1, static_cast<int>(val));
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_sleep_slider = make_ref<Slider>(5.0, 120.0, static_cast<double>(m_sleep_after_min));
+    m_sleep_slider->set_on_value_changed([this](double val) {
+        m_sleep_after_min = std::max(5, static_cast<int>(val));
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_power_profile_control = make_ref<SegmentedControl>(
+        std::vector<std::string>{"Power Saver", "Balanced", "Performance"},
+        static_cast<size_t>(m_power_profile_idx)
+    );
+    m_power_profile_control->set_on_segment_selected([this](size_t idx) {
+        m_power_profile_idx = static_cast<int>(idx);
+        save_config();
+        mark_needs_paint();
+    });
+
+    size_t clip_idx = (m_clipboard_history_size <= 25) ? 0 : ((m_clipboard_history_size <= 50) ? 1 : 2);
+    m_clipboard_size_control = make_ref<SegmentedControl>(
+        std::vector<std::string>{"25 items", "50 items", "100 items"},
+        clip_idx
+    );
+    m_clipboard_size_control->set_on_segment_selected([this](size_t idx) {
+        m_clipboard_history_size = (idx == 0 ? 25 : (idx == 1 ? 50 : 100));
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_lock_sleep_toggle = make_ref<ToggleSwitch>(m_lock_on_sleep, [this](bool checked) {
+        m_lock_on_sleep = checked;
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_pam_auth_toggle = make_ref<ToggleSwitch>(m_pam_auth, [this](bool checked) {
+        m_pam_auth = checked;
+        save_config();
+        mark_needs_paint();
+    });
+
+    m_session_lock_btn     = make_ref<Button>("Lock Screen", [this]() { trigger_session_action(0); });
+    m_session_lock_btn->set_style(Button::Style::Standard);
+    m_session_suspend_btn  = make_ref<Button>("Sleep",       [this]() { trigger_session_action(1); });
+    m_session_suspend_btn->set_style(Button::Style::Standard);
+    m_session_reboot_btn   = make_ref<Button>("Restart",     [this]() { trigger_session_action(2); });
+    m_session_reboot_btn->set_style(Button::Style::Standard);
+    m_session_shutdown_btn = make_ref<Button>("Shut Down",   [this]() { trigger_session_action(3); });
+    m_session_shutdown_btn->set_style(Button::Style::Danger);
+
+    // 7. Privacy & Security Page Widgets
+    m_rescan_btn = make_ref<Button>("Re-scan", [this]() {
+        refresh_unverified_apps();
+        mark_needs_paint();
+    });
+    m_rescan_btn->set_style(Button::Style::Standard);
+}
+
+void SettingsWidget::update_accent_styling() noexcept {
+    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
+    const txui::Color active_col(current_accent.r, current_accent.g, current_accent.b, 255);
+
+    for (auto& item : m_nav_items) {
+        item->set_accent_color(active_col);
+    }
+    if (m_night_light_toggle)    m_night_light_toggle->set_active_color(active_col);
+    if (m_vrr_toggle)            m_vrr_toggle->set_active_color(active_col);
+    if (m_wifi_master_toggle)    m_wifi_master_toggle->set_active_color(active_col);
+    if (m_timeout_slider)        m_timeout_slider->set_active_color(active_col);
+    if (m_sleep_slider)          m_sleep_slider->set_active_color(active_col);
+    if (m_lock_sleep_toggle)     m_lock_sleep_toggle->set_active_color(active_col);
+    if (m_pam_auth_toggle)       m_pam_auth_toggle->set_active_color(active_col);
 }
 
 void SettingsWidget::open_wifi_password_modal(const std::string& ssid) {
     m_wifi_modal_open = true;
     m_wifi_modal_ssid = ssid;
-    m_wifi_modal_password.clear();
-    m_wifi_modal_show_password = false;
     m_wifi_modal_error.clear();
-    m_wifi_modal_cancel_hovered = false;
-    m_wifi_modal_connect_hovered = false;
-    m_wifi_modal_eye_hovered = false;
-    m_wifi_modal_scroll_offset = 0;
-    m_wifi_modal_cursor_pos = 0;
+    m_wifi_password_input->set_text("");
+    m_wifi_password_input->set_secure_mode(true);
+    m_wifi_password_input->set_focused(true);
+    m_wifi_modal_eye_btn->set_text("Show");
+    mark_needs_layout();
     mark_needs_paint();
 }
 
@@ -321,96 +411,86 @@ void SettingsWidget::load_config() {
 
     std::string line;
     while (std::getline(in, line)) {
+        auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+
         if (line.starts_with("accent_index")) {
-            auto pos = line.find('=');
-            if (pos != std::string::npos) {
+            try {
                 m_selected_accent_idx = std::stoi(line.substr(pos + 1));
-            }
-        } else if (line.starts_with("display_scale")) {
-            auto pos = line.find('=');
-            if (pos != std::string::npos) {
-                m_display_scale_idx = std::stoi(line.substr(pos + 1));
-            }
+                if (m_selected_accent_idx < 0 || m_selected_accent_idx >= ACCENT_COUNT) {
+                    m_selected_accent_idx = 0;
+                }
+            } catch (...) {}
+        } else if (line.starts_with("theme_mode")) {
+            std::string mode = line.substr(pos + 1);
+            mode.erase(0, mode.find_first_not_of(" \t\""));
+            mode.erase(mode.find_last_not_of(" \t\"") + 1);
+            if (!mode.empty()) m_theme_mode = mode;
+        } else if (line.starts_with("display_scale_idx")) {
+            try {
+                m_display_scale_idx = std::clamp(std::stoi(line.substr(pos + 1)), 0, 3);
+            } catch (...) {}
         } else if (line.starts_with("night_light")) {
             m_night_light_enabled = (line.find("true") != std::string::npos);
-        } else if (line.starts_with("vrr")) {
+        } else if (line.starts_with("vrr_enabled")) {
             m_vrr_enabled = (line.find("true") != std::string::npos);
-        } else if (line.starts_with("screen_timeout")) {
-            auto pos = line.find('=');
-            if (pos != std::string::npos) {
-                m_screen_timeout_min = std::stoi(line.substr(pos + 1));
-            }
-        } else if (line.starts_with("sleep_after")) {
-            auto pos = line.find('=');
-            if (pos != std::string::npos) {
-                m_sleep_after_min = std::stoi(line.substr(pos + 1));
-            }
+        } else if (line.starts_with("screen_timeout_min")) {
+            try {
+                m_screen_timeout_min = std::clamp(std::stoi(line.substr(pos + 1)), 1, 60);
+            } catch (...) {}
+        } else if (line.starts_with("sleep_after_min")) {
+            try {
+                m_sleep_after_min = std::clamp(std::stoi(line.substr(pos + 1)), 5, 120);
+            } catch (...) {}
         } else if (line.starts_with("power_profile_idx")) {
-            auto pos = line.find('=');
-            if (pos != std::string::npos) {
-                m_power_profile_idx = std::stoi(line.substr(pos + 1));
-            }
-        } else if (line.starts_with("clipboard_history_size")) {
-            auto pos = line.find('=');
-            if (pos != std::string::npos) {
-                m_clipboard_history_size = std::stoi(line.substr(pos + 1));
-            }
+            try {
+                m_power_profile_idx = std::clamp(std::stoi(line.substr(pos + 1)), 0, 2);
+            } catch (...) {}
         } else if (line.starts_with("lock_on_sleep")) {
             m_lock_on_sleep = (line.find("true") != std::string::npos);
         } else if (line.starts_with("pam_auth")) {
             m_pam_auth = (line.find("true") != std::string::npos);
+        } else if (line.starts_with("clipboard_history_size")) {
+            try {
+                m_clipboard_history_size = std::stoi(line.substr(pos + 1));
+            } catch (...) {}
         }
     }
 }
 
 void SettingsWidget::save_config() {
     const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
-    std::string base_dir = xdg_config ? xdg_config : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "/root") + "/.config");
-    std::string dir_path = base_dir + "/tinexus";
-    std::filesystem::create_directories(dir_path);
+    std::string config_dir = xdg_config ? xdg_config : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "/root") + "/.config");
+    std::filesystem::create_directories(config_dir + "/tinexus");
+    std::string config_path = config_dir + "/tinexus/settings.toml";
 
-    std::string config_path = dir_path + "/settings.toml";
-    std::string temp_path = config_path + ".tmp";
-
-    std::ofstream out(temp_path);
+    std::string tmp_path = config_path + ".tmp";
+    std::ofstream out(tmp_path);
     if (!out.is_open()) return;
 
-    out << "# Tinexus Desktop Settings Configuration\n\n";
-    out << "[appearance]\n";
+    out << "# Tinexus Desktop Settings Configuration\n";
     out << "accent_index = " << m_selected_accent_idx << "\n";
     out << "theme_mode = \"" << m_theme_mode << "\"\n";
-    out << "wallpaper_index = " << m_selected_wallpaper_idx << "\n\n";
-
-    out << "[display]\n";
+    out << "display_scale_idx = " << m_display_scale_idx << "\n";
     out << "night_light = " << (m_night_light_enabled ? "true" : "false") << "\n";
-    out << "vrr = " << (m_vrr_enabled ? "true" : "false") << "\n";
-    out << "display_scale = " << m_display_scale_idx << "\n\n";
-
-    out << "[power]\n";
-    out << "screen_timeout = " << m_screen_timeout_min << "\n";
-    out << "sleep_after = " << m_sleep_after_min << "\n";
-    out << "power_profile_idx = " << m_power_profile_idx << "\n\n";
-
-    out << "[clipboard]\n";
-    out << "clipboard_enabled = " << (m_clipboard_enabled ? "true" : "false") << "\n";
-    out << "clipboard_history_size = " << m_clipboard_history_size << "\n\n";
-
-    out << "[security]\n";
+    out << "vrr_enabled = " << (m_vrr_enabled ? "true" : "false") << "\n";
+    out << "screen_timeout_min = " << m_screen_timeout_min << "\n";
+    out << "sleep_after_min = " << m_sleep_after_min << "\n";
+    out << "power_profile_idx = " << m_power_profile_idx << "\n";
     out << "lock_on_sleep = " << (m_lock_on_sleep ? "true" : "false") << "\n";
     out << "pam_auth = " << (m_pam_auth ? "true" : "false") << "\n";
-
-    out.flush();
+    out << "clipboard_history_size = " << m_clipboard_history_size << "\n";
     out.close();
 
-    std::filesystem::rename(temp_path, config_path);
+    std::filesystem::rename(tmp_path, config_path);
 }
 
 void SettingsWidget::refresh_unverified_apps() {
     m_unverified_apps.clear();
-    std::string apps_dir = "/opt/tinexus-apps";
-    if (!std::filesystem::exists(apps_dir)) return;
+    std::string app_dir = "/opt/tinexus-apps";
+    if (!std::filesystem::exists(app_dir)) return;
 
-    for (const auto& entry : std::filesystem::directory_iterator(apps_dir)) {
+    for (const auto& entry : std::filesystem::directory_iterator(app_dir)) {
         if (!entry.is_regular_file()) continue;
         std::string path = entry.path().string();
         if (path.ends_with(".sig")) continue;
@@ -468,18 +548,21 @@ void SettingsWidget::trigger_session_action(int idx) {
         sync();
         reboot(LINUX_REBOOT_CMD_POWER_OFF);
     }
+    mark_needs_paint();
 }
 
 void SettingsWidget::select_page(SettingsPage page) {
-    if (m_current_page != page) {
-        m_current_page = page;
-        if (m_current_page == SettingsPage::PrivacySecurity) {
-            refresh_unverified_apps();
-        } else if (m_current_page == SettingsPage::Network) {
-            scan_network_ifaces();
-        }
-        mark_needs_paint();
+    m_current_page = page;
+    for (size_t i = 0; i < m_nav_items.size(); ++i) {
+        m_nav_items[i]->set_selected(static_cast<int>(page) == static_cast<int>(i));
     }
+    if (m_current_page == SettingsPage::PrivacySecurity) {
+        refresh_unverified_apps();
+    } else if (m_current_page == SettingsPage::Network) {
+        scan_network_ifaces();
+    }
+    layout(frame());
+    mark_needs_paint();
 }
 
 txui::Size SettingsWidget::measure_override(const txui::Constraints& c) noexcept {
@@ -497,800 +580,374 @@ void SettingsWidget::layout_override(const txui::Rect& f) noexcept {
         std::max(100.0, f.width() - SIDEBAR_W),
         f.height()
     );
+
+    // Sidebar navigation items layout
+    double nav_y = f.y() + 74.0;
+    for (auto& item : m_nav_items) {
+        item->layout(txui::Rect(f.x() + 10.0, nav_y, SIDEBAR_W - 20.0, 40.0));
+        nav_y += 44.0;
+    }
+
+    // Content area geometry
+    txui::Rect area(m_content_rect.x() + 32.0, m_content_rect.y() + 28.0,
+                    m_content_rect.width() - 64.0, m_content_rect.height() - 56.0);
+    float64 cx = area.x();
+    float64 cw = area.width();
+    float64 y1 = area.y() + 94.0;
+
+    // 1. Display Page Widgets
+    if (m_display_scale_control) {
+        m_display_scale_control->layout(txui::Rect(cx + cw - 264.0, y1 + 114.0, 244.0, 30.0));
+    }
+    float64 disp_y2 = y1 + 180.0;
+    if (m_night_light_toggle) {
+        m_night_light_toggle->layout(txui::Rect(cx + cw - 56.0, disp_y2 + 18.0, 44.0, 24.0));
+    }
+    if (m_vrr_toggle) {
+        m_vrr_toggle->layout(txui::Rect(cx + cw - 56.0, disp_y2 + 96.0, 44.0, 24.0));
+    }
+
+    // 2. Personalization Page Widgets
+    if (m_accent_picker) {
+        m_accent_picker->layout(txui::Rect(cx + 20.0, y1 + 48.0, cw - 40.0, 36.0));
+    }
+    float64 pers_y2 = y1 + 116.0;
+    if (m_theme_toggle_btn) {
+        m_theme_toggle_btn->layout(txui::Rect(cx + cw - 130.0, pers_y2 + 20.0, 110.0, 32.0));
+    }
+
+    // 3. Network Page Widgets
+    if (m_wifi_master_toggle) {
+        m_wifi_master_toggle->layout(txui::Rect(cx + cw - 56.0, y1 + 24.0, 44.0, 24.0));
+    }
+    if (m_wifi_scan_btn) {
+        m_wifi_scan_btn->layout(txui::Rect(cx + cw - 190.0, y1 + 22.0, 120.0, 30.0));
+    }
+    if (m_wifi_disconnect_btn) {
+        m_wifi_disconnect_btn->layout(txui::Rect(cx + cw - 320.0, y1 + 22.0, 115.0, 30.0));
+    }
+
+    // 4. System Page Widgets
+    if (m_timeout_slider) {
+        m_timeout_slider->layout(txui::Rect(cx + cw - 260.0, y1 + 14.0, 170.0, 28.0));
+    }
+    if (m_sleep_slider) {
+        m_sleep_slider->layout(txui::Rect(cx + cw - 260.0, y1 + 70.0, 170.0, 28.0));
+    }
+    if (m_power_profile_control) {
+        m_power_profile_control->layout(txui::Rect(cx + cw - 330.0, y1 + 124.0, 310.0, 30.0));
+    }
+    float64 sys_y2 = y1 + 192.0;
+    if (m_clipboard_size_control) {
+        m_clipboard_size_control->layout(txui::Rect(cx + cw - 240.0, sys_y2 + 92.0, 220.0, 30.0));
+    }
+    float64 sys_y3 = sys_y2 + 156.0;
+    float64 btn_gap = 12.0;
+    float64 btn_w = std::clamp((cw - 40.0 - 3.0 * btn_gap) / 4.0, 90.0, 200.0);
+    if (m_session_lock_btn)     m_session_lock_btn->layout(txui::Rect(cx + 20.0, sys_y3 + 46.0, btn_w, 34.0));
+    if (m_session_suspend_btn)  m_session_suspend_btn->layout(txui::Rect(cx + 20.0 + (btn_w + btn_gap), sys_y3 + 46.0, btn_w, 34.0));
+    if (m_session_reboot_btn)   m_session_reboot_btn->layout(txui::Rect(cx + 20.0 + 2.0 * (btn_w + btn_gap), sys_y3 + 46.0, btn_w, 34.0));
+    if (m_session_shutdown_btn) m_session_shutdown_btn->layout(txui::Rect(cx + 20.0 + 3.0 * (btn_w + btn_gap), sys_y3 + 46.0, btn_w, 34.0));
+
+    // 5. Privacy & Security Page Widgets
+    if (m_lock_sleep_toggle) {
+        m_lock_sleep_toggle->layout(txui::Rect(cx + cw - 56.0, y1 + 20.0, 44.0, 24.0));
+    }
+    if (m_pam_auth_toggle) {
+        m_pam_auth_toggle->layout(txui::Rect(cx + cw - 56.0, y1 + 98.0, 44.0, 24.0));
+    }
+    float64 priv_y2 = y1 + 178.0;
+    if (m_rescan_btn) {
+        m_rescan_btn->layout(txui::Rect(cx + cw - 106.0, priv_y2 + 18.0, 86.0, 28.0));
+    }
+
+    // 6. Wi-Fi Password Modal Dialog Widgets
+    float64 mw = 460.0;
+    float64 mh = 260.0;
+    float64 mx = f.x() + (f.width() - mw) * 0.5;
+    float64 my = f.y() + (f.height() - mh) * 0.5;
+    m_wifi_modal_rect = txui::Rect(mx, my, mw, mh);
+
+    if (m_wifi_password_input) {
+        m_wifi_password_input->layout(txui::Rect(mx + 28.0, my + 94.0, mw - 120.0, 38.0));
+    }
+    if (m_wifi_modal_eye_btn) {
+        m_wifi_modal_eye_btn->layout(txui::Rect(mx + mw - 85.0, my + 94.0, 58.0, 38.0));
+    }
+    if (m_wifi_modal_cancel_btn) {
+        m_wifi_modal_cancel_btn->layout(txui::Rect(mx + mw - 224.0, my + mh - 54.0, 92.0, 34.0));
+    }
+    if (m_wifi_modal_connect_btn) {
+        m_wifi_modal_connect_btn->layout(txui::Rect(mx + mw - 120.0, my + mh - 54.0, 94.0, 34.0));
+    }
 }
 
 // ── Event Handler ────────────────────────────────────────────────────────────
 bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
-    // ── 0. Wi-Fi Password Connect Modal Interception ─────────────────────────
+    // 1. Wi-Fi Password Modal Interception
     if (m_wifi_modal_open) {
         if (event.type == txui::EventType::KeyDown) {
             if (event.keyboard.key == txui::Key::Escape) {
                 m_wifi_modal_open = false;
-                m_wifi_modal_password.clear();
+                m_wifi_password_input->set_text("");
                 m_wifi_modal_error.clear();
                 mark_needs_paint();
                 return true;
             }
             if (event.keyboard.key == txui::Key::Enter) {
-                if (m_wifi_modal_password.empty()) {
+                std::string pw = m_wifi_password_input->text();
+                if (pw.empty()) {
                     m_wifi_modal_error = "Password cannot be empty";
-                    mark_needs_paint();
                 } else {
-                    WifiManager::instance().connect(m_wifi_modal_ssid, m_wifi_modal_password);
+                    WifiManager::instance().connect(m_wifi_modal_ssid, pw);
                     m_wifi_modal_open = false;
-                    m_wifi_modal_password.clear();
+                    m_wifi_password_input->set_text("");
                     m_wifi_modal_error.clear();
-                    mark_needs_paint();
                 }
+                mark_needs_paint();
                 return true;
             }
-            if (event.keyboard.key == txui::Key::Backspace) {
-                if (!m_wifi_modal_password.empty()) {
-                    m_wifi_modal_password.pop_back();
-                    m_wifi_modal_error.clear();
-                    mark_needs_paint();
-                }
-                return true;
-            }
-            bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
-            char c = key_to_ascii(event.keyboard.key, shift);
-            if (c != 0) {
-                if (m_wifi_modal_password.size() < 64) {
-                    m_wifi_modal_password.push_back(c);
-                    m_wifi_modal_error.clear();
-                    mark_needs_paint();
-                }
-                return true;
-            }
-            return true; // Consume any other keys while modal is open
         }
 
-        if (event.type == txui::EventType::PointerMove) {
-            double px = event.pointer.x;
-            double py = event.pointer.y;
-            bool cancel_h = m_wifi_modal_cancel_btn.contains(px, py);
-            bool conn_h   = m_wifi_modal_connect_btn.contains(px, py);
-            bool eye_h    = m_wifi_modal_eye_btn.contains(px, py);
-            if (cancel_h != m_wifi_modal_cancel_hovered ||
-                conn_h   != m_wifi_modal_connect_hovered ||
-                eye_h    != m_wifi_modal_eye_hovered) {
-                m_wifi_modal_cancel_hovered  = cancel_h;
-                m_wifi_modal_connect_hovered = conn_h;
-                m_wifi_modal_eye_hovered     = eye_h;
-                mark_needs_paint();
-            }
+        if (m_wifi_password_input && m_wifi_password_input->handle_event(event)) return true;
+        if (m_wifi_modal_eye_btn && m_wifi_modal_eye_btn->handle_event(event))   return true;
+        if (m_wifi_modal_cancel_btn && m_wifi_modal_cancel_btn->handle_event(event)) return true;
+        if (m_wifi_modal_connect_btn && m_wifi_modal_connect_btn->handle_event(event)) return true;
+
+        // Block clicks from passing through modal scrim
+        if (event.type == txui::EventType::PointerButtonPress ||
+            event.type == txui::EventType::PointerButtonRelease) {
             return true;
-        }
-
-        if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
-            double px = event.pointer.x;
-            double py = event.pointer.y;
-            if (m_wifi_modal_cancel_btn.contains(px, py)) {
-                m_wifi_modal_open = false;
-                m_wifi_modal_password.clear();
-                m_wifi_modal_error.clear();
-                mark_needs_paint();
-                return true;
-            }
-            if (m_wifi_modal_connect_btn.contains(px, py)) {
-                if (m_wifi_modal_password.empty()) {
-                    m_wifi_modal_error = "Password cannot be empty";
-                    mark_needs_paint();
-                } else {
-                    WifiManager::instance().connect(m_wifi_modal_ssid, m_wifi_modal_password);
-                    m_wifi_modal_open = false;
-                    m_wifi_modal_password.clear();
-                    m_wifi_modal_error.clear();
-                    mark_needs_paint();
-                }
-                return true;
-            }
-            if (m_wifi_modal_eye_btn.contains(px, py)) {
-                m_wifi_modal_show_password = !m_wifi_modal_show_password;
-                mark_needs_paint();
-                return true;
-            }
-            if (m_wifi_modal_input_rect.contains(px, py)) {
-                float64 rel_x = px - (m_wifi_modal_input_rect.x() + 12.0);
-                if (rel_x <= 0.0) {
-                    m_wifi_modal_cursor_pos = m_wifi_modal_scroll_offset;
-                } else {
-                    std::string visible_pw = m_wifi_modal_show_password ? m_wifi_modal_password : std::string(m_wifi_modal_password.size(), '*');
-                    if (m_wifi_modal_scroll_offset < visible_pw.size()) {
-                        visible_pw = visible_pw.substr(m_wifi_modal_scroll_offset);
-                    }
-                    size_t idx = 0;
-                    while (idx < visible_pw.size() && estimate_text_width(visible_pw.substr(0, idx + 1), 0.95, true) < rel_x) {
-                        idx++;
-                    }
-                    m_wifi_modal_cursor_pos = m_wifi_modal_scroll_offset + idx;
-                    if (m_wifi_modal_cursor_pos > m_wifi_modal_password.size()) {
-                        m_wifi_modal_cursor_pos = m_wifi_modal_password.size();
-                    }
-                }
-                mark_needs_paint();
-                return true;
-            }
-            // Clicking outside modal dialog dismisses it
-            if (!m_wifi_modal_rect.contains(px, py)) {
-                m_wifi_modal_open = false;
-                m_wifi_modal_password.clear();
-                m_wifi_modal_error.clear();
-                mark_needs_paint();
-                return true;
-            }
-            return true; // Click inside modal area but not on buttons
         }
         return true;
     }
 
-    if (event.type == txui::EventType::KeyDown) {
-        if (event.keyboard.key == txui::Key::N1) {
-            select_page(SettingsPage::Display);
-            return true;
-        } else if (event.keyboard.key == txui::Key::N2) {
-            select_page(SettingsPage::Personalization);
-            return true;
-        } else if (event.keyboard.key == txui::Key::N3) {
-            select_page(SettingsPage::Network);
-            return true;
-        } else if (event.keyboard.key == txui::Key::N4) {
-            select_page(SettingsPage::System);
-            return true;
-        } else if (event.keyboard.key == txui::Key::N5) {
-            select_page(SettingsPage::KeyboardShortcuts);
-            return true;
-        } else if (event.keyboard.key == txui::Key::N6) {
-            select_page(SettingsPage::PrivacySecurity);
-            return true;
-        } else if (event.keyboard.key == txui::Key::N7) {
-            select_page(SettingsPage::About);
-            return true;
-        } else if (event.keyboard.key == txui::Key::Down) {
-            int cur = static_cast<int>(m_current_page);
-            if (cur < SIDEBAR_PAGES - 1) {
-                select_page(static_cast<SettingsPage>(cur + 1));
-            }
-            return true;
-        } else if (event.keyboard.key == txui::Key::Up) {
-            int cur = static_cast<int>(m_current_page);
-            if (cur > 0) {
-                select_page(static_cast<SettingsPage>(cur - 1));
-            }
+    // 2. Sidebar Navigation Items
+    for (auto& item : m_nav_items) {
+        if (item->handle_event(event)) {
             return true;
         }
     }
 
-    if (event.type == txui::EventType::PointerMove) {
-        double px = event.pointer.x;
-        double py = event.pointer.y;
+    // 3. Active Page Specific Dispatch
+    switch (m_current_page) {
+        case SettingsPage::Display:
+            if (m_display_scale_control && m_display_scale_control->handle_event(event)) return true;
+            if (m_night_light_toggle && m_night_light_toggle->handle_event(event))       return true;
+            if (m_vrr_toggle && m_vrr_toggle->handle_event(event))                       return true;
+            break;
 
-        int new_hover = -1;
-        if (px >= m_sidebar_rect.x() + 8.0 && px <= m_sidebar_rect.right() - 8.0) {
-            for (int i = 0; i < SIDEBAR_PAGES; ++i) {
-                double iy = m_sidebar_rect.y() + 52.0 + static_cast<double>(i) * (ITEM_H + 4.0);
-                if (py >= iy && py <= iy + ITEM_H) {
-                    new_hover = i;
-                    break;
-                }
-            }
-        }
-        if (new_hover != m_hovered_tab) {
-            m_hovered_tab = new_hover;
-            mark_needs_paint();
-        }
+        case SettingsPage::Personalization:
+            if (m_accent_picker && m_accent_picker->handle_event(event))         return true;
+            if (m_theme_toggle_btn && m_theme_toggle_btn->handle_event(event))   return true;
+            if (handle_wallpaper_event(event)) return true;
+            break;
 
-        if (m_current_page == SettingsPage::Network) {
-            bool scan_h = m_wifi_scan_btn_rect.contains(px, py);
-            bool disc_h = m_wifi_disconnect_btn_rect.contains(px, py);
-            int net_h = -1;
-            for (size_t i = 0; i < m_network_item_rects.size(); ++i) {
-                if (m_network_item_rects[i].contains(px, py)) {
-                    net_h = static_cast<int>(i);
-                    break;
-                }
-            }
-            if (scan_h != m_wifi_scan_hovered || disc_h != m_wifi_disconnect_hovered || net_h != m_hovered_network_idx) {
-                m_wifi_scan_hovered       = scan_h;
-                m_wifi_disconnect_hovered = disc_h;
-                m_hovered_network_idx     = net_h;
-                mark_needs_paint();
-            }
-        }
+        case SettingsPage::Network:
+            if (m_wifi_master_toggle && m_wifi_master_toggle->handle_event(event)) return true;
+            if (m_wifi_scan_btn && m_wifi_scan_btn->handle_event(event))           return true;
+            if (m_wifi_disconnect_btn && m_wifi_disconnect_btn->handle_event(event)) return true;
+            if (handle_network_list_event(event)) return true;
+            break;
 
-        if (m_current_page == SettingsPage::PrivacySecurity) {
-            bool rescan_h = (px >= m_rescan_btn_rect.x() && px <= m_rescan_btn_rect.right() &&
-                             py >= m_rescan_btn_rect.y() && py <= m_rescan_btn_rect.bottom());
-            if (rescan_h != m_rescan_hovered) {
-                m_rescan_hovered = rescan_h;
-                mark_needs_paint();
-            }
+        case SettingsPage::System:
+            if (m_timeout_slider && m_timeout_slider->handle_event(event))             return true;
+            if (m_sleep_slider && m_sleep_slider->handle_event(event))                 return true;
+            if (m_power_profile_control && m_power_profile_control->handle_event(event)) return true;
+            if (m_clipboard_size_control && m_clipboard_size_control->handle_event(event)) return true;
+            if (m_lock_sleep_toggle && m_lock_sleep_toggle->handle_event(event))       return true;
+            if (m_pam_auth_toggle && m_pam_auth_toggle->handle_event(event))           return true;
+            if (m_session_lock_btn && m_session_lock_btn->handle_event(event))         return true;
+            if (m_session_suspend_btn && m_session_suspend_btn->handle_event(event))   return true;
+            if (m_session_reboot_btn && m_session_reboot_btn->handle_event(event))     return true;
+            if (m_session_shutdown_btn && m_session_shutdown_btn->handle_event(event)) return true;
+            break;
 
-            for (auto& app : m_unverified_apps) {
-                bool h = (px >= app.btn_rect.x() && px <= app.btn_rect.right() &&
-                          py >= app.btn_rect.y() && py <= app.btn_rect.bottom());
-                if (app.is_hovered != h) {
-                    app.is_hovered = h;
-                    mark_needs_paint();
-                }
-            }
-        }
-        return false;
-    }
+        case SettingsPage::PrivacySecurity:
+            if (m_lock_sleep_toggle && m_lock_sleep_toggle->handle_event(event)) return true;
+            if (m_pam_auth_toggle && m_pam_auth_toggle->handle_event(event))     return true;
+            if (m_rescan_btn && m_rescan_btn->handle_event(event))               return true;
+            if (handle_privacy_event(event)) return true;
+            break;
 
-    if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
-        double px = event.pointer.x;
-        double py = event.pointer.y;
-
-        // 1. Sidebar tab navigation
-        if (px >= m_sidebar_rect.x() + 8.0 && px <= m_sidebar_rect.right() - 8.0) {
-            for (int i = 0; i < SIDEBAR_PAGES; ++i) {
-                double iy = m_sidebar_rect.y() + 52.0 + static_cast<double>(i) * (ITEM_H + 4.0);
-                if (py >= iy && py <= iy + ITEM_H) {
-                    select_page(static_cast<SettingsPage>(i));
-                    return true;
-                }
-            }
-        }
-
-        const float64 cx = m_content_rect.x() + 32.0;
-        const float64 cw = m_content_rect.width() - 64.0;
-        const float64 startY = m_content_rect.y() + 114.0;
-
-        // 2. Display Page
-        if (m_current_page == SettingsPage::Display) {
-            float64 y1 = startY;
-            // Display Scale Segmented Track
-            float64 track_x = cx + cw - 256.0;
-            float64 track_w = 236.0;
-            if (px >= track_x && px <= track_x + track_w && py >= y1 + 116.0 && py <= y1 + 144.0) {
-                int idx = std::clamp(static_cast<int>((px - track_x) / 58.0), 0, 3);
-                m_display_scale_idx = idx;
-                save_config();
-                mark_needs_paint();
-                return true;
-            }
-
-            float64 y2 = y1 + 184.0;
-            // Night light toggle
-            if (px >= cx + cw - 60.0 && px <= cx + cw - 15.0) {
-                if (py >= y2 + 18.0 && py <= y2 + 44.0) {
-                    m_night_light_enabled = !m_night_light_enabled;
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                } else if (py >= y2 + 96.0 && py <= y2 + 122.0) {
-                    m_vrr_enabled = !m_vrr_enabled;
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                }
-            }
-        }
-
-        // 3. Personalization Page
-        if (m_current_page == SettingsPage::Personalization) {
-            float64 y1 = startY;
-            // Accent Color Picker
-            if (py >= y1 + 74.0 && py <= y1 + 110.0) {
-                for (int i = 0; i < ACCENT_COUNT; ++i) {
-                    float64 sx = cx + 24.0 + static_cast<double>(i) * 54.0;
-                    if (std::abs(px - sx) <= 18.0) {
-                        m_selected_accent_idx = i;
-                        save_config();
-                        mark_needs_paint();
-                        return true;
-                    }
-                }
-            }
-
-            float64 y2 = y1 + 152.0;
-            float64 y3 = y2 + 102.0;
-            // Wallpapers
-            if (py >= y3 + 76.0 && py <= y3 + 158.0) {
-                int count = std::min(4, static_cast<int>(m_wallpapers.size()));
-                float64 gap = 16.0;
-                float64 total_gaps = gap * static_cast<double>(count > 1 ? count - 1 : 0);
-                float64 card_w = (count > 0) ? std::clamp((cw - 40.0 - total_gaps) / static_cast<double>(count), 120.0, 260.0) : 150.0;
-                for (int i = 0; i < count; ++i) {
-                    float64 wx = cx + 20.0 + static_cast<double>(i) * (card_w + gap);
-                    if (px >= wx && px <= wx + card_w) {
-                        m_selected_wallpaper_idx = i;
-                        save_config();
-                        mark_needs_paint();
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // 3. Network Page (Wi-Fi interactive controls)
-        if (m_current_page == SettingsPage::Network) {
-            // Wi-Fi Master Toggle
-            if (m_wifi_toggle_rect.contains(px, py)) {
-                bool enabled = WifiManager::instance().is_wifi_enabled();
-                WifiManager::instance().set_wifi_enabled(!enabled);
-                mark_needs_paint();
-                return true;
-            }
-
-            // Wi-Fi Scan Button
-            if (m_wifi_scan_btn_rect.contains(px, py)) {
-                WifiManager::instance().trigger_scan();
-                mark_needs_paint();
-                return true;
-            }
-
-            // Disconnect Button
-            if (m_wifi_disconnect_btn_rect.contains(px, py)) {
-                WifiManager::instance().disconnect();
-                mark_needs_paint();
-                return true;
-            }
-
-            // Click on network item in the list
-            for (size_t i = 0; i < m_network_item_rects.size(); ++i) {
-                if (m_network_item_rects[i].contains(px, py)) {
-                    auto networks = WifiManager::instance().get_networks();
-                    if (i < networks.size()) {
-                        const auto& net = networks[i];
-                        if (net.is_connected) {
-                            return true; // Already connected
-                        }
-                        if (!net.is_secured) {
-                            // Open network: connect directly without password prompt
-                            WifiManager::instance().connect(net.ssid, "");
-                            mark_needs_paint();
-                            return true;
-                        } else {
-                            // Secured network: summon macOS-style password modal
-                            m_wifi_modal_open = true;
-                            m_wifi_modal_ssid = net.ssid;
-                            m_wifi_modal_password.clear();
-                            m_wifi_modal_show_password = false;
-                            m_wifi_modal_error.clear();
-                            m_wifi_modal_cancel_hovered = false;
-                            m_wifi_modal_connect_hovered = false;
-                            m_wifi_modal_eye_hovered = false;
-                            mark_needs_paint();
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. System Page
-        if (m_current_page == SettingsPage::System) {
-            float64 y1 = startY;
-            // Screen Timeout Stepper
-            if (py >= y1 + 14.0 && py <= y1 + 42.0) {
-                if (px >= cx + cw - 130.0 && px <= cx + cw - 100.0) {
-                    m_screen_timeout_min = std::max(1, m_screen_timeout_min - 1);
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                } else if (px >= cx + cw - 42.0 && px <= cx + cw - 12.0) {
-                    m_screen_timeout_min = std::min(60, m_screen_timeout_min + 1);
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                }
-            }
-            // Sleep After Stepper
-            if (py >= y1 + 70.0 && py <= y1 + 98.0) {
-                if (px >= cx + cw - 130.0 && px <= cx + cw - 100.0) {
-                    m_sleep_after_min = std::max(1, m_sleep_after_min - 5);
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                } else if (px >= cx + cw - 42.0 && px <= cx + cw - 12.0) {
-                    m_sleep_after_min = std::min(120, m_sleep_after_min + 5);
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                }
-            }
-            // Power Profile Track (macOS Segmented)
-            float64 track_x = cx + cw - 324.0;
-            float64 track_w = 304.0;
-            if (px >= track_x && px <= track_x + track_w && py >= y1 + 124.0 && py <= y1 + 152.0) {
-                int idx = std::clamp(static_cast<int>((px - track_x) / 100.0), 0, 2);
-                m_power_profile_idx = idx;
-                save_config();
-                mark_needs_paint();
-                return true;
-            }
-
-            // Clipboard Capacity
-            float64 y2 = y1 + 192.0;
-            float64 clip_track_x = cx + cw - 228.0;
-            float64 clip_track_w = 208.0;
-            if (px >= clip_track_x && px <= clip_track_x + clip_track_w && py >= y2 + 92.0 && py <= y2 + 120.0) {
-                int idx = std::clamp(static_cast<int>((px - clip_track_x) / 68.0), 0, 2);
-                m_clipboard_history_size = (idx == 0 ? 25 : (idx == 1 ? 50 : 100));
-                save_config();
-                mark_needs_paint();
-                return true;
-            }
-
-            // Session Buttons
-            float64 y3 = y2 + 156.0;
-            if (py >= y3 + 46.0 && py <= y3 + 78.0) {
-                float64 gap = 14.0;
-                float64 btn_w = std::clamp((cw - 40.0 - 3.0 * gap) / 4.0, 110.0, 220.0);
-                for (int i = 0; i < 4; ++i) {
-                    float64 bx = cx + 20.0 + static_cast<double>(i) * (btn_w + gap);
-                    if (px >= bx && px <= bx + btn_w) {
-                        trigger_session_action(i);
-                        mark_needs_paint();
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // 5. Privacy & Security Page
-        if (m_current_page == SettingsPage::PrivacySecurity) {
-            float64 y1 = startY;
-            if (px >= cx + cw - 60.0 && px <= cx + cw - 15.0) {
-                if (py >= y1 + 18.0 && py <= y1 + 44.0) {
-                    m_lock_on_sleep = !m_lock_on_sleep;
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                } else if (py >= y1 + 96.0 && py <= y1 + 122.0) {
-                    m_pam_auth = !m_pam_auth;
-                    save_config();
-                    mark_needs_paint();
-                    return true;
-                }
-            }
-
-            // Re-scan button
-            float64 y2 = y1 + 178.0;
-            if (px >= m_rescan_btn_rect.x() && px <= m_rescan_btn_rect.right() &&
-                py >= m_rescan_btn_rect.y() && py <= m_rescan_btn_rect.bottom()) {
-                refresh_unverified_apps();
-                mark_needs_paint();
-                return true;
-            }
-
-            // Trust buttons
-            float64 uy = y2 + 84.0;
-            for (auto& app : m_unverified_apps) {
-                txui::Rect btn_rect(cx + cw - 106.0, uy, 86.0, 24.0);
-                if (px >= btn_rect.x() && px <= btn_rect.right() &&
-                    py >= btn_rect.y() && py <= btn_rect.bottom()) {
-                    trust_app(app.hash);
-                    mark_needs_paint();
-                    return true;
-                }
-                uy += 44.0;
-            }
-        }
+        default:
+            break;
     }
 
     return false;
 }
 
-// ── Paint Override ───────────────────────────────────────────────────────────
-void SettingsWidget::paint_override(txui::Painter& painter) const noexcept {
-    // 1. Outer boundary background
-    painter.fill_rect(frame(), BG_BASE);
+bool SettingsWidget::handle_wallpaper_event(const txui::Event& event) noexcept {
+    if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
+        txui::Rect area(m_content_rect.x() + 32.0, m_content_rect.y() + 28.0,
+                        m_content_rect.width() - 64.0, m_content_rect.height() - 56.0);
+        float64 cx = area.x();
+        float64 y1 = area.y() + 94.0;
+        float64 y3 = y1 + 116.0 + 86.0;
+        float64 card_w = 110.0;
+        float64 card_gap = 14.0;
 
-    // 2. Sidebar background
-    painter.fill_gradient_rect(m_sidebar_rect, BG_SIDEBAR, txui::Color(10, 10, 16, 255));
+        for (size_t i = 0; i < m_wallpapers.size(); ++i) {
+            float64 wx = cx + 20.0 + static_cast<double>(i) * (card_w + card_gap);
+            float64 wy = y3 + 52.0;
+            txui::Rect wrect(wx, wy, card_w, 70.0);
+            if (wrect.contains(txui::Point(event.pointer.x, event.pointer.y))) {
+                m_selected_wallpaper_idx = static_cast<int>(i);
+                mark_needs_paint();
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
-    // 3. Sidebar Search Pill & Navigation Items
-    paint_sidebar(painter);
+bool SettingsWidget::handle_network_list_event(const txui::Event& event) noexcept {
+    if (event.type == txui::EventType::PointerMove) {
+        int old_hover = m_hovered_network_idx;
+        m_hovered_network_idx = -1;
+        for (size_t i = 0; i < m_network_item_rects.size(); ++i) {
+            if (m_network_item_rects[i].contains(txui::Point(event.pointer.x, event.pointer.y))) {
+                m_hovered_network_idx = static_cast<int>(i);
+                break;
+            }
+        }
+        if (old_hover != m_hovered_network_idx) mark_needs_paint();
+        return m_hovered_network_idx != -1;
+    }
 
-    // 4. Vertical divider line between sidebar and content
-    painter.fill_rect(txui::Rect(m_sidebar_rect.right() - 1.0, frame().y(), 1.0, frame().height()), DIVIDER);
+    if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
+        for (size_t i = 0; i < m_network_item_rects.size(); ++i) {
+            if (m_network_item_rects[i].contains(txui::Point(event.pointer.x, event.pointer.y))) {
+                const auto nets = WifiManager::instance().get_networks();
+                if (i < nets.size()) {
+                    if (nets[i].is_secured && !nets[i].is_connected) {
+                        open_wifi_password_modal(nets[i].ssid);
+                    } else if (!nets[i].is_secured) {
+                        WifiManager::instance().connect(nets[i].ssid, "");
+                    }
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
-    // 5. Content background
-    painter.fill_rect(m_content_rect, BG_BASE);
+bool SettingsWidget::handle_privacy_event(const txui::Event& event) noexcept {
+    if (event.type == txui::EventType::PointerButtonPress && event.pointer.button == txui::MouseButton::Left) {
+        for (auto& app : m_unverified_apps) {
+            if (app.btn_rect.contains(txui::Point(event.pointer.x, event.pointer.y))) {
+                trust_app(app.hash);
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
-    // 6. Render Current Page
-    const txui::Rect content_area(
-        m_content_rect.x() + 32.0,
-        m_content_rect.y() + 20.0,
-        m_content_rect.width() - 64.0,
-        m_content_rect.height() - 32.0
-    );
+// ── Paint Pipeline ───────────────────────────────────────────────────────────
+void SettingsWidget::paint_override(txui::Painter& p) const noexcept {
+    // 1. Overall canvas background
+    p.fill_rect(frame(), BG_DARK);
+
+    // 2. Sidebar
+    paint_sidebar(p);
+
+    // 3. Vertical divider
+    p.fill_rect(txui::Rect(m_sidebar_rect.right(), frame().y(), 1.0, frame().height()), DIVIDER);
+
+    // 4. Content Page area
+    txui::Rect area(m_content_rect.x() + 32.0, m_content_rect.y() + 28.0,
+                    m_content_rect.width() - 64.0, m_content_rect.height() - 56.0);
 
     switch (m_current_page) {
-        case SettingsPage::Display:
-            paint_display_page(painter, content_area);
-            break;
-        case SettingsPage::Personalization:
-            paint_personalization_page(painter, content_area);
-            break;
-        case SettingsPage::Network:
-            paint_network_page(painter, content_area);
-            break;
-        case SettingsPage::System:
-            paint_system_page(painter, content_area);
-            break;
-        case SettingsPage::KeyboardShortcuts:
-            paint_keyboard_shortcuts_page(painter, content_area);
-            break;
-        case SettingsPage::PrivacySecurity:
-            paint_privacy_security_page(painter, content_area);
-            break;
-        case SettingsPage::About:
-            paint_about_page(painter, content_area);
-            break;
+        case SettingsPage::Display:           paint_display_page(p, area); break;
+        case SettingsPage::Personalization:   paint_personalization_page(p, area); break;
+        case SettingsPage::Network:           paint_network_page(p, area); break;
+        case SettingsPage::System:            paint_system_page(p, area); break;
+        case SettingsPage::KeyboardShortcuts: paint_keyboard_shortcuts_page(p, area); break;
+        case SettingsPage::PrivacySecurity:   paint_privacy_security_page(p, area); break;
+        case SettingsPage::About:             paint_about_page(p, area); break;
     }
 
-    // Modal overlay on top of active page
+    // 5. Wi-Fi Connect Modal Overlay
     if (m_wifi_modal_open) {
-        paint_wifi_modal(painter);
+        paint_wifi_modal(p);
     }
 }
 
-// ── Sidebar Paint ────────────────────────────────────────────────────────────
+// ── Sidebar Painting ─────────────────────────────────────────────────────────
 void SettingsWidget::paint_sidebar(txui::Painter& p) const noexcept {
-    // 1. macOS-style Pill Search Field at the top of the sidebar
-    float64 sx = m_sidebar_rect.x() + 12.0;
-    float64 sy = m_sidebar_rect.y() + 12.0;
-    float64 sw = m_sidebar_rect.width() - 24.0;
-    txui::Rect search_rect(sx, sy, sw, 30.0);
-    // Outer border ring
-    p.fill_rounded_rect(search_rect, 7.5, txui::Color(44, 44, 62, 180));
-    // Inner field background
-    p.fill_rounded_rect(txui::Rect(sx + 1.0, sy + 1.0, sw - 2.0, 28.0), 6.5, txui::Color(22, 22, 32, 255));
+    p.fill_rect(m_sidebar_rect, SIDEBAR_BG);
 
-    // Magnifying glass icon
-    p.draw_circle(txui::Point(sx + 14.0, sy + 15.0), 3.8, 1.4, TXT_DIM);
-    p.fill_rect(txui::Rect(sx + 17.5, sy + 18.0, 3.2, 2.2), TXT_DIM);
-    p.draw_text(txui::Point(sx + 27.0, sy + 7.5), "Search settings...", TXT_DIM, 0.85);
+    // Window control pills (macOS style: Close, Minimize, Zoom)
+    float64 ctrl_x = m_sidebar_rect.x() + 18.0;
+    float64 ctrl_y = m_sidebar_rect.y() + 18.0;
+    p.fill_circle(txui::Point(ctrl_x, ctrl_y), 6.0, txui::Color(255, 95, 87, 255));
+    p.fill_circle(txui::Point(ctrl_x + 20.0, ctrl_y), 6.0, txui::Color(254, 188, 46, 255));
+    p.fill_circle(txui::Point(ctrl_x + 40.0, ctrl_y), 6.0, txui::Color(40, 200, 64, 255));
 
-    // 2. Navigation Items
-    const char* labels[] = {
-        "Displays",
-        "Personalization",
-        "Network",
-        "System & Power",
-        "Keyboard",
-        "Privacy & Security",
-        "About Tinexus"
-    };
+    // Title label
+    p.draw_text(txui::Point(m_sidebar_rect.x() + 18.0, m_sidebar_rect.y() + 42.0),
+                "Settings", TXT_PRI, 15.0, true);
 
-    for (int i = 0; i < SIDEBAR_PAGES; ++i) {
-        double y = m_sidebar_rect.y() + 52.0 + static_cast<double>(i) * (ITEM_H + 4.0);
-        paint_sidebar_item(p, labels[i], static_cast<SettingsPage>(i), y);
+    // Sidebar navigation items
+    for (const auto& item : m_nav_items) {
+        item->paint(p);
     }
 }
 
-void SettingsWidget::paint_sidebar_item(txui::Painter& p, const char* label,
-                                        SettingsPage page, txui::float64 y) const noexcept {
-    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
-    const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
-
-    bool is_active = (m_current_page == page);
-    int idx = static_cast<int>(page);
-    bool is_hover = (m_hovered_tab == idx);
-
-    txui::Rect item_rect(m_sidebar_rect.x() + 8.0, y, m_sidebar_rect.width() - 16.0, ITEM_H);
-
-    if (is_active) {
-        p.fill_rounded_rect(item_rect, 8.0, txui::Color(current_accent.r, current_accent.g, current_accent.b, 42));
-        p.fill_rect(txui::Rect(item_rect.x() + 2.0, y + 10.0, 3.0, ITEM_H - 20.0), active_accent);
-    } else if (is_hover) {
-        p.fill_rounded_rect(item_rect, 8.0, txui::Color(35, 35, 48, 160));
-    }
-
-    // Icon badge position
-    float64 tx = item_rect.x() + 10.0;
-    float64 ty = y + (ITEM_H - 28.0) * 0.5;
-
-    switch (page) {
-        case SettingsPage::Display:           draw_icon_display(p, tx, ty); break;
-        case SettingsPage::Personalization:   draw_icon_personalization(p, tx, ty); break;
-        case SettingsPage::Network:           draw_icon_network(p, tx, ty); break;
-        case SettingsPage::System:            draw_icon_system(p, tx, ty); break;
-        case SettingsPage::KeyboardShortcuts: draw_icon_keyboard(p, tx, ty); break;
-        case SettingsPage::PrivacySecurity:   draw_icon_privacy(p, tx, ty); break;
-        case SettingsPage::About:             draw_icon_about(p, tx, ty); break;
-    }
-
-    txui::Color text_col = is_active ? TXT_PRI : (is_hover ? txui::Color(225, 225, 240, 255) : TXT_SEC);
-    p.draw_text(txui::Point(tx + 36.0, y + 13.0), label, text_col, 0.96, is_active);
-}
-
-// ── macOS-Style Glossy Dimensional Icon Badges ──────────────────────────────
-void SettingsWidget::draw_icon_display(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(55, 130, 245, 255), txui::Color(28, 92, 210, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.fill_rect(txui::Rect(cx - 7.0, cy - 6.0, 14.0, 9.0), TXT_PRI);
-    p.fill_rect(txui::Rect(cx - 5.5, cy - 4.5, 11.0, 6.0), txui::Color(35, 100, 220, 255));
-    p.fill_rect(txui::Rect(cx - 1.0, cy + 3.0, 2.0, 3.0), TXT_PRI);
-    p.fill_rect(txui::Rect(cx - 4.0, cy + 6.0, 8.0, 1.5), TXT_PRI);
-}
-
-void SettingsWidget::draw_icon_personalization(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(180, 105, 250, 255), txui::Color(140, 65, 215, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.fill_circle(txui::Point(cx, cy), 7.0, TXT_PRI);
-    p.fill_circle(txui::Point(cx + 3.0, cy + 3.0), 2.2, txui::Color(150, 75, 225, 255));
-    p.fill_circle(txui::Point(cx - 3.0, cy - 3.0), 1.5, txui::Color(240, 75, 75, 255));
-    p.fill_circle(txui::Point(cx + 2.0, cy - 3.0), 1.5, txui::Color(70, 205, 120, 255));
-    p.fill_circle(txui::Point(cx - 3.0, cy + 2.0), 1.5, txui::Color(245, 185, 45, 255));
-}
-
-void SettingsWidget::draw_icon_network(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(55, 195, 115, 255), txui::Color(32, 155, 88, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.fill_circle(txui::Point(cx, cy + 5.0), 2.0, TXT_PRI);
-    p.draw_circle(txui::Point(cx, cy + 5.0), 5.5, 1.5, TXT_PRI);
-    p.draw_circle(txui::Point(cx, cy + 5.0), 9.0, 1.5, TXT_PRI);
-}
-
-void SettingsWidget::draw_icon_system(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(255, 135, 45, 255), txui::Color(215, 95, 20, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.fill_circle(txui::Point(cx, cy), 6.5, TXT_PRI);
-    p.fill_circle(txui::Point(cx, cy), 2.5, txui::Color(230, 105, 30, 255));
-    p.fill_rect(txui::Rect(cx - 1.5, cy - 8.0, 3.0, 2.5), TXT_PRI);
-    p.fill_rect(txui::Rect(cx - 1.5, cy + 5.5, 3.0, 2.5), TXT_PRI);
-    p.fill_rect(txui::Rect(cx - 8.0, cy - 1.5, 2.5, 3.0), TXT_PRI);
-    p.fill_rect(txui::Rect(cx + 5.5, cy - 1.5, 2.5, 3.0), TXT_PRI);
-}
-
-void SettingsWidget::draw_icon_keyboard(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(110, 135, 250, 255), txui::Color(75, 100, 215, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.fill_rounded_rect(txui::Rect(cx - 7.0, cy - 5.0, 14.0, 10.0), 2.0, TXT_PRI);
-    p.fill_rounded_rect(txui::Rect(cx - 5.5, cy - 3.5, 11.0, 7.0), 1.2, txui::Color(85, 110, 230, 255));
-    p.fill_rect(txui::Rect(cx - 3.0, cy - 1.0, 6.0, 2.0), TXT_PRI);
-}
-
-void SettingsWidget::draw_icon_privacy(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(250, 75, 75, 255), txui::Color(205, 42, 42, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.fill_rounded_rect(txui::Rect(cx - 6.0, cy - 6.0, 12.0, 8.0), 2.0, TXT_PRI);
-    p.fill_circle(txui::Point(cx, cy + 1.0), 6.0, TXT_PRI);
-    p.fill_circle(txui::Point(cx, cy - 2.0), 2.0, txui::Color(220, 50, 50, 255));
-    p.fill_rect(txui::Rect(cx - 1.0, cy - 1.0, 2.0, 4.0), txui::Color(220, 50, 50, 255));
-}
-
-void SettingsWidget::draw_icon_about(txui::Painter& p, float64 tx, float64 ty) const noexcept {
-    draw_icon_badge_base(p, tx, ty, txui::Color(45, 185, 190, 255), txui::Color(22, 145, 150, 255));
-    float64 cx = tx + 14.0, cy = ty + 14.0;
-    p.draw_circle(txui::Point(cx, cy), 7.0, 1.5, TXT_PRI);
-    p.fill_circle(txui::Point(cx, cy - 3.2), 1.4, TXT_PRI);
-    p.fill_rect(txui::Rect(cx - 1.0, cy - 0.5, 2.0, 4.5), TXT_PRI);
-}
-
-// ── Standard Page Header (With generous, spacious title-to-subtitle gap) ────
+// ── Page Header Helper ───────────────────────────────────────────────────────
 static void draw_page_header(txui::Painter& p, const txui::Rect& area,
                              const char* title, const char* subtitle,
-                             SettingsPage page) {
-    float64 hx = area.x();
-    float64 hy = area.y() + 4.0;
-
-    float64 bx = hx;
-    float64 by = hy + 2.0;
-
-    txui::Color top_c, bot_c;
-    switch (page) {
-        case SettingsPage::Display:           top_c = txui::Color(55, 130, 245, 255); bot_c = txui::Color(28, 92, 210, 255); break;
-        case SettingsPage::Personalization:   top_c = txui::Color(180, 105, 250, 255); bot_c = txui::Color(140, 65, 215, 255); break;
-        case SettingsPage::Network:           top_c = txui::Color(55, 195, 115, 255); bot_c = txui::Color(32, 155, 88, 255); break;
-        case SettingsPage::System:            top_c = txui::Color(255, 135, 45, 255); bot_c = txui::Color(215, 95, 20, 255); break;
-        case SettingsPage::KeyboardShortcuts: top_c = txui::Color(110, 135, 250, 255); bot_c = txui::Color(75, 100, 215, 255); break;
-        case SettingsPage::PrivacySecurity:   top_c = txui::Color(250, 75, 75, 255); bot_c = txui::Color(205, 42, 42, 255); break;
-        case SettingsPage::About:             top_c = txui::Color(45, 185, 190, 255); bot_c = txui::Color(22, 145, 150, 255); break;
-    }
-
-    draw_icon_badge_base(p, bx, by, top_c, bot_c, 32.0, 7.5);
-
-    float64 cx = bx + 16.0, cy = by + 16.0;
-    switch (page) {
-        case SettingsPage::Display: {
-            p.fill_rect(txui::Rect(cx - 8.0, cy - 7.0, 16.0, 10.0), TXT_PRI);
-            p.fill_rect(txui::Rect(cx - 6.5, cy - 5.5, 13.0, 7.0), bot_c);
-            p.fill_rect(txui::Rect(cx - 1.2, cy + 3.0, 2.4, 4.0), TXT_PRI);
-            p.fill_rect(txui::Rect(cx - 5.0, cy + 7.0, 10.0, 1.8), TXT_PRI);
-            break;
-        }
-        case SettingsPage::Personalization: {
-            p.fill_circle(txui::Point(cx, cy), 8.0, TXT_PRI);
-            p.fill_circle(txui::Point(cx + 3.5, cy + 3.5), 2.5, bot_c);
-            p.fill_circle(txui::Point(cx - 3.5, cy - 3.5), 1.8, txui::Color(240, 75, 75, 255));
-            p.fill_circle(txui::Point(cx + 2.5, cy - 3.5), 1.8, txui::Color(70, 205, 120, 255));
-            p.fill_circle(txui::Point(cx - 3.5, cy + 2.5), 1.8, txui::Color(245, 185, 45, 255));
-            break;
-        }
-        case SettingsPage::Network: {
-            p.fill_circle(txui::Point(cx, cy + 6.0), 2.2, TXT_PRI);
-            p.draw_circle(txui::Point(cx, cy + 6.0), 6.5, 1.8, TXT_PRI);
-            p.draw_circle(txui::Point(cx, cy + 6.0), 10.5, 1.8, TXT_PRI);
-            break;
-        }
-        case SettingsPage::System: {
-            p.fill_circle(txui::Point(cx, cy), 7.5, TXT_PRI);
-            p.fill_circle(txui::Point(cx, cy), 3.0, bot_c);
-            p.fill_rect(txui::Rect(cx - 1.8, cy - 9.5, 3.6, 3.0), TXT_PRI);
-            p.fill_rect(txui::Rect(cx - 1.8, cy + 6.5, 3.6, 3.0), TXT_PRI);
-            p.fill_rect(txui::Rect(cx - 9.5, cy - 1.8, 3.0, 3.6), TXT_PRI);
-            p.fill_rect(txui::Rect(cx + 6.5, cy - 1.8, 3.0, 3.6), TXT_PRI);
-            break;
-        }
-        case SettingsPage::KeyboardShortcuts: {
-            p.fill_rounded_rect(txui::Rect(cx - 8.0, cy - 6.0, 16.0, 12.0), 2.5, TXT_PRI);
-            p.fill_rounded_rect(txui::Rect(cx - 6.5, cy - 4.5, 13.0, 9.0), 1.5, bot_c);
-            p.fill_rect(txui::Rect(cx - 3.5, cy - 1.2, 7.0, 2.4), TXT_PRI);
-            break;
-        }
-        case SettingsPage::PrivacySecurity: {
-            p.fill_rounded_rect(txui::Rect(cx - 7.0, cy - 7.0, 14.0, 9.0), 2.5, TXT_PRI);
-            p.fill_circle(txui::Point(cx, cy + 1.0), 7.0, TXT_PRI);
-            p.fill_circle(txui::Point(cx, cy - 2.5), 2.2, bot_c);
-            p.fill_rect(txui::Rect(cx - 1.2, cy - 1.5, 2.4, 5.0), bot_c);
-            break;
-        }
-        case SettingsPage::About: {
-            p.draw_circle(txui::Point(cx, cy), 8.0, 1.8, TXT_PRI);
-            p.fill_circle(txui::Point(cx, cy - 3.8), 1.6, TXT_PRI);
-            p.fill_rect(txui::Rect(cx - 1.2, cy - 0.6, 2.4, 5.4), TXT_PRI);
-            break;
-        }
-    }
-
-    // Title at hy + 2.0, Subtitle at hy + 38.0 (guaranteed 14px clear gap between them!)
-    p.draw_text(txui::Point(hx + 46.0, hy + 2.0), title, TXT_PRI, 1.7, true);
-    p.draw_text(txui::Point(hx + 46.0, hy + 38.0), subtitle, TXT_SEC, 0.88, false);
-
-    // Separator line at hy + 70.0 (18px clear margin below subtitle)
-    p.fill_rect(txui::Rect(hx, hy + 70.0, area.width(), 1.0), DIVIDER);
+                             SettingsPage /*page*/) {
+    p.draw_text(txui::Point(area.x(), area.y()), title, TXT_PRI, 22.0, true);
+    p.draw_text(txui::Point(area.x(), area.y() + 32.0), subtitle, TXT_SEC, 13.0);
+    p.fill_rect(txui::Rect(area.x(), area.y() + 66.0, area.width(), 1.0), DIVIDER);
 }
 
 // ── 1. Page: Display ─────────────────────────────────────────────────────────
 void SettingsWidget::paint_display_page(txui::Painter& p, const txui::Rect& area) const noexcept {
-    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
-    const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
-
-    draw_page_header(p, area, "Displays",
-                     "Manage monitors, native resolution, refresh rate, and scaling behavior",
+    draw_page_header(p, area, "Display",
+                     "Resolution, display scaling, Night Light, and refresh rates",
                      SettingsPage::Display);
 
     float64 cx = area.x();
     float64 cw = area.width();
     float64 y1 = area.y() + 94.0;
 
-    // Card 1: Active Output & Display Scale
-    draw_card(p, txui::Rect(cx, y1, cw, 164.0));
-    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Active Monitor", TXT_PRI, 1.05, true);
-    draw_badge_pill(p, cx + cw - 78.0, y1 + 18.0, "Primary", SUCCESS_BG, SUCCESS_TXT);
+    // Card 1: Display Information
+    draw_card(p, txui::Rect(cx, y1, cw, 160.0));
 
-    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), "Virtual-1 / eDP-1", TXT_SEC, 0.88);
-    p.draw_text(txui::Point(cx + 20.0, y1 + 72.0), "1920 x 1080 @ 60.00 Hz (Wayland Native Output)", TXT_DIM, 0.82);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Primary Display (eDP-1)", TXT_PRI, 15.0, true);
+    draw_badge_pill(p, cx + cw - 80.0, y1 + 18.0, "Primary", SUCCESS_BG, SUCCESS_TXT);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), "3840 × 2160 @ 120 Hz  •  Vulkan Direct Scanout (wlroots)", TXT_SEC, 12.0);
 
-    p.fill_rect(txui::Rect(cx + 20.0, y1 + 102.0, cw - 40.0, 1.0), DIVIDER);
+    p.fill_rect(txui::Rect(cx + 20.0, y1 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
-    // Row: Display Scale
-    draw_label_and_inactive_badge(p, cx + 20.0, y1 + 122.0, "Display Scale", 1.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 98.0), "Display Scaling", TXT_PRI, 13.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 122.0), "Fractional scaling powered by Wayland wp-fractional-scale-v1", TXT_DIM, 11.5);
+    if (m_display_scale_control) {
+        m_display_scale_control->paint(p);
+    }
 
-    const char* scale_labels[] = {"100%", "125%", "150%", "200%"};
-    draw_segmented_track(p, cx + cw - 256.0, y1 + 116.0, 236.0, 28.0, scale_labels, 4, m_display_scale_idx, active_accent);
-
-    // Card 2: Color & Refresh Controls
-    float64 y2 = y1 + 184.0;
+    // Card 2: Features
+    float64 y2 = y1 + 180.0;
     draw_card(p, txui::Rect(cx, y2, cw, 160.0));
 
-    // Night Light
-    draw_label_and_inactive_badge(p, cx + 20.0, y2 + 20.0, "Night Light", 1.0, true);
-    draw_toggle(p, cx + cw - 56.0, y2 + 20.0, m_night_light_enabled, active_accent);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Warmer screen temperature to reduce eye strain at night", TXT_DIM, 0.82);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Night Light", TXT_PRI, 13.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Warmer screen colors reduce eye strain at night (3400K color temp)", TXT_DIM, 11.5);
+    if (m_night_light_toggle) {
+        m_night_light_toggle->paint(p);
+    }
 
     p.fill_rect(txui::Rect(cx + 20.0, y2 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
-    // Variable Refresh Rate (VRR)
-    draw_label_and_inactive_badge(p, cx + 20.0, y2 + 98.0, "Variable Refresh Rate (VRR)", 1.0, true);
-    draw_toggle(p, cx + cw - 56.0, y2 + 98.0, m_vrr_enabled, active_accent);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 126.0), "Synchronizes refresh rate with graphics rendering (Adaptive Sync)", TXT_DIM, 0.82);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 98.0), "Adaptive Sync (VRR)", TXT_PRI, 13.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 126.0), "Variable refresh rate for tear-free gaming and low latency rendering", TXT_DIM, 11.5);
+    if (m_vrr_toggle) {
+        m_vrr_toggle->paint(p);
+    }
 }
 
 // ── 2. Page: Personalization ─────────────────────────────────────────────────
@@ -1307,262 +964,111 @@ void SettingsWidget::paint_personalization_page(txui::Painter& p, const txui::Re
     float64 y1 = area.y() + 94.0;
 
     // Card 1: Accent Color
-    draw_card(p, txui::Rect(cx, y1, cw, 132.0));
-    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "System Accent Color", TXT_PRI, 1.05, true);
-    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), "Applies highlight tint and focus rings to desktop controls", TXT_DIM, 0.84);
-
-    for (int i = 0; i < ACCENT_COUNT; ++i) {
-        float64 sx = cx + 24.0 + static_cast<double>(i) * 54.0;
-        float64 sy = y1 + 92.0;
-        txui::Color col(ACCENT_PALETTE[i].r, ACCENT_PALETTE[i].g, ACCENT_PALETTE[i].b, 255);
-
-        if (m_selected_accent_idx == i) {
-            p.draw_circle(txui::Point(sx, sy), 17.0, 2.0, active_accent);
-        }
-        p.fill_circle(txui::Point(sx, sy), 13.0, col);
-        if (m_selected_accent_idx == i) {
-            p.fill_circle(txui::Point(sx, sy), 4.0, txui::Color(255, 255, 255, 255));
-        }
+    draw_card(p, txui::Rect(cx, y1, cw, 96.0));
+    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "System Accent Color", TXT_PRI, 14.5, true);
+    if (m_accent_picker) {
+        m_accent_picker->paint(p);
     }
 
-    // Card 2: Theme Mode
-    float64 y2 = y1 + 152.0;
-    draw_card(p, txui::Rect(cx, y2, cw, 82.0));
-    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Interface Theme", TXT_PRI, 1.05, true);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Dark theme active across all Tinexus platform modules", TXT_DIM, 0.84);
+    // Card 2: Appearance Mode
+    float64 y2 = y1 + 116.0;
+    draw_card(p, txui::Rect(cx, y2, cw, 70.0));
+    p.draw_text(txui::Point(cx + 20.0, y2 + 24.0), "Theme Mode", TXT_PRI, 14.0, true);
+    draw_badge_pill(p, cx + 130.0, y2 + 24.0, m_theme_mode + " (Active)", SUCCESS_BG, SUCCESS_TXT);
+    if (m_theme_toggle_btn) {
+        m_theme_toggle_btn->paint(p);
+    }
 
-    draw_badge_pill(p, cx + cw - 120.0, y2 + 28.0, "Dark (Active)", SUCCESS_BG, SUCCESS_TXT);
+    // Card 3: Wallpapers
+    float64 y3 = y2 + 86.0;
+    draw_card(p, txui::Rect(cx, y3, cw, 170.0));
+    p.draw_text(txui::Point(cx + 20.0, y3 + 20.0), "Desktop Backdrop", TXT_PRI, 14.5, true);
 
-    // Card 3: Wallpaper
-    float64 y3 = y2 + 102.0;
-    draw_card(p, txui::Rect(cx, y3, cw, 188.0));
-    draw_label_and_inactive_badge(p, cx + 20.0, y3 + 20.0, "Desktop Wallpaper", 1.05, true);
-    p.draw_text(txui::Point(cx + 20.0, y3 + 48.0), "Select from bundled wallpapers or /usr/share/backgrounds", TXT_DIM, 0.84);
-
-    size_t count = std::min(size_t(4), m_wallpapers.size());
-    float64 gap = 16.0;
-    float64 total_gaps = gap * static_cast<double>(count > 1 ? count - 1 : 0);
-    float64 card_w = (count > 0) ? std::clamp((cw - 40.0 - total_gaps) / static_cast<double>(count), 120.0, 260.0) : 150.0;
-
-    for (size_t i = 0; i < count; ++i) {
-        float64 wx = cx + 20.0 + static_cast<double>(i) * (card_w + gap);
-        float64 wy = y3 + 76.0;
+    float64 card_w = 110.0;
+    float64 card_gap = 14.0;
+    for (size_t i = 0; i < m_wallpapers.size(); ++i) {
+        float64 wx = cx + 20.0 + static_cast<double>(i) * (card_w + card_gap);
+        float64 wy = y3 + 52.0;
         bool sel = (m_selected_wallpaper_idx == static_cast<int>(i));
 
         if (sel) {
             p.fill_rounded_rect(txui::Rect(wx - 2.5, wy - 2.5, card_w + 5.0, 75.0), 8.0, active_accent);
         }
-
         p.fill_rounded_rect(txui::Rect(wx, wy, card_w, 70.0), 6.0,
-            txui::Color(m_wallpapers[i].preview_r, m_wallpapers[i].preview_g, m_wallpapers[i].preview_b, 255));
-
-        p.draw_text(txui::Point(wx + 4.0, wy + 78.0), m_wallpapers[i].name,
-                    sel ? TXT_PRI : TXT_SEC, 0.82, sel);
+                            txui::Color(m_wallpapers[i].preview_r, m_wallpapers[i].preview_g, m_wallpapers[i].preview_b, 255));
+        p.draw_text(txui::Point(wx + 8.0, wy + 78.0), m_wallpapers[i].name,
+                    sel ? active_accent : TXT_SEC, 11.5, sel);
     }
 }
 
-// ── 3. Page: Network (macOS Tahoe/Sonoma Style Wi-Fi & Adapters) ─────────────
+// ── 3. Page: Network & Wi-Fi ─────────────────────────────────────────────────
 void SettingsWidget::paint_network_page(txui::Painter& p, const txui::Rect& area) const noexcept {
     const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
     const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
 
-    draw_page_header(p, area, "Network",
-                     "Wi-Fi networks, live signal quality, adapter states, and IP routing",
+    draw_page_header(p, area, "Network & Wi-Fi",
+                     "Wireless networks, wired interfaces, IP configuration, and security",
                      SettingsPage::Network);
 
-    float64 cw = std::min(area.width() - 40.0, 760.0);
-    float64 cx = area.x() + (area.width() - cw) * 0.5;
+    float64 cx = area.x();
+    float64 cw = area.width();
     float64 y1 = area.y() + 94.0;
 
-    auto& wm = WifiManager::instance();
-    bool wifi_on = wm.is_wifi_enabled();
-    std::string conn_ssid = wm.get_connected_ssid();
-    std::string ip_addr = wm.get_ip_address();
-    std::string status_msg = wm.get_status_message();
-    bool is_connecting = wm.is_connecting();
-    std::string connecting_ssid = wm.get_connecting_ssid();
-    bool is_scanning = wm.is_scanning();
+    bool wifi_on = WifiManager::instance().is_wifi_enabled();
 
-    // ── Card 1: Master Wi-Fi Switch Card ──────────────────────────────────────
-    float64 card1_h = 76.0;
-    draw_card(p, txui::Rect(cx, y1, cw, card1_h));
-
-    // Wi-Fi Icon Badge
+    // Card 1: Wi-Fi Master Control
+    draw_card(p, txui::Rect(cx, y1, cw, 78.0));
     p.fill_circle(txui::Point(cx + 32.0, y1 + 38.0), 16.0, wifi_on ? active_accent : txui::Color(44, 44, 58, 255));
-    draw_wifi_signal_bars(p, cx + 21.0, y1 + 30.0, wifi_on ? 4 : 1, txui::Color(255, 255, 255, 255));
+    draw_wifi_signal_bars(p, cx + 23.0, y1 + 30.0, 4, txui::Color(255, 255, 255, 255));
 
-    p.draw_text(txui::Point(cx + 60.0, y1 + 20.0), "Wi-Fi", TXT_PRI, 1.15, true);
-    std::string wifi_subtitle;
-    if (!wifi_on) {
-        wifi_subtitle = "Wi-Fi is turned off";
-    } else if (!conn_ssid.empty()) {
-        wifi_subtitle = "Connected to \"" + conn_ssid + "\" (" + (ip_addr.empty() ? "Obtaining IP..." : ip_addr) + ")";
-    } else if (is_connecting) {
-        wifi_subtitle = "Connecting to \"" + connecting_ssid + "\"...";
-    } else {
-        wifi_subtitle = "Not Connected — Choose a network below";
-    }
-    p.draw_text(txui::Point(cx + 60.0, y1 + 46.0), wifi_subtitle, wifi_on ? TXT_SEC : TXT_DIM, 0.88);
+    p.draw_text(txui::Point(cx + 64.0, y1 + 22.0), "Wi-Fi Interface", TXT_PRI, 15.0, true);
+    p.draw_text(txui::Point(cx + 64.0, y1 + 46.0),
+                wifi_on ? "Enabled  •  nl80211 wireless subsystem active" : "Disabled  •  Hardware radio powered off",
+                TXT_SEC, 11.5);
 
-    // Refresh / Scan Button (if Wi-Fi is ON)
-    if (wifi_on) {
-        float64 scan_w = 80.0;
-        float64 scan_x = cx + cw - 60.0 - scan_w - 16.0;
-        float64 scan_y = y1 + 24.0;
-        m_wifi_scan_btn_rect = txui::Rect(scan_x, scan_y, scan_w, 28.0);
-        txui::Color scan_bg = m_wifi_scan_hovered ? txui::Color(55, 55, 75, 255) : txui::Color(38, 38, 52, 220);
-        p.fill_rounded_rect(m_wifi_scan_btn_rect, 6.0, scan_bg);
-        std::string scan_label = is_scanning ? "Scanning..." : "Scan";
-        float64 slw = estimate_text_width(scan_label, 0.82, true);
-        p.draw_text(txui::Point(scan_x + (scan_w - slw) * 0.5, scan_y + 7.0),
-                    scan_label, is_scanning ? active_accent : TXT_PRI, 0.82, true);
-    } else {
-        m_wifi_scan_btn_rect = txui::Rect(0, 0, 0, 0);
-    }
+    if (m_wifi_disconnect_btn) m_wifi_disconnect_btn->paint(p);
+    if (m_wifi_scan_btn)       m_wifi_scan_btn->paint(p);
+    if (m_wifi_master_toggle)  m_wifi_master_toggle->paint(p);
 
-    // Toggle Switch on far right
-    float64 toggle_x = cx + cw - 56.0;
-    float64 toggle_y = y1 + 27.0;
-    m_wifi_toggle_rect = txui::Rect(toggle_x - 4.0, toggle_y - 4.0, 48.0, 30.0);
-    draw_toggle(p, toggle_x, toggle_y, wifi_on, active_accent);
+    // Card 2: Available Networks
+    float64 y2 = y1 + 98.0;
+    const auto networks = WifiManager::instance().get_networks();
+    float64 list_h = std::max(120.0, 60.0 + static_cast<double>(networks.size()) * 48.0);
+    draw_card(p, txui::Rect(cx, y2, cw, list_h));
 
-    // ── Card 2: Connected Network Details (if connected & Wi-Fi ON) ───────────
-    float64 current_y = y1 + card1_h + 16.0;
-    if (wifi_on && !conn_ssid.empty()) {
-        float64 card_conn_h = 104.0;
-        draw_card(p, txui::Rect(cx, current_y, cw, card_conn_h));
+    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Available Networks", TXT_PRI, 14.5, true);
 
-        // Row 1: Green active badge + SSID on left, Disconnect button on right
-        draw_badge_pill(p, cx + 20.0, current_y + 18.0, "Connected", SUCCESS_BG, SUCCESS_TXT, 0.80);
-        p.draw_text(txui::Point(cx + 120.0, current_y + 18.0), conn_ssid, TXT_PRI, 1.1, true);
+    m_network_item_rects.clear();
+    float64 item_y = y2 + 52.0;
 
-        // Disconnect button on right
-        float64 disc_w = 92.0;
-        float64 disc_x = cx + cw - 20.0 - disc_w;
-        float64 disc_y = current_y + 16.0;
-        m_wifi_disconnect_btn_rect = txui::Rect(disc_x, disc_y, disc_w, 28.0);
-        txui::Color disc_bg = m_wifi_disconnect_hovered ? DANGER_BG : txui::Color(44, 44, 58, 220);
-        p.fill_rounded_rect(m_wifi_disconnect_btn_rect, 6.0, disc_bg);
-        p.draw_text(txui::Point(disc_x + 14.0, disc_y + 7.0), "Disconnect",
-                    m_wifi_disconnect_hovered ? DANGER_TXT : TXT_SEC, 0.82, true);
+    for (size_t i = 0; i < networks.size(); ++i) {
+        const auto& net = networks[i];
+        txui::Rect nrect(cx + 12.0, item_y, cw - 24.0, 42.0);
+        m_network_item_rects.push_back(nrect);
 
-        p.fill_rect(txui::Rect(cx + 20.0, current_y + 54.0, cw - 40.0, 1.0), DIVIDER);
-
-        // Row 2: Left: IP Address & Interface | Right: Security label & Signal meter
-        std::string active_iface = wm.get_active_interface();
-        std::string ip_label = "IP Address: " + (ip_addr.empty() ? "Configuring..." : ip_addr) + "   •   Interface: " + (active_iface.empty() ? "Wi-Fi" : active_iface);
-        p.draw_text(txui::Point(cx + 20.0, current_y + 68.0), ip_label, TXT_SEC, 0.84);
-
-        float64 sig_x = cx + cw - 40.0;
-        int conn_bars = wm.get_connected_signal_bars();
-        if (conn_bars == 0) conn_bars = 4;
-        draw_wifi_signal_bars(p, sig_x, current_y + 68.0, conn_bars, SUCCESS_TXT);
-
-        std::string sec_label = "WPA2/WPA3";
-        float64 sec_w = estimate_text_width(sec_label, 0.80, false);
-        p.draw_text(txui::Point(sig_x - sec_w - 12.0, current_y + 68.0), sec_label, TXT_DIM, 0.80);
-
-        current_y += card_conn_h + 16.0;
-    } else {
-        m_wifi_disconnect_btn_rect = txui::Rect(0, 0, 0, 0);
-    }
-
-    // ── Card 3: Available Networks List (if Wi-Fi ON) ─────────────────────────
-    if (wifi_on) {
-        auto networks = wm.get_networks();
-        float64 item_h = 46.0;
-        size_t max_visible = std::min(size_t(6), networks.size());
-        float64 list_header_h = 42.0;
-        float64 card_list_h = list_header_h + (max_visible > 0 ? (static_cast<double>(max_visible) * item_h) : 52.0) + 12.0;
-
-        draw_card(p, txui::Rect(cx, current_y, cw, card_list_h));
-
-        // Header label
-        p.draw_text(txui::Point(cx + 20.0, current_y + 16.0), "Known & Available Networks", TXT_PRI, 0.95, true);
-        std::string count_str = std::to_string(networks.size()) + " networks detected";
-        p.draw_text(txui::Point(cx + 230.0, current_y + 18.0), count_str, TXT_DIM, 0.80);
-
-        p.fill_rect(txui::Rect(cx + 20.0, current_y + list_header_h, cw - 40.0, 1.0), DIVIDER);
-
-        m_network_item_rects.clear();
-        float64 ny = current_y + list_header_h + 6.0;
-
-        if (networks.empty()) {
-            std::string empty_msg = is_scanning ? "Scanning for available wireless networks..." : "No networks detected in range. Click 'Scan' above.";
-            p.draw_text(txui::Point(cx + 20.0, ny + 14.0), empty_msg, TXT_DIM, 0.88);
-        } else {
-            for (size_t i = 0; i < max_visible; ++i) {
-                const auto& net = networks[i];
-                txui::Rect item_rect(cx + 8.0, ny, cw - 16.0, item_h);
-                m_network_item_rects.push_back(item_rect);
-
-                bool hovered = (m_hovered_network_idx == static_cast<int>(i));
-                if (hovered) {
-                    p.fill_rounded_rect(item_rect, 7.0, txui::Color(44, 44, 62, 160));
-                }
-
-                // 1. Signal Bars (1..4 bars based on RSSI!)
-                draw_wifi_signal_bars(p, cx + 22.0, ny + 14.0, net.signal_bars,
-                                      net.is_connected ? SUCCESS_TXT : TXT_PRI);
-
-                // 2. Network SSID
-                p.draw_text(txui::Point(cx + 52.0, ny + 14.0), net.ssid,
-                            net.is_connected ? SUCCESS_TXT : TXT_PRI, 0.96, net.is_connected);
-
-                // 3. Band badge (2.4 GHz vs 5 GHz)
-                std::string band_str = (net.frequency_mhz >= 5000) ? "5 GHz" : "2.4 GHz";
-                float64 band_x = cx + cw - 195.0;
-                draw_badge_pill(p, band_x, ny + 13.0, band_str, txui::Color(32, 32, 44, 200), TXT_DIM, 0.72);
-
-                // 4. Security Lock Icon (aligned in column before band badge)
-                if (net.is_secured) {
-                    draw_lock_icon(p, band_x - 22.0, ny + 17.0, TXT_DIM);
-                }
-
-                // 5. Status / Action on Right
-                if (net.is_connected) {
-                    draw_badge_pill(p, cx + cw - 105.0, ny + 13.0, "Connected", SUCCESS_BG, SUCCESS_TXT, 0.78);
-                } else if (is_connecting && connecting_ssid == net.ssid) {
-                    draw_badge_pill(p, cx + cw - 115.0, ny + 13.0, "Connecting...", WARNING_BG, WARNING_TXT, 0.78);
-                } else {
-                    float64 btn_w = 72.0;
-                    float64 btn_h = 24.0;
-                    float64 btn_x = cx + cw - 18.0 - btn_w;
-                    float64 btn_y = ny + 11.0;
-                    txui::Color btn_bg = hovered ? active_accent : txui::Color(44, 44, 58, 180);
-                    p.fill_rounded_rect(txui::Rect(btn_x, btn_y, btn_w, btn_h), 5.0, btn_bg);
-                    float64 clw = estimate_text_width("Connect", 0.78, true);
-                    p.draw_text(txui::Point(btn_x + (btn_w - clw) * 0.5, btn_y + 4.0), "Connect",
-                                hovered ? txui::Color(255, 255, 255, 255) : TXT_SEC, 0.78, true);
-                }
-
-                ny += item_h;
-            }
+        bool hovered = (m_hovered_network_idx == static_cast<int>(i));
+        if (hovered) {
+            p.fill_rounded_rect(nrect, 6.0, txui::Color(44, 44, 62, 180));
         }
 
-        current_y += card_list_h + 16.0;
-    } else {
-        m_network_item_rects.clear();
-    }
+        draw_wifi_signal_bars(p, nrect.x() + 14.0, nrect.y() + 12.0, net.signal_bars,
+                              net.is_connected ? active_accent : TXT_PRI);
 
-    // ── Card 4: Hardware Interfaces & Ethernet (Physical Adapters) ────────────
-    float64 iface_card_h = 92.0;
-    draw_card(p, txui::Rect(cx, current_y, cw, iface_card_h));
-    p.draw_text(txui::Point(cx + 20.0, current_y + 16.0), "Physical Network Adapters", TXT_PRI, 0.95, true);
+        p.draw_text(txui::Point(nrect.x() + 46.0, nrect.y() + 12.0), net.ssid, TXT_PRI, 13.0, true);
 
-    std::string ifaces_summary = "Active adapters: ";
-    if (m_network_ifaces.empty()) {
-        ifaces_summary += "None detected";
-    } else {
-        for (size_t i = 0; i < m_network_ifaces.size(); ++i) {
-            bool is_wifi = (m_network_ifaces[i].name.rfind("wl", 0) == 0);
-            std::string state_info = m_network_ifaces[i].ip4_addr.empty() ? m_network_ifaces[i].state : m_network_ifaces[i].ip4_addr;
-            ifaces_summary += std::string(is_wifi ? "[Wi-Fi] " : "[Ethernet] ") + m_network_ifaces[i].name + " (" + state_info + ")";
-            if (i + 1 < m_network_ifaces.size()) ifaces_summary += "  •  ";
+        if (net.is_secured) {
+            float64 ssid_w = txui::FontMetrics::measure(net.ssid, 13.0).width;
+            draw_lock_icon(p, nrect.x() + 52.0 + ssid_w, nrect.y() + 14.0, TXT_DIM);
         }
+
+        if (net.is_connected) {
+            draw_badge_pill(p, cx + cw - 110.0, nrect.y() + 10.0, "Connected", SUCCESS_BG, SUCCESS_TXT);
+        } else if (WifiManager::instance().is_connecting() && WifiManager::instance().get_connecting_ssid() == net.ssid) {
+            draw_badge_pill(p, cx + cw - 120.0, nrect.y() + 10.0, "Connecting...", WARNING_BG, WARNING_TXT);
+        }
+
+        item_y += 46.0;
     }
-    p.draw_text(txui::Point(cx + 20.0, current_y + 44.0), ifaces_summary, TXT_SEC, 0.88);
-    p.draw_text(txui::Point(cx + 20.0, current_y + 68.0), "DNS Resolver: udhcpc active  •  Core daemons: strict offline-first boundary", TXT_DIM, 0.80);
 }
 
 // ── macOS-Style Wi-Fi Password Connect Modal Dialog ──────────────────────────
@@ -1570,111 +1076,53 @@ void SettingsWidget::paint_wifi_modal(txui::Painter& p) const noexcept {
     const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
     const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
 
-    // 1. Semi-transparent backdrop scrim over the whole window
-    p.fill_rect(frame(), txui::Color(0, 0, 0, 175));
+    // 1. Semi-transparent backdrop scrim over whole canvas
+    p.fill_rect(frame(), txui::Color(0, 0, 0, 185));
 
-    // 2. Centered Modal Card (width 450, height 260)
-    float64 mw = 450.0;
-    float64 mh = 260.0;
-    float64 mx = frame().x() + (frame().width() - mw) * 0.5;
-    float64 my = frame().y() + (frame().height() - mh) * 0.5;
-    m_wifi_modal_rect = txui::Rect(mx, my, mw, mh);
+    // 2. Centered Modal Card
+    p.fill_rounded_rect(txui::Rect(m_wifi_modal_rect.x() - 1.0, m_wifi_modal_rect.y() - 1.0,
+                                   m_wifi_modal_rect.width() + 2.0, m_wifi_modal_rect.height() + 2.0),
+                        13.0, BORDER_SUBTLE);
+    p.fill_gradient_rounded_rect(m_wifi_modal_rect, 12.0, CARD_TOP, CARD_BOT);
 
-    // Outer subtle border
-    p.fill_rounded_rect(txui::Rect(mx - 1.0, my - 1.0, mw + 2.0, mh + 2.0), 13.0, txui::Color(65, 65, 90, 200));
-    p.fill_gradient_rounded_rect(m_wifi_modal_rect, 12.0, txui::Color(32, 32, 46, 255), txui::Color(22, 22, 32, 255));
+    // 3. Lock Icon Badge
+    float64 icon_x = m_wifi_modal_rect.x() + 26.0;
+    float64 icon_y = m_wifi_modal_rect.y() + 24.0;
+    p.fill_rounded_rect(txui::Rect(icon_x, icon_y, 42.0, 42.0), 9.0, active_accent);
+    draw_lock_icon(p, icon_x + 14.0, icon_y + 14.0, txui::Color(255, 255, 255, 255));
 
-    // Lock Icon Badge (40x40) with icon centered at (40-14)/2 = 13.0
-    float64 icon_x = mx + 24.0;
-    float64 icon_y = my + 24.0;
-    p.fill_rounded_rect(txui::Rect(icon_x, icon_y, 40.0, 40.0), 9.0, active_accent);
-    draw_lock_icon(p, icon_x + 13.0, icon_y + 13.0, txui::Color(255, 255, 255, 255));
-
-    // Modal Title & Subtitle
+    // 4. Modal Title & Subtitle
     std::string title_text = "Join \"" + m_wifi_modal_ssid + "\"";
-    p.draw_text(txui::Point(mx + 76.0, my + 24.0), title_text, TXT_PRI, 1.15, true);
-    p.draw_text(txui::Point(mx + 76.0, my + 50.0), "Enter the WPA2/WPA3 password for this network.", TXT_SEC, 0.85);
+    p.draw_text(txui::Point(m_wifi_modal_rect.x() + 80.0, m_wifi_modal_rect.y() + 26.0),
+                title_text, TXT_PRI, 16.0, true);
+    p.draw_text(txui::Point(m_wifi_modal_rect.x() + 80.0, m_wifi_modal_rect.y() + 52.0),
+                "Enter WPA2/WPA3 password for this network", TXT_SEC, 12.0);
 
-    // Password Input Field
-    float64 fx = mx + 24.0;
-    float64 fy = my + 92.0;
-    float64 fw = mw - 48.0;
-    float64 fh = 36.0;
-    m_wifi_modal_input_rect = txui::Rect(fx, fy, fw, fh);
-
-    // Outer focus glow (active accent)
-    p.fill_rounded_rect(txui::Rect(fx - 1.0, fy - 1.0, fw + 2.0, fh + 2.0), 7.0, active_accent);
-    p.fill_rounded_rect(txui::Rect(fx, fy, fw, fh), 6.0, txui::Color(18, 18, 26, 255));
-
-    // Render password characters (either bullets or visible) with horizontal scrolling
-    float64 eye_w = 64.0;
-    float64 max_text_w = fw - eye_w - 24.0;
-
-    std::string display_pw;
-    if (m_wifi_modal_show_password) {
-        display_pw = m_wifi_modal_password;
-    } else {
-        display_pw = std::string(m_wifi_modal_password.size(), '*');
+    // 5. Interactive Password Input & Eye-toggle
+    if (m_wifi_password_input) {
+        m_wifi_password_input->paint(p);
+    }
+    if (m_wifi_modal_eye_btn) {
+        m_wifi_modal_eye_btn->paint(p);
     }
 
-    size_t scroll_offset = 0;
-    std::string visible_pw = display_pw;
-    while (!visible_pw.empty() && estimate_text_width(visible_pw, 0.95, true) > max_text_w) {
-        visible_pw.erase(0, 1);
-        scroll_offset++;
-    }
-    m_wifi_modal_scroll_offset = scroll_offset;
-
-    if (display_pw.empty()) {
-        p.draw_text(txui::Point(fx + 12.0, fy + 9.0), "Password", TXT_DIM, 0.95);
-        p.fill_rect(txui::Rect(fx + 14.0, fy + 8.0, 1.5, 20.0), active_accent);
-    } else {
-        p.draw_text(txui::Point(fx + 12.0, fy + 9.0), visible_pw, TXT_PRI, 0.95, true);
-        float64 cursor_x = fx + 12.0 + estimate_text_width(visible_pw, 0.95, true);
-        p.fill_rect(txui::Rect(cursor_x + 2.0, fy + 8.0, 1.5, 20.0), active_accent);
-    }
-
-    // Show Password toggle button on right of field
-    float64 eye_x = fx + fw - eye_w - 6.0;
-    float64 eye_y = fy + 6.0;
-    m_wifi_modal_eye_btn = txui::Rect(eye_x, eye_y, eye_w, 24.0);
-    p.fill_rounded_rect(m_wifi_modal_eye_btn, 4.0, m_wifi_modal_eye_hovered ? txui::Color(45, 45, 60, 220) : txui::Color(30, 30, 42, 200));
-    std::string eye_label = m_wifi_modal_show_password ? "Hide" : "Show";
-    p.draw_text(txui::Point(eye_x + 16.0, eye_y + 5.0), eye_label, TXT_SEC, 0.78, true);
-
-    // Error message (if any)
+    // 6. Error message (if any)
     if (!m_wifi_modal_error.empty()) {
-        p.draw_text(txui::Point(fx, fy + 44.0), m_wifi_modal_error, DANGER_TXT, 0.82);
+        p.draw_text(txui::Point(m_wifi_modal_rect.x() + 28.0, m_wifi_modal_rect.y() + 140.0),
+                    m_wifi_modal_error, DANGER_TXT, 12.0);
     }
 
-    // Action Buttons at bottom
-    float64 btn_h = 32.0;
-    float64 btn_w = 96.0;
-    float64 btn_y = my + mh - btn_h - 20.0;
-
-    // Cancel Button
-    float64 cancel_x = mx + mw - 24.0 - (btn_w * 2.0 + 12.0);
-    m_wifi_modal_cancel_btn = txui::Rect(cancel_x, btn_y, btn_w, btn_h);
-    txui::Color cancel_bg = m_wifi_modal_cancel_hovered ? txui::Color(55, 55, 75, 255) : txui::Color(44, 44, 58, 220);
-    p.fill_rounded_rect(m_wifi_modal_cancel_btn, 6.0, cancel_bg);
-    p.draw_text(txui::Point(cancel_x + 26.0, btn_y + 8.0), "Cancel", TXT_PRI, 0.88, true);
-
-    // Connect Button
-    float64 conn_x = mx + mw - 24.0 - btn_w;
-    m_wifi_modal_connect_btn = txui::Rect(conn_x, btn_y, btn_w, btn_h);
-    bool can_connect = !m_wifi_modal_password.empty();
-    txui::Color conn_bg = can_connect ? (m_wifi_modal_connect_hovered ? txui::Color(active_accent.r(), active_accent.g(), active_accent.b(), 220) : active_accent)
-                                      : txui::Color(44, 44, 58, 140);
-    p.fill_rounded_rect(m_wifi_modal_connect_btn, 6.0, conn_bg);
-    p.draw_text(txui::Point(conn_x + 22.0, btn_y + 8.0), "Connect",
-                can_connect ? txui::Color(255, 255, 255, 255) : TXT_DIM, 0.88, true);
+    // 7. Action Buttons
+    if (m_wifi_modal_cancel_btn) {
+        m_wifi_modal_cancel_btn->paint(p);
+    }
+    if (m_wifi_modal_connect_btn) {
+        m_wifi_modal_connect_btn->paint(p);
+    }
 }
 
 // ── 4. Page: System & Power ──────────────────────────────────────────────────
 void SettingsWidget::paint_system_page(txui::Painter& p, const txui::Rect& area) const noexcept {
-    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
-    const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
-
     draw_page_header(p, area, "System & Power",
                      "Power management, timeout intervals, clipboard buffers, and session controls",
                      SettingsPage::System);
@@ -1687,72 +1135,60 @@ void SettingsWidget::paint_system_page(txui::Painter& p, const txui::Rect& area)
     draw_card(p, txui::Rect(cx, y1, cw, 172.0));
 
     // Row 1: Screen timeout
-    draw_label_and_inactive_badge(p, cx + 20.0, y1 + 20.0, "Turn off display after", 0.95, true);
-    p.fill_rounded_rect(txui::Rect(cx + cw - 130.0, y1 + 16.0, 30.0, 24.0), 5.0, txui::Color(34, 34, 46, 220));
-    p.draw_text(txui::Point(cx + cw - 120.0, y1 + 20.0), "-", TXT_PRI, 1.1, true);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 18.0), "Turn off display after", TXT_PRI, 13.5, true);
     std::string to_str = std::to_string(m_screen_timeout_min) + " min";
-    p.draw_text(txui::Point(cx + cw - 90.0, y1 + 21.0), to_str, TXT_PRI, 0.9);
-    p.fill_rounded_rect(txui::Rect(cx + cw - 42.0, y1 + 16.0, 30.0, 24.0), 5.0, txui::Color(34, 34, 46, 220));
-    p.draw_text(txui::Point(cx + cw - 32.0, y1 + 20.0), "+", TXT_PRI, 1.1, true);
+    p.draw_text(txui::Point(cx + cw - 70.0, y1 + 18.0), to_str, TXT_PRI, 12.5, true);
+    if (m_timeout_slider) {
+        m_timeout_slider->paint(p);
+    }
 
     p.fill_rect(txui::Rect(cx + 20.0, y1 + 56.0, cw - 40.0, 1.0), DIVIDER);
 
     // Row 2: Sleep after
-    draw_label_and_inactive_badge(p, cx + 20.0, y1 + 76.0, "Put system to sleep after", 0.95, true);
-    p.fill_rounded_rect(txui::Rect(cx + cw - 130.0, y1 + 72.0, 30.0, 24.0), 5.0, txui::Color(34, 34, 46, 220));
-    p.draw_text(txui::Point(cx + cw - 120.0, y1 + 76.0), "-", TXT_PRI, 1.1, true);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 74.0), "Put system to sleep after", TXT_PRI, 13.5, true);
     std::string sl_str = std::to_string(m_sleep_after_min) + " min";
-    p.draw_text(txui::Point(cx + cw - 90.0, y1 + 77.0), sl_str, TXT_PRI, 0.9);
-    p.fill_rounded_rect(txui::Rect(cx + cw - 42.0, y1 + 72.0, 30.0, 24.0), 5.0, txui::Color(34, 34, 46, 220));
-    p.draw_text(txui::Point(cx + cw - 32.0, y1 + 76.0), "+", TXT_PRI, 1.1, true);
+    p.draw_text(txui::Point(cx + cw - 70.0, y1 + 74.0), sl_str, TXT_PRI, 12.5, true);
+    if (m_sleep_slider) {
+        m_sleep_slider->paint(p);
+    }
 
     p.fill_rect(txui::Rect(cx + 20.0, y1 + 112.0, cw - 40.0, 1.0), DIVIDER);
 
     // Row 3: Energy Mode
-    p.draw_text(txui::Point(cx + 20.0, y1 + 130.0), "Energy Mode", TXT_PRI, 0.95, true);
-    const char* profiles[] = {"Power Saver", "Balanced", "Performance"};
-    draw_segmented_track(p, cx + cw - 324.0, y1 + 124.0, 304.0, 28.0, profiles, 3, m_power_profile_idx, active_accent);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 130.0), "Energy Mode", TXT_PRI, 13.5, true);
+    if (m_power_profile_control) {
+        m_power_profile_control->paint(p);
+    }
 
     // Card 2: Clipboard Subsystem
     float64 y2 = y1 + 192.0;
     draw_card(p, txui::Rect(cx, y2, cw, 136.0));
-    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Clipboard Subsystem", TXT_PRI, 1.0, true);
-    float64 clip_w = estimate_text_width("Clipboard Subsystem", 1.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Clipboard Subsystem", TXT_PRI, 14.5, true);
+    float64 clip_w = txui::FontMetrics::measure("Clipboard Subsystem", 14.5).width;
     draw_badge_pill(p, cx + 20.0 + clip_w + 12.0, y2 + 18.0, "Active (Live)", SUCCESS_BG, SUCCESS_TXT);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Live Wayland clipboard is active. History daemon (tinexus-clip) in Phase 2.", TXT_DIM, 0.82);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Live Wayland clipboard is active. History daemon (tinexus-clip) in Phase 2.", TXT_DIM, 12.0);
 
     p.fill_rect(txui::Rect(cx + 20.0, y2 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
-    p.draw_text(txui::Point(cx + 20.0, y2 + 98.0), "History Buffer Size:", TXT_SEC, 0.88);
-    const char* caps[] = {"25 items", "50 items", "100 items"};
-    int cap_idx = (m_clipboard_history_size <= 25 ? 0 : (m_clipboard_history_size <= 50 ? 1 : 2));
-    draw_segmented_track(p, cx + cw - 228.0, y2 + 92.0, 208.0, 28.0, caps, 3, cap_idx, active_accent);
-
-    // Card 3: Session Actions (Lock, Sleep, Restart, Shut Down)
-    float64 y3 = y2 + 156.0;
-    draw_card(p, txui::Rect(cx, y3, cw, 96.0));
-    p.draw_text(txui::Point(cx + 20.0, y3 + 18.0), "Session Actions", TXT_PRI, 1.0, true);
-
-    struct BtnDef { const char* label; txui::Color bg; };
-    BtnDef btns[] = {
-        {"Lock Screen", txui::Color(44, 44, 60, 255)},
-        {"Sleep",       txui::Color(44, 44, 60, 255)},
-        {"Restart",     txui::Color(215, 120, 30, 255)},
-        {"Shut Down",   txui::Color(225, 55, 55, 255)}
-    };
-
-    float64 btn_gap = 14.0;
-    float64 btn_w = std::clamp((cw - 40.0 - 3.0 * btn_gap) / 4.0, 110.0, 220.0);
-    for (int i = 0; i < 4; ++i) {
-        float64 bx = cx + 20.0 + static_cast<double>(i) * (btn_w + btn_gap);
-        p.fill_rounded_rect(txui::Rect(bx, y3 + 46.0, btn_w, 32.0), 7.0, btns[i].bg);
-        float64 lbl_w = estimate_text_width(btns[i].label, 0.88, true);
-        p.draw_text(txui::Point(bx + std::max(8.0, (btn_w - lbl_w) * 0.5), y3 + 55.0),
-                    btns[i].label, txui::Color(255, 255, 255, 255), 0.88, true);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 98.0), "History Buffer Size:", TXT_SEC, 12.5);
+    if (m_clipboard_size_control) {
+        m_clipboard_size_control->paint(p);
     }
 
+    // Card 3: Session Actions
+    float64 y3 = y2 + 156.0;
+    draw_card(p, txui::Rect(cx, y3, cw, 96.0));
+    p.draw_text(txui::Point(cx + 20.0, y3 + 18.0), "Session Actions", TXT_PRI, 14.5, true);
+
+    if (m_session_lock_btn)     m_session_lock_btn->paint(p);
+    if (m_session_suspend_btn)  m_session_suspend_btn->paint(p);
+    if (m_session_reboot_btn)   m_session_reboot_btn->paint(p);
+    if (m_session_shutdown_btn) m_session_shutdown_btn->paint(p);
+
     if (!m_session_status_msg.empty()) {
-        p.draw_text(txui::Point(cx + 20.0, y3 + 86.0), m_session_status_msg, active_accent, 0.82);
+        const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
+        const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
+        p.draw_text(txui::Point(cx + 20.0, y3 + 86.0), m_session_status_msg, active_accent, 11.5);
     }
 }
 
@@ -1780,16 +1216,16 @@ void SettingsWidget::paint_keyboard_shortcuts_page(txui::Painter& p, const txui:
     };
 
     draw_card(p, txui::Rect(cx, y1, cw, 326.0));
-    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Global System Bindings", TXT_PRI, 1.05, true);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Global System Bindings", TXT_PRI, 15.0, true);
 
     for (int i = 0; i < 9; ++i) {
         float64 sy = y1 + 54.0 + static_cast<double>(i) * 28.0;
-        p.draw_text(txui::Point(cx + 20.0, sy + 5.0), shortcuts[i].action, TXT_SEC, 0.88);
+        p.draw_text(txui::Point(cx + 20.0, sy + 5.0), shortcuts[i].action, TXT_SEC, 12.5);
 
         float64 kx = cx + cw - 150.0;
         if (shortcuts[i].mod[0] != '\0') {
             draw_keycap(p, kx, sy, shortcuts[i].mod);
-            p.draw_text(txui::Point(kx + 50.0, sy + 5.0), "+", TXT_DIM, 0.9, true);
+            p.draw_text(txui::Point(kx + 50.0, sy + 5.0), "+", TXT_DIM, 12.0, true);
             draw_keycap(p, kx + 64.0, sy, shortcuts[i].key);
         } else {
             draw_keycap(p, kx + 40.0, sy, shortcuts[i].key);
@@ -1803,9 +1239,6 @@ void SettingsWidget::paint_keyboard_shortcuts_page(txui::Painter& p, const txui:
 
 // ── 6. Page: Privacy & Security ──────────────────────────────────────────────
 void SettingsWidget::paint_privacy_security_page(txui::Painter& p, const txui::Rect& area) const noexcept {
-    const auto current_accent = ACCENT_PALETTE[m_selected_accent_idx];
-    const txui::Color active_accent(current_accent.r, current_accent.g, current_accent.b, 255);
-
     draw_page_header(p, area, "Privacy & Security",
                      "Application Gatekeeper, cryptographic integrity, and authentication",
                      SettingsPage::PrivacySecurity);
@@ -1817,49 +1250,45 @@ void SettingsWidget::paint_privacy_security_page(txui::Painter& p, const txui::R
     // Card 1: Authentication Options
     draw_card(p, txui::Rect(cx, y1, cw, 158.0));
 
-    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Require password when waking from sleep", TXT_PRI, 0.95, true);
-    draw_toggle(p, cx + cw - 56.0, y1 + 20.0, m_lock_on_sleep, active_accent);
-    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), "Invokes tinexus-lock on system resume", TXT_DIM, 0.82);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Require password when waking from sleep", TXT_PRI, 13.5, true);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), "Invokes tinexus-lock on system resume", TXT_DIM, 11.5);
+    if (m_lock_sleep_toggle) {
+        m_lock_sleep_toggle->paint(p);
+    }
 
     p.fill_rect(txui::Rect(cx + 20.0, y1 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
-    draw_label_and_inactive_badge(p, cx + 20.0, y1 + 98.0, "Enable PAM Biometric Authentication", 0.95, true);
-    draw_toggle(p, cx + cw - 56.0, y1 + 98.0, m_pam_auth, active_accent);
-    p.draw_text(txui::Point(cx + 20.0, y1 + 126.0), "Fingerprint and smartcard login via PAM modules", TXT_DIM, 0.82);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 98.0), "Enable PAM Biometric Authentication", TXT_PRI, 13.5, true);
+    float64 pam_label_w = txui::FontMetrics::measure("Enable PAM Biometric Authentication", 13.5).width;
+    draw_badge_pill(p, cx + 20.0 + pam_label_w + 10.0, y1 + 96.0, "Biometrics Only - Password Mandatory", SUCCESS_BG, SUCCESS_TXT, 10.0);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 126.0), "Fingerprint and smartcard login via PAM modules (Password authentication always enforced)", TXT_DIM, 11.5);
+    if (m_pam_auth_toggle) {
+        m_pam_auth_toggle->paint(p);
+    }
 
     // Card 2: Application Gatekeeper
     float64 y2 = y1 + 178.0;
     draw_card(p, txui::Rect(cx, y2, cw, 158.0));
 
-    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Application Gatekeeper", TXT_PRI, 1.05, true);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Scans /opt/tinexus-apps for cryptographically verified application bundles", TXT_DIM, 0.82);
-
-    m_rescan_btn_rect = txui::Rect(cx + cw - 106.0, y2 + 20.0, 86.0, 26.0);
-    p.fill_rounded_rect(m_rescan_btn_rect, 6.0, m_rescan_hovered ? txui::Color(44, 44, 60, 255) : txui::Color(32, 32, 44, 255));
-    p.draw_text(txui::Point(m_rescan_btn_rect.x() + 14.0, m_rescan_btn_rect.y() + 6.0), "Re-scan", TXT_PRI, 0.84, true);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Application Gatekeeper", TXT_PRI, 15.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Scans /opt/tinexus-apps for cryptographically verified application bundles", TXT_DIM, 11.5);
+    if (m_rescan_btn) {
+        m_rescan_btn->paint(p);
+    }
 
     p.fill_rect(txui::Rect(cx + 20.0, y2 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
     if (m_unverified_apps.empty()) {
-        p.fill_circle(txui::Point(cx + 34.0, y2 + 108.0), 8.0, txui::Color(72, 205, 120, 255));
-        p.fill_circle(txui::Point(cx + 34.0, y2 + 108.0), 4.0, txui::Color(16, 40, 24, 255));
-        p.draw_text(txui::Point(cx + 52.0, y2 + 98.0),
-                    "No unverified apps found in /opt/tinexus-apps",
-                    TXT_PRI, 0.98, true);
-        p.draw_text(txui::Point(cx + 52.0, y2 + 120.0),
-                    "All scanned binary packages match trusted cryptographic signatures.",
-                    TXT_SEC, 0.85);
+        draw_badge_pill(p, cx + 20.0, y2 + 104.0, "All Installed Applications Verified", SUCCESS_BG, SUCCESS_TXT, 11.5);
+        p.draw_text(txui::Point(cx + 280.0, y2 + 106.0), "Zero cryptographic integrity violations detected", TXT_DIM, 11.5);
     } else {
-        float64 uy = y2 + 84.0;
-        for (const auto& app : m_unverified_apps) {
-            p.draw_text(txui::Point(cx + 20.0, uy), app.name, WARNING_TXT, 0.9, true);
-            std::string hash_prev = "SHA-256: " + app.hash.substr(0, std::min(size_t(16), app.hash.size())) + "...";
-            p.draw_text(txui::Point(cx + 20.0, uy + 18.0), hash_prev, TXT_DIM, 0.8);
-
-            txui::Rect btn_rect(cx + cw - 106.0, uy, 86.0, 24.0);
-            p.fill_rounded_rect(btn_rect, 5.0, app.is_hovered ? active_accent : txui::Color(44, 44, 58, 255));
-            p.draw_text(txui::Point(btn_rect.x() + 12.0, btn_rect.y() + 5.0), "Trust App", TXT_PRI, 0.82, true);
-            uy += 44.0;
+        float64 uy = y2 + 96.0;
+        for (auto& app : m_unverified_apps) {
+            p.draw_text(txui::Point(cx + 20.0, uy + 5.0), app.name, DANGER_TXT, 12.0, true);
+            app.btn_rect = txui::Rect(cx + cw - 100.0, uy, 80.0, 24.0);
+            p.fill_rounded_rect(app.btn_rect, 5.0, txui::Color(80, 25, 25, 220));
+            p.draw_text(txui::Point(app.btn_rect.x() + 18.0, app.btn_rect.y() + 4.0), "Trust", TXT_PRI, 11.0, true);
+            uy += 32.0;
         }
     }
 }
@@ -1867,7 +1296,7 @@ void SettingsWidget::paint_privacy_security_page(txui::Painter& p, const txui::R
 // ── 7. Page: About ───────────────────────────────────────────────────────────
 void SettingsWidget::paint_about_page(txui::Painter& p, const txui::Rect& area) const noexcept {
     draw_page_header(p, area, "About Tinexus",
-                     "Platform specifications, hardware detection, and system status",
+                     "Operating system specifications, hardware detection, and platform versions",
                      SettingsPage::About);
 
     float64 cx = area.x();
@@ -1875,59 +1304,95 @@ void SettingsWidget::paint_about_page(txui::Painter& p, const txui::Rect& area) 
     float64 y1 = area.y() + 94.0;
 
     // Card 1: System Specs
-    draw_card(p, txui::Rect(cx, y1, cw, 204.0));
-    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "System Specifications", TXT_PRI, 1.05, true);
+    draw_card(p, txui::Rect(cx, y1, cw, 240.0));
+
+    // Logo tile
+    draw_icon_badge_base(p, cx + 24.0, y1 + 24.0, txui::Color(0, 195, 255, 255), txui::Color(0, 120, 220, 255), 48.0, 12.0);
+    p.draw_text(txui::Point(cx + 38.0, y1 + 34.0), "T", txui::Color(255, 255, 255, 255), 24.0, true);
+
+    p.draw_text(txui::Point(cx + 90.0, y1 + 24.0), "Tinexus Desktop Platform", TXT_PRI, 18.0, true);
+    p.draw_text(txui::Point(cx + 90.0, y1 + 52.0), "Architecture Freeze v1.1 Complete  •  Wayland-native Linux Shell", TXT_SEC, 12.5);
+
+    p.fill_rect(txui::Rect(cx + 20.0, y1 + 90.0, cw - 40.0, 1.0), DIVIDER);
 
     struct SpecRow { const char* label; const std::string& val; };
-    std::string arch = "x86_64 (Wayland Native)";
     SpecRow specs[] = {
-        {"Operating System",     m_os_version},
-        {"Processor",            m_cpu_model},
-        {"System Memory",        m_mem_info},
-        {"Platform Architecture", arch},
-        {"Platform Target",       m_comp_info}
+        {"OS Version:",    m_os_version},
+        {"Processor:",     m_cpu_model},
+        {"System Memory:", m_mem_info},
+        {"Compositor:",    m_comp_info}
     };
 
-    for (int i = 0; i < 5; ++i) {
-        float64 sy = y1 + 54.0 + static_cast<double>(i) * 28.0;
-        p.draw_text(txui::Point(cx + 20.0, sy), specs[i].label, TXT_SEC, 0.88);
-        p.draw_text(txui::Point(cx + 200.0, sy), specs[i].val, TXT_PRI, 0.88, (i == 0));
-        if (i < 4) {
-            p.fill_rect(txui::Rect(cx + 20.0, sy + 20.0, cw - 40.0, 1.0), txui::Color(28, 28, 38, 160));
-        }
+    for (int i = 0; i < 4; ++i) {
+        float64 sy = y1 + 104.0 + static_cast<double>(i) * 32.0;
+        p.draw_text(txui::Point(cx + 20.0, sy), specs[i].label, TXT_SEC, 12.5);
+        p.draw_text(txui::Point(cx + 160.0, sy), specs[i].val, TXT_PRI, 12.5, true);
     }
+}
 
-    // Card 2: Legal & Architecture (High Contrast)
-    float64 y2 = y1 + 224.0;
-    draw_card(p, txui::Rect(cx, y2, cw, 104.0));
-    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Tinexus Platform", TXT_PRI, 1.05, true);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0),
-                "Wayland-native Linux desktop platform powered by wlroots, Vulkan, and libtxui.",
-                TXT_SEC, 0.85);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 72.0),
-                "Licensed under GPL-2.0-or-later. Designed with simplicity.",
-                txui::Color(175, 175, 195, 240), 0.84);
+// ── Vector Icon Drawing Methods ──────────────────────────────────────────────
+void SettingsWidget::draw_icon_display(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(55, 130, 245, 255), txui::Color(28, 92, 210, 255));
+    float64 cx = tx + 10.0, cy = ty + 10.0;
+    p.fill_rect(txui::Rect(cx - 6.0, cy - 5.0, 12.0, 8.0), TXT_PRI);
+    p.fill_rect(txui::Rect(cx - 4.5, cy - 3.5, 9.0, 5.0), txui::Color(35, 100, 220, 255));
+    p.fill_rect(txui::Rect(cx - 1.0, cy + 3.0, 2.0, 2.0), TXT_PRI);
+    p.fill_rect(txui::Rect(cx - 3.0, cy + 5.0, 6.0, 1.0), TXT_PRI);
+}
 
-    // Card 3: Storage & System Firmware (Real statvfs + /sys/firmware reads)
-    float64 y3 = y2 + 124.0;
-    draw_card(p, txui::Rect(cx, y3, cw, 104.0));
-    p.draw_text(txui::Point(cx + 20.0, y3 + 20.0), "Storage & System Firmware", TXT_PRI, 1.05, true);
+void SettingsWidget::draw_icon_personalization(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(255, 45, 85, 255), txui::Color(200, 20, 60, 255));
+    p.fill_circle(txui::Point(tx + 7.0, ty + 7.0), 2.5, txui::Color(255, 255, 255, 255));
+    p.fill_circle(txui::Point(tx + 13.0, ty + 7.0), 2.5, txui::Color(255, 255, 255, 255));
+    p.fill_circle(txui::Point(tx + 7.0, ty + 13.0), 2.5, txui::Color(255, 255, 255, 255));
+    p.fill_circle(txui::Point(tx + 13.0, ty + 13.0), 2.5, txui::Color(255, 255, 255, 255));
+}
 
-    std::string storage_str = "Root Filesystem: Scanning...";
-    struct statvfs vfs;
-    if (statvfs("/", &vfs) == 0) {
-        uint64_t total_mb = (vfs.f_blocks * vfs.f_frsize) / (1024 * 1024);
-        uint64_t free_mb  = (vfs.f_bavail * vfs.f_frsize) / (1024 * 1024);
-        uint64_t used_mb  = (total_mb > free_mb) ? (total_mb - free_mb) : 0;
-        storage_str = "Root Overlay: " + std::to_string(used_mb) + " MB used of " +
-                      std::to_string(total_mb) + " MB (" + std::to_string(free_mb) + " MB free)";
+void SettingsWidget::draw_icon_network(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(0, 195, 255, 255), txui::Color(0, 140, 210, 255));
+    draw_wifi_signal_bars(p, tx + 4.0, ty + 4.0, 4, txui::Color(255, 255, 255, 255));
+}
+
+void SettingsWidget::draw_icon_system(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(255, 149, 0, 255), txui::Color(210, 100, 0, 255));
+    p.draw_circle(txui::Point(tx + 10.0, ty + 10.0), 4.5, 1.5, txui::Color(255, 255, 255, 255));
+    p.fill_circle(txui::Point(tx + 10.0, ty + 10.0), 2.0, txui::Color(255, 255, 255, 255));
+}
+
+void SettingsWidget::draw_icon_keyboard(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(110, 135, 250, 255), txui::Color(75, 100, 215, 255));
+    float64 cx = tx + 10.0, cy = ty + 10.0;
+    p.fill_rounded_rect(txui::Rect(cx - 6.0, cy - 4.0, 12.0, 8.0), 1.5, TXT_PRI);
+    p.fill_rounded_rect(txui::Rect(cx - 4.5, cy - 2.5, 9.0, 5.0), 1.0, txui::Color(85, 110, 230, 255));
+    p.fill_rect(txui::Rect(cx - 2.5, cy - 0.5, 5.0, 1.5), TXT_PRI);
+}
+
+void SettingsWidget::draw_icon_privacy(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(52, 199, 89, 255), txui::Color(30, 150, 60, 255));
+    draw_lock_icon(p, tx + 6.0, ty + 4.0, txui::Color(255, 255, 255, 255));
+}
+
+void SettingsWidget::draw_icon_about(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(88, 86, 214, 255), txui::Color(60, 50, 170, 255));
+    p.draw_text(txui::Point(tx + 7.5, ty + 3.5), "i", txui::Color(255, 255, 255, 255), 13.0, true);
+}
+
+void SettingsWidget::draw_wifi_signal_bars(txui::Painter& p, float64 x, float64 y, int bars, const txui::Color& active_col) const noexcept {
+    const float64 bar_w = 2.5;
+    const float64 bar_gap = 1.5;
+    const float64 heights[] = {4.0, 7.0, 10.0, 13.0};
+
+    for (int i = 0; i < 4; ++i) {
+        float64 bx = x + static_cast<double>(i) * (bar_w + bar_gap);
+        float64 by = y + (13.0 - heights[i]);
+        txui::Color col = (i < bars) ? active_col : txui::Color(60, 60, 75, 180);
+        p.fill_rounded_rect(txui::Rect(bx, by, bar_w, heights[i]), 1.0, col);
     }
-    p.draw_text(txui::Point(cx + 20.0, y3 + 48.0), storage_str, TXT_SEC, 0.88);
+}
 
-    bool is_uefi = std::filesystem::exists("/sys/firmware/efi");
-    std::string fw_str = is_uefi ? "Boot Environment: UEFI 64-bit (BOOTX64.EFI Active)"
-                                 : "Boot Environment: BIOS / MBR Hybrid (eltorito.img Active)";
-    p.draw_text(txui::Point(cx + 20.0, y3 + 72.0), fw_str, TXT_DIM, 0.84);
+void SettingsWidget::draw_lock_icon(txui::Painter& p, float64 x, float64 y, const txui::Color& col) const noexcept {
+    p.draw_circle(txui::Point(x + 4.0, y + 4.0), 3.0, 1.4, col);
+    p.fill_rounded_rect(txui::Rect(x, y + 5.0, 8.0, 7.0), 1.8, col);
 }
 
 } // namespace tinexus::settings_ui
