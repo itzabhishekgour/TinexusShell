@@ -142,18 +142,15 @@ bool ListView::handle_event(const Event& event) noexcept {
                     // Handle double click logic? Since txui doesn't have double-click event yet, we could mock it.
                     // For MVP, maybe we'll use a specific event or time-based logic.
                     // For now, if it's already selected and clicked again, treat as double click!
-                    // Not ideal, but works for MVP navigation.
-                    static int32 last_clicked = -1;
-                    static auto last_time = std::chrono::steady_clock::now();
                     auto now = std::chrono::steady_clock::now();
-                    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time).count();
+                    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_click_time).count();
                     
-                    if (i == last_clicked && diff < 500) {
+                    if (i == m_last_clicked_index && diff < 500) {
                         if (m_on_double_clicked) m_on_double_clicked(i);
-                        last_clicked = -1;
+                        m_last_clicked_index = -1;
                     } else {
-                        last_clicked = i;
-                        last_time = now;
+                        m_last_clicked_index = i;
+                        m_last_click_time = now;
                     }
                     return true;
                 }

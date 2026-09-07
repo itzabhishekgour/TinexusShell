@@ -5,6 +5,7 @@ pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
 add_library(txui STATIC
     core/Version.cpp
     render/pixman/PixmanBackend.cpp
+    render/FontMetrics.cpp
     render/ImageWriter.cpp
     render/ImageReader.cpp
     render/WaylandRenderTarget.cpp
@@ -15,13 +16,20 @@ add_library(txui STATIC
     wayland/WaylandInput.cpp
     wayland/WaylandEventLoop.cpp
     window/Window.cpp
-    window/WindowDecorator.cpp
     widgets/Widget.cpp
     widgets/TitleBarWidget.cpp
     widgets/ChromeWidget.cpp
     widgets/ListView.cpp
     widgets/Label.cpp
     widgets/Icon.cpp
+    widgets/Button.cpp
+    widgets/TextInput.cpp
+    widgets/SegmentedControl.cpp
+    widgets/ToggleSwitch.cpp
+    widgets/Slider.cpp
+    widgets/NavItem.cpp
+    widgets/ColorPicker.cpp
+    widgets/Badge.cpp
     layout/FlexLayout.cpp
     layout/ScrollArea.cpp
     animation/KineticScroller.cpp
@@ -52,3 +60,8 @@ target_link_libraries(test-lru-stress PRIVATE txui tinexus_common)
 
 add_executable(unit_test_txui_clipboard ../../tests/unit/test_txui_clipboard.cpp)
 target_link_libraries(unit_test_txui_clipboard PRIVATE txui tinexus_common)
+
+add_executable(test-txui-widgets-render ../../tests/unit/test_txui_widgets_render.cpp)
+target_link_libraries(test-txui-widgets-render PRIVATE txui tinexus_common)
+set_target_properties(test-txui-widgets-render PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")

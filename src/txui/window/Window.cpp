@@ -291,9 +291,22 @@ void Window::set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t e
         zwlr_layer_surface_v1_set_anchor(m_layer_surface, wl_anchors);
         zwlr_layer_surface_v1_set_exclusive_zone(m_layer_surface, exclusive_zone);
         
-        if ((anchors & LayerAnchor::Bottom) && !(anchors & LayerAnchor::Top)) {
-            zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, 0, 12, 0); 
+        if (!m_has_custom_margins) {
+            if ((anchors & LayerAnchor::Bottom) && !(anchors & LayerAnchor::Top)) {
+                zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, 0, 12, 0); 
+            }
         }
+    }
+}
+
+void Window::set_layer_margins(int32_t top, int32_t right, int32_t bottom, int32_t left) noexcept {
+    m_has_custom_margins = true;
+    m_margin_top = top;
+    m_margin_right = right;
+    m_margin_bottom = bottom;
+    m_margin_left = left;
+    if (m_layer_surface) {
+        zwlr_layer_surface_v1_set_margin(m_layer_surface, top, right, bottom, left);
     }
 }
 
@@ -448,7 +461,9 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
                 const int32_t side_margin = static_cast<int32_t>((m_output_width - static_cast<int32_t>(width)) / 2);
                 const int32_t clamped = side_margin > 0 ? side_margin : 0;
                 const int32_t top_margin = (m_title == "Aura" || m_title == "TopBar" || m_title == "shell" || m_title == "tinexus-shell") ? 0 : 12;
-                if (m_title == "dock") {
+                if (m_has_custom_margins) {
+                    zwlr_layer_surface_v1_set_margin(m_layer_surface, m_margin_top, m_margin_right, m_margin_bottom, m_margin_left);
+                } else if (m_title == "dock") {
                     zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, clamped, 12, clamped);
                 } else {
                     zwlr_layer_surface_v1_set_margin(m_layer_surface, top_margin, clamped, 0, clamped);

@@ -1,5 +1,6 @@
 #include <txui/widgets/TitleBarWidget.hpp>
 #include <txui/render/Command.hpp>
+#include <txui/render/FontMetrics.hpp>
 #include <txui/graphics/Color.hpp>
 #include <txui/math/Rect.hpp>
 #include <txui/math/Point.hpp>
@@ -70,11 +71,11 @@ void TitleBarWidget::paint_override(Painter& painter) const noexcept {
     draw_btn(1, min_color);
     draw_btn(2, max_color);
 
-    // Title text — muted gray, smaller scale, vertically centered
+    // Title text — muted gray, vertically centered with real FontMetrics (preserving 16px size from legacy scale=1.0)
     if (!m_title.empty()) {
-        const double text_w = static_cast<double>(m_title.length()) * 5.5; // approx at scale 1.0
-        Point title_pos{f.x() + (f.width() - text_w) / 2.0, f.y() + (f.height() - 14.0) * 0.5};
-        painter.draw_text(title_pos, m_title, TITLE_TEXT, 1.0);
+        const auto extents = FontMetrics::measure(m_title, 16.0, false, FontFamily::UI);
+        Point title_pos{f.x() + (f.width() - extents.width) * 0.5, f.y() + (f.height() - extents.height) * 0.5};
+        painter.draw_text(title_pos, m_title, TITLE_TEXT, 16.0, false, false, FontFamily::UI);
     }
 }
 

@@ -4,6 +4,7 @@
 #include <txui/layout/ScrollArea.hpp>
 #include <txui/layout/FlexLayout.hpp>
 #include <functional>
+#include <chrono>
 
 namespace txui {
 
@@ -14,6 +15,9 @@ private:
 
     int32 m_selected_index{-1};
     int32 m_hover_index{-1};
+
+    int32 m_last_clicked_index{-1};
+    std::chrono::steady_clock::time_point m_last_click_time{std::chrono::steady_clock::now()};
 
     std::function<void(int32)> m_on_selected;
     std::function<void(int32)> m_on_double_clicked;

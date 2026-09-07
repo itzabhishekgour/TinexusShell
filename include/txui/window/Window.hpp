@@ -73,6 +73,11 @@ private:
     zwlr_layer_surface_v1* m_layer_surface{nullptr};
     wl_callback* m_frame_callback{nullptr};
     int32_t m_output_width{1920}; ///< Compositor output width for centering (updated on configure)
+    bool m_has_custom_margins{false};
+    int32_t m_margin_top{0};
+    int32_t m_margin_right{0};
+    int32_t m_margin_bottom{0};
+    int32_t m_margin_left{0};
 
     CommandBuffer m_command_buffer;
     std::unique_ptr<Painter> m_painter;
@@ -121,6 +126,7 @@ public:
     // Configure layer shell anchors and exclusive zone. Must be called before wait() or create() if possible.
     // Actually, can be called on a created window.
     void set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t exclusive_zone) noexcept;
+    void set_layer_margins(int32_t top, int32_t right, int32_t bottom, int32_t left) noexcept;
     
     // Set tick callback to run in the event loop every frame
     void set_tick_callback(std::function<void()> cb) noexcept;
