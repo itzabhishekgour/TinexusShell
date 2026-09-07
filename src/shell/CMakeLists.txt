@@ -1,6 +1,10 @@
 add_executable(tinexus-shell
     main.cpp
     DesktopShellWidget.cpp
+    ui/AuraNotchWidget.cpp
+    ui/LogoMenuWidget.cpp
+    ui/CalendarFlyoutWidget.cpp
+    ui/NotificationFlyoutWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
 )
 
@@ -24,6 +28,10 @@ install(TARGETS tinexus-shell RUNTIME DESTINATION bin)
 add_executable(test-shell-render
     test_shell_render.cpp
     DesktopShellWidget.cpp
+    ui/AuraNotchWidget.cpp
+    ui/LogoMenuWidget.cpp
+    ui/CalendarFlyoutWidget.cpp
+    ui/NotificationFlyoutWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
 )
 
@@ -48,6 +56,10 @@ set_target_properties(test-shell-render PROPERTIES
 add_executable(test-full-desktop
     test_full_desktop.cpp
     DesktopShellWidget.cpp
+    ui/AuraNotchWidget.cpp
+    ui/LogoMenuWidget.cpp
+    ui/CalendarFlyoutWidget.cpp
+    ui/NotificationFlyoutWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
     ${CMAKE_SOURCE_DIR}/src/about/AboutWidget.cpp
 )

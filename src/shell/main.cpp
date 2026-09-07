@@ -16,19 +16,6 @@ using namespace tinexus;
 using namespace tinexus::shell;
 
 static std::atomic<int> g_ipc_fd{-1};
-static std::atomic<bool> g_toggle_pulse{false};
-
-static char key_to_char(txui::Key key, bool shift) {
-    if (key >= txui::Key::A && key <= txui::Key::Z) {
-        char c = static_cast<char>('a' + (static_cast<int>(key) - static_cast<int>(txui::Key::A)));
-        if (shift) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return c;
-    }
-    if (key >= txui::Key::N0 && key <= txui::Key::N9)
-        return static_cast<char>('0' + (static_cast<int>(key) - static_cast<int>(txui::Key::N0)));
-    if (key == txui::Key::Space) return ' ';
-    return '\0';
-}
 
 void ipc_listener_thread() {
     int fd = -1;
@@ -56,7 +43,7 @@ void ipc_listener_thread() {
     sh.payload_len = sizeof(topic);
     send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
     send(fd, &topic, sizeof(topic), MSG_NOSIGNAL);
-    log::info("[Shell] Subscribed to LAUNCHER_OPEN (1000) via ipcd");
+    log::info("[Shell] Connected to ipcd and subscribed to LAUNCHER_OPEN topic");
 
     while (true) {
         tinexus::ipcd::protocol::Header rx{};
@@ -76,16 +63,32 @@ void ipc_listener_thread() {
                 pg += n;
             }
         }
-        if (rx.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_SHOW) ||
-            rx.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_OPEN) ||
-            rx.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED)) {
-            g_toggle_pulse.store(true);
-            log::info("[Shell] LAUNCHER_SHOW/SHORTCUT received (type={}) — toggling Pulse", rx.msg_type);
-        }
     }
 done:
     close(fd);
+    g_ipc_fd.store(-1);
     log::warn("[Shell] ipcd connection lost");
+}
+
+static void trigger_launcher() {
+    int fd = g_ipc_fd.load();
+    if (fd >= 0) {
+        tinexus::ipcd::protocol::Header sh{};
+        sh.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        sh.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        sh.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_OPEN);
+        sh.payload_len = 0;
+        send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
+        log::info("[Shell] Sent LAUNCHER_OPEN notification to ipcd");
+    } else {
+        log::info("[Shell] Spawning tinexus-launcher process directly");
+        pid_t pid = fork();
+        if (pid == 0) {
+            setsid();
+            execlp("tinexus-launcher", "tinexus-launcher", nullptr);
+            _exit(127);
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -107,38 +110,22 @@ int main(int argc, char** argv) {
 
     auto shell_widget = txui::make_ref<DesktopShellWidget>();
 
-    double current_w = 1920.0;
-    double current_h = 46.0;
-    double target_w  = 1920.0;
-    double target_h  = 46.0;
-    bool animating   = false;
-    bool launch_animating = false;
-    bool launch_flipped   = false;
-    bool needs_redraw     = false;
+    bool needs_redraw = false;
 
     shell_widget->on_resize_requested = [&](double new_h) {
-        if (!shell_widget->pulse_active && !launch_animating) {
-            target_h = new_h;
-            current_h = new_h;
-            window->resize(1920, static_cast<uint32_t>(new_h));
-            window->set_keyboard_interactivity(new_h > 46.0);
-            needs_redraw = true;
-        }
+        window->resize(1920, static_cast<uint32_t>(new_h));
+        window->set_keyboard_interactivity(new_h > 46.0);
+        needs_redraw = true;
     };
 
     shell_widget->on_app_launch = [&](const AppItem& item) {
-        shell_widget->pulse_launch_app = item;
-        shell_widget->active_app_name = item.name;
-        launch_animating = true;
-        launch_flipped = false;
-        animating = true;
-        target_w = 1920.0;
-        target_h = 46.0;
+        spawn_app(item);
+        shell_widget->close_all_flyouts();
         needs_redraw = true;
     };
 
     shell_widget->on_pulse_toggle_requested = [&]() {
-        g_toggle_pulse.store(true);
+        trigger_launcher();
     };
 
     window->set_root_widget(txui::Ref<txui::Widget>(shell_widget.get()));
@@ -148,67 +135,6 @@ int main(int argc, char** argv) {
     bool running = true;
 
     while (running && !window->should_close()) {
-        if (g_toggle_pulse.exchange(false)) {
-            shell_widget->pulse_active = !shell_widget->pulse_active;
-            shell_widget->close_all_flyouts();
-
-            if (shell_widget->pulse_active) {
-                log::info("[Shell] Expanding to Pulse mode (Ctrl+K animated)");
-                shell_widget->pulse_query = "";
-                shell_widget->pulse_selected_index = 0;
-                shell_widget->pulse_results = build_results("", shell_widget->all_apps);
-                target_w = 1920.0;
-                target_h = 580.0;
-                window->set_keyboard_interactivity(true);
-            } else {
-                log::info("[Shell] Collapsing to Top Bar Aura mode");
-                target_w = 1920.0;
-                target_h = 46.0;
-                window->set_keyboard_interactivity(false);
-            }
-            animating = true;
-            shell_widget->mark_needs_paint();
-            needs_redraw = true;
-        }
-
-        // ── Animation tick (Ease-out 60 FPS) ──────────────────────────────
-        if (animating) {
-            double dw = target_w - current_w;
-            double dh = target_h - current_h;
-
-            current_w += dw * 0.4;
-            current_h += dh * 0.4;
-            if (std::abs(dw) < 1.0 && std::abs(dh) < 1.0) {
-                current_w = target_w;
-                current_h = target_h;
-                if (!launch_animating) animating = false;
-            }
-            if (launch_animating) {
-                if (!launch_flipped && current_h <= 60.0) {
-                    launch_flipped = true;
-                    shell_widget->pulse_launching = true;
-                    target_w = 1920.0;
-                    target_h = 340.0;
-                } else if (launch_flipped && std::abs(dh) < 2.0) {
-                    spawn_app(shell_widget->pulse_launch_app);
-                    launch_animating = false;
-                    launch_flipped = false;
-                    shell_widget->pulse_launching = false;
-                    shell_widget->pulse_active = false;
-                    shell_widget->pulse_query = "";
-                    shell_widget->pulse_selected_index = 0;
-                    target_w = 1920.0;
-                    target_h = 46.0;
-                    window->set_keyboard_interactivity(false);
-                    animating = true;
-                }
-            }
-            if (current_w > 0.0 && current_h > 0.0) {
-                window->resize(static_cast<uint32_t>(current_w), static_cast<uint32_t>(current_h));
-                needs_redraw = true;
-            }
-        }
-
         txui::Event event;
         while (window->poll_event(event)) {
             if (event.type == txui::EventType::WindowClose) {
@@ -220,60 +146,17 @@ int main(int argc, char** argv) {
                 needs_redraw = true;
             } else if (event.type == txui::EventType::KeyDown) {
                 needs_redraw = true;
-                const bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
-                const bool ctrl  = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Ctrl);
+                const bool ctrl = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Ctrl);
 
                 if (ctrl && (event.keyboard.key == txui::Key::K || event.keyboard.key == txui::Key::Space)) {
-                    g_toggle_pulse.store(true);
+                    trigger_launcher();
                     continue;
                 }
 
-                if (shell_widget->pulse_active) {
-                    if (event.keyboard.key == txui::Key::Escape) {
-                        shell_widget->pulse_active = false;
-                        shell_widget->pulse_query = "";
-                        target_w = 1920.0;
-                        target_h = 46.0;
-                        window->set_keyboard_interactivity(false);
-                        animating = true;
-                        shell_widget->mark_needs_paint();
-                        needs_redraw = true;
-                    } else if (event.keyboard.key == txui::Key::Enter) {
-                        if (!shell_widget->pulse_results.empty() &&
-                            shell_widget->pulse_selected_index < shell_widget->pulse_results.size()) {
-                            auto it = shell_widget->pulse_results[shell_widget->pulse_selected_index];
-                            if (shell_widget->on_app_launch) {
-                                shell_widget->on_app_launch(it);
-                            }
-                        }
-                    } else if (event.keyboard.key == txui::Key::Up) {
-                        if (shell_widget->pulse_selected_index > 0) {
-                            shell_widget->pulse_selected_index--;
-                            shell_widget->mark_needs_paint();
-                        }
-                    } else if (event.keyboard.key == txui::Key::Down) {
-                        if (shell_widget->pulse_selected_index + 1 < shell_widget->pulse_results.size()) {
-                            shell_widget->pulse_selected_index++;
-                            shell_widget->mark_needs_paint();
-                        }
-                    } else if (event.keyboard.key == txui::Key::Backspace) {
-                        if (!shell_widget->pulse_query.empty()) {
-                            shell_widget->pulse_query.pop_back();
-                            shell_widget->pulse_selected_index = 0;
-                            shell_widget->pulse_results = build_results(shell_widget->pulse_query, shell_widget->all_apps);
-                            shell_widget->mark_needs_paint();
-                        }
-                    } else {
-                        char ch = key_to_char(event.keyboard.key, shift);
-                        if (ch != '\0') {
-                            shell_widget->pulse_query += ch;
-                            shell_widget->pulse_selected_index = 0;
-                            shell_widget->pulse_results = build_results(shell_widget->pulse_query, shell_widget->all_apps);
-                            shell_widget->mark_needs_paint();
-                        }
-                    }
-                } else if (event.keyboard.key == txui::Key::Escape) {
+                if (event.keyboard.key == txui::Key::Escape) {
                     shell_widget->close_all_flyouts();
+                } else {
+                    shell_widget->handle_event(event);
                 }
             }
         }
@@ -285,7 +168,7 @@ int main(int argc, char** argv) {
             needs_redraw = false;
         }
 
-        window->wait_timeout(animating ? 16 : 100);
+        window->wait_timeout(16);
     }
 
     log::info("[Shell] Exiting cleanly.");

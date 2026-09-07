@@ -59,7 +59,10 @@ int main() {
         painter.end_frame();
         backend.execute(buffer_cmds, canvas);
 
-        txui::ImageWriter::save_png(canvas, "desktop_logo_menu_open.png");
+        if (!txui::ImageWriter::save_png(canvas, "desktop_logo_menu_open.png")) {
+            std::cerr << "FAIL: Failed to save desktop_logo_menu_open.png" << std::endl;
+            return 1;
+        }
         std::cout << "[Visual Test] Successfully saved desktop_logo_menu_open.png" << std::endl;
         widget->logo_menu_open = false;
     }
@@ -83,7 +86,10 @@ int main() {
         painter.end_frame();
         backend.execute(buffer_cmds, canvas);
 
-        txui::ImageWriter::save_png(canvas, "desktop_calendar_open.png");
+        if (!txui::ImageWriter::save_png(canvas, "desktop_calendar_open.png")) {
+            std::cerr << "FAIL: Failed to save desktop_calendar_open.png" << std::endl;
+            return 1;
+        }
         std::cout << "[Visual Test] Successfully saved desktop_calendar_open.png" << std::endl;
         widget->calendar_open = false;
     }
@@ -107,7 +113,10 @@ int main() {
         painter.end_frame();
         backend.execute(buffer_cmds, canvas);
 
-        txui::ImageWriter::save_png(canvas, "desktop_notifications_open.png");
+        if (!txui::ImageWriter::save_png(canvas, "desktop_notifications_open.png")) {
+            std::cerr << "FAIL: Failed to save desktop_notifications_open.png" << std::endl;
+            return 1;
+        }
         std::cout << "[Visual Test] Successfully saved desktop_notifications_open.png" << std::endl;
         widget->notifications_open = false;
     }
