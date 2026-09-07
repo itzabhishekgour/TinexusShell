@@ -33,3 +33,16 @@ endif()
 
 set_target_properties(tinexus-lock PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 install(TARGETS tinexus-lock RUNTIME DESTINATION bin)
+
+add_executable(test-lock-render
+    test_lock_render.cpp
+    LockWidget.cpp
+)
+target_include_directories(test-lock-render PRIVATE include)
+target_link_libraries(test-lock-render PRIVATE
+    tinexus_common
+    tinexus_warnings
+    txui
+)
+set_target_properties(test-lock-render PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+

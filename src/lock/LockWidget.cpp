@@ -39,9 +39,22 @@ constexpr txui::Color ERROR_COL   {255,  90,  90, 255}; // Coral red
 
 } // namespace
 
+LockWidget::LockWidget() {
+    m_input = txui::make_ref<txui::TextInput>("Press Enter to unlock");
+    m_input->set_secure_mode(true);
+    m_input->set_corner_radius(22.0); // Pill shape
+    m_input->set_font_size(15.0);
+    m_input->set_focused(true);
+    add_child(m_input);
+}
+
 void LockWidget::add_password_char(char c) {
     if (m_lockout_seconds > 0) return;
     m_password += c;
+    if (m_input) {
+        m_input->set_text(m_password);
+        m_input->set_caret_position(m_password.size());
+    }
     mark_needs_paint();
 }
 
@@ -49,20 +62,33 @@ void LockWidget::remove_password_char() {
     if (m_lockout_seconds > 0) return;
     if (!m_password.empty()) {
         m_password.pop_back();
+        if (m_input) {
+            m_input->set_text(m_password);
+            m_input->set_caret_position(m_password.size());
+        }
         mark_needs_paint();
     }
 }
 
 void LockWidget::clear_password() {
     m_password.clear();
+    if (m_input) {
+        m_input->set_text("");
+        m_input->set_caret_position(0);
+    }
     mark_needs_paint();
 }
 
 void LockWidget::trigger_shake_animation() {
     clear_password();
-    m_shaking     = true;
-    m_shake_frame = 0;
+    m_shaking      = true;
+    m_shake_frame  = 0;
     m_shake_offset = 0;
+    if (m_input) {
+        // UX Rule: The coral-red error border is active during the dynamic shake sequence (approx 540ms),
+        // giving instant visual feedback for the failed attempt.
+        m_input->set_error(true);
+    }
     mark_needs_paint();
 }
 
@@ -72,26 +98,45 @@ bool LockWidget::advance_shake() noexcept {
     // 8-frame sequence: alternating ±10px displacement (right, left, right…)
     // Frame offsets: [ +10, -10, +8, -8, +5, -5, +2, -2, 0 ]
     static constexpr int kOffsets[] = { 10, -10, 8, -8, 5, -5, 2, -2, 0 };
-    constexpr int kFrameCount = static_cast<int>(
-        sizeof(kOffsets) / sizeof(kOffsets[0]));
+    constexpr int kFrameCount = static_cast<int>(sizeof(kOffsets) / sizeof(kOffsets[0]));
 
     if (m_shake_frame < kFrameCount) {
         m_shake_offset = kOffsets[m_shake_frame];
         ++m_shake_frame;
+        mark_needs_layout();
         mark_needs_paint();
         return true;
     }
 
-    // Animation complete
+    // Animation complete:
+    // When the shake animation ends, clear the error flag on the input widget.
+    // If lockout follows, it is presented as a distinct disabled/countdown state, not a lingering red border.
     m_shaking      = false;
     m_shake_offset = 0;
     m_shake_frame  = 0;
+    if (m_input) {
+        m_input->set_error(false);
+    }
+    mark_needs_layout();
     mark_needs_paint();
     return false;
 }
 
 void LockWidget::set_lockout(int seconds) {
     m_lockout_seconds = seconds;
+    if (m_input) {
+        if (seconds > 0) {
+            m_input->set_text("");
+            m_input->set_placeholder("Locked out: wait " + std::to_string(seconds) + "s");
+            m_input->set_focused(false);
+            m_input->set_error(false);
+            m_input->set_enabled(false);
+        } else {
+            m_input->set_placeholder("Press Enter to unlock");
+            m_input->set_enabled(true);
+            m_input->set_focused(true);
+        }
+    }
     mark_needs_paint();
 }
 
@@ -99,15 +144,31 @@ txui::Size LockWidget::measure_override(const txui::Constraints& constraints) no
     return txui::Size(constraints.max_width, constraints.max_height);
 }
 
+void LockWidget::layout_override(const txui::Rect& frame) noexcept {
+    const double W = frame.width();
+    const double H = frame.height();
+    const double cx = frame.x() + W * 0.5;
+    const double card_y = frame.y() + H * 0.50;
+
+    const double pw_w = 280.0;
+    const double pw_h = 44.0;
+    const double pw_x = cx - pw_w * 0.5 + static_cast<double>(m_shake_offset);
+    const double pw_y = card_y + 140.0;
+
+    if (m_input) {
+        m_input->layout(txui::Rect(pw_x, pw_y, pw_w, pw_h));
+    }
+}
+
 void LockWidget::paint_override(txui::Painter& painter) const noexcept {
     const double W = frame().width();
     const double H = frame().height();
-    const double cx = W / 2.0;
+    const double cx = frame().x() + W * 0.5;
 
     // ── 1. Cosmic Background Gradient
     painter.fill_gradient_rect(frame(), BG_TOP, BG_BOT);
 
-    // ── 2. Time & Date block
+    // ── 2. Time & Date block (Precise FontMetrics Centering)
     time_t now = time(nullptr);
     struct tm t_buf;
     struct tm* t = (localtime_r(&now, &t_buf) != nullptr) ? &t_buf : nullptr;
@@ -118,32 +179,30 @@ void LockWidget::paint_override(txui::Painter& painter) const noexcept {
         strftime(date_buf, sizeof(date_buf), "%A, %B %d", t);
     }
 
-    // Large Time Text (scale = 4 → 32px per char)
-    constexpr double TIME_SCALE = 4.0;
-    const double time_char_w = 8.0 * TIME_SCALE;
-    const double time_w      = 5.0 * time_char_w; // "HH:MM"
-    const double time_y      = H * 0.20;
-    const double time_x      = cx - time_w * 0.5;
-    painter.draw_text(txui::Point(time_x, time_y), time_buf, TIME_COLOR, TIME_SCALE);
+    // Large Time Text (Explicit 64px font size with exact FreeType width)
+    constexpr double TIME_FONT_SIZE = 64.0;
+    const auto time_ext = txui::FontMetrics::measure(time_buf, TIME_FONT_SIZE, true, txui::FontFamily::UI);
+    const double time_x = cx - time_ext.width * 0.5;
+    const double time_y = frame().y() + H * 0.20;
+    painter.draw_text(txui::Point(time_x, time_y), time_buf, TIME_COLOR, TIME_FONT_SIZE, true);
 
-    // Date Subtitle
-    constexpr double DATE_SCALE = 1.0;
-    const double date_char_w = 8.0 * DATE_SCALE;
-    const double date_len    = static_cast<double>(strlen(date_buf));
-    const double date_x      = cx - (date_len * date_char_w) * 0.5;
-    const double date_y      = time_y + 16.0 * TIME_SCALE + 12.0;
-    painter.draw_text(txui::Point(date_x, date_y), date_buf, DATE_COLOR, DATE_SCALE);
+    // Date Subtitle (Explicit 15px font size with exact FreeType width)
+    constexpr double DATE_FONT_SIZE = 15.0;
+    const auto date_ext = txui::FontMetrics::measure(date_buf, DATE_FONT_SIZE, false, txui::FontFamily::UI);
+    const double date_x = cx - date_ext.width * 0.5;
+    const double date_y = time_y + time_ext.height + 12.0;
+    painter.draw_text(txui::Point(date_x, date_y), date_buf, DATE_COLOR, DATE_FONT_SIZE);
 
     // ── 3. Central Login Card
     const double card_w = 360.0;
     const double card_h = 240.0;
     const double card_x = cx - card_w * 0.5;
-    const double card_y = H * 0.50;
+    const double card_y = frame().y() + H * 0.50;
     const txui::Rect card_rect(card_x, card_y, card_w, card_h);
 
-    // Card background & sleek border
+    // Card background & sleek border (Radius 20px / 19px)
     painter.fill_rounded_rect(
-        txui::Rect(card_x - 1, card_y - 1, card_w + 2, card_h + 2),
+        txui::Rect(card_x - 1.0, card_y - 1.0, card_w + 2.0, card_h + 2.0),
         20.0, CARD_BORDER);
     painter.fill_rounded_rect(card_rect, 19.0, CARD_BG);
 
@@ -162,58 +221,31 @@ void LockWidget::paint_override(txui::Painter& painter) const noexcept {
         painter.fill_circle(txui::Point(cx, avatar_y + 14.0), 12.0, txui::Color(200, 215, 255, 140));
     }
 
-    // User greeting
+    // User greeting — Centered via real FontMetrics
     const std::string user_name = "Tinexus User";
-    const double user_x = cx - (static_cast<double>(user_name.size()) * 8.0) * 0.5;
-    painter.draw_text(txui::Point(user_x, avatar_y + 36.0), user_name, USER_COLOR, 1.0);
+    constexpr double USER_FONT_SIZE = 15.0;
+    const auto user_ext = txui::FontMetrics::measure(user_name, USER_FONT_SIZE, true, txui::FontFamily::UI);
+    const double user_x = cx - user_ext.width * 0.5;
+    painter.draw_text(txui::Point(user_x, avatar_y + 38.0), user_name, USER_COLOR, USER_FONT_SIZE, true);
 
-    // ── 5. Glassmorphism Password Input Pill (with shake offset when auth fails)
-    const double pw_w = 280.0;
-    const double pw_h = 44.0;
-    const double pw_x = cx - pw_w * 0.5 + static_cast<double>(m_shake_offset);
-    const double pw_y = card_y + 140.0;
-    const txui::Rect pw_rect(pw_x, pw_y, pw_w, pw_h);
-
-    // Pill border: use ERROR_COL while shaking, accent otherwise
-    const txui::Color border_color = m_shaking ? ERROR_COL
-        : ((!m_password.empty() || m_caret_visible) ? PILL_BORDER : CARD_BORDER);
-    painter.fill_rounded_rect(
-        txui::Rect(pw_x - 1, pw_y - 1, pw_w + 2, pw_h + 2),
-        23.0, border_color);
-    painter.fill_rounded_rect(pw_rect, 22.0, PILL_BG);
-
-    // Password content / status
-    if (m_lockout_seconds > 0) {
-        std::string msg = "Locked out: " + std::to_string(m_lockout_seconds) + "s";
-        const double msg_x = cx - (static_cast<double>(msg.size()) * 8.0) * 0.5;
-        painter.draw_text(txui::Point(msg_x, pw_y + 14.0), msg, ERROR_COL, 1.0);
-    } else if (!m_password.empty()) {
-        // Password dots
-        const double dot_r   = 4.5;
-        const double spacing = 14.0;
-        const double total_w = static_cast<double>(m_password.size()) * spacing;
-        double dot_x = cx - total_w * 0.5 + spacing * 0.5;
-        for (size_t i = 0; i < m_password.size(); ++i) {
-            painter.fill_circle(txui::Point(dot_x, pw_y + pw_h * 0.5), dot_r, ACCENT);
-            dot_x += spacing;
-        }
-        // Blinking caret right after dots
-        if (m_caret_visible) {
-            painter.fill_rect(txui::Rect(dot_x + 2.0, pw_y + 12.0, 2.0, 20.0), ACCENT);
-        }
-    } else {
-        // Hint text — no caret shown here (caret appears after password dots when typing)
-        const std::string hint = "Press Enter to unlock";
-        const double hint_x = cx - (static_cast<double>(hint.size()) * 7.2) * 0.5;
-        painter.draw_text(txui::Point(hint_x, pw_y + 14.0), hint, HINT_COLOR, 1.0);
+    // ── 5. Password Input (Rendered via child txui::TextInput widget with shake offset)
+    if (m_input) {
+        const double pw_w = 280.0;
+        const double pw_h = 44.0;
+        const double pw_x = cx - pw_w * 0.5 + static_cast<double>(m_shake_offset);
+        const double pw_y = card_y + 140.0;
+        m_input->layout(txui::Rect(pw_x, pw_y, pw_w, pw_h));
+        m_input->paint(painter);
     }
 
-    // ── 6. Bottom info bar
-    const double bottom_y = H - 32.0;
+    // ── 6. Bottom info bar — Centered via real FontMetrics
+    const double bottom_y = frame().y() + H - 32.0;
     const std::string bottom_hint = "Tinexus Platform  •  Horizon v0.1";
-    const double bottom_x = cx - (static_cast<double>(bottom_hint.size()) * 8.0) * 0.5;
+    constexpr double HINT_FONT_SIZE = 12.0;
+    const auto hint_ext = txui::FontMetrics::measure(bottom_hint, HINT_FONT_SIZE, false, txui::FontFamily::UI);
+    const double bottom_x = cx - hint_ext.width * 0.5;
     painter.draw_text(txui::Point(bottom_x, bottom_y), bottom_hint,
-                      txui::Color(140, 150, 180, 80), 1.0);
+                      txui::Color(140, 150, 180, 120), HINT_FONT_SIZE);
 }
 
 } // namespace tinexus::lock
