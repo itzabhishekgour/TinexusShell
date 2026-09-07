@@ -1,6 +1,8 @@
 #pragma once
 
 #include <txui/widgets/Widget.hpp>
+#include <txui/widgets/SegmentedControl.hpp>
+#include <txui/widgets/Button.hpp>
 #include <txui/core/Types.hpp>
 #include <txui/math/Rect.hpp>
 #include <string>
@@ -63,7 +65,11 @@ private:
     void read_system_info();
 
     AboutTab m_active_tab{AboutTab::Overview};
-    int      m_hovered_tab{-1};
+
+    // Core TxUI child widgets
+    txui::Ref<txui::SegmentedControl> m_tabbar;
+    txui::Ref<txui::Button>           m_btn_report;
+    txui::Ref<txui::Button>           m_btn_update;
 
     // System info strings
     std::string m_os_title{"Tinexus Desktop"};
@@ -78,14 +84,8 @@ private:
     StorageSpec              m_storage_spec;
     std::vector<ServiceSpec> m_services;
 
-    // UI layout bounding rects
-    txui::Rect m_tabbar_rect;
+    // UI layout bounding rect
     txui::Rect m_content_rect;
-    txui::Rect m_btn_report_rect;
-    txui::Rect m_btn_update_rect;
-
-    bool m_btn_report_hovered{false};
-    bool m_btn_update_hovered{false};
 };
 
 } // namespace tinexus::about

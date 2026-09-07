@@ -45,13 +45,7 @@ int main() {
     std::cout << "[Visual Test] Successfully saved about_tinexus_overview.png" << std::endl;
 
     // Switch to Displays tab
-    txui::Event ev_click;
-    ev_click.type = txui::EventType::PointerButtonPress;
-    ev_click.pointer.button = txui::MouseButton::Left;
-    // Tab 1 (Displays) is around x = 200, y = 80 inside chrome
-    ev_click.pointer.x = 200.0;
-    ev_click.pointer.y = 80.0;
-    chrome->handle_event(ev_click);
+    widget->switch_tab(AboutTab::Displays);
 
     canvas.clear(txui::Color(24, 24, 28, 255));
     {
@@ -62,7 +56,10 @@ int main() {
         painter.end_frame();
         backend.execute(buffer_cmds, canvas);
     }
-    txui::ImageWriter::save_png(canvas, "about_tinexus_displays.png");
+    if (!txui::ImageWriter::save_png(canvas, "about_tinexus_displays.png")) {
+        std::cerr << "FAIL: Failed to save about_tinexus_displays.png" << std::endl;
+        return 1;
+    }
 
     return 0;
 }

@@ -18,4 +18,36 @@ target_link_libraries(tinexus-dock PRIVATE
     txui
 )
 
+add_executable(test-dock-render
+    test_dock_render.cpp
+    ui/DockWidget.cpp
+)
+
+target_include_directories(test-dock-render PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+
+target_link_libraries(test-dock-render PRIVATE
+    tinexus_common
+    txui
+)
+
+add_executable(test-package-zoom
+    test_package_zoom.cpp
+)
+
+target_include_directories(test-package-zoom PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+
+target_link_libraries(test-package-zoom PRIVATE
+    tinexus_common
+    txui
+)
+
 install(TARGETS tinexus-dock DESTINATION bin)

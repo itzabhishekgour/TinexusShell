@@ -1,5 +1,5 @@
 #include "txui/window/Window.hpp"
-#include "txui/widgets/DockWidget.hpp"
+#include "dock/DockWidget.hpp"
 #include "ipcd/protocol/dock_protocol.hpp"
 #include "ipcd/protocol/header.hpp"
 #include "common/logger.hpp"
