@@ -163,20 +163,18 @@ bool TinexusServer::initialize() {
                     setup_ipc_connection();
                 }
                 if (m_ipc_socket >= 0) {
-#pragma pack(push, 1)
-                    struct IpcHeader {
-                        uint32_t magic = 0x544E5853;
-                        uint16_t version = 0x0100;
-                        uint16_t msg_type;
-                        uint16_t flags = 0;
-                        uint32_t sequence_id = 0;
-                        uint32_t payload_len = 0;
-                        uint32_t checksum = 0;
-                    };
-#pragma pack(pop)
-                    IpcHeader msg1;
+                    tinexus::ipcd::protocol::Header msg1{};
+                    msg1.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+                    msg1.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
                     msg1.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED);
-                    send(m_ipc_socket, &msg1, sizeof(msg1), MSG_NOSIGNAL);
+                    msg1.payload_len = 0;
+                    ssize_t sent = send(m_ipc_socket, &msg1, sizeof(msg1), MSG_NOSIGNAL);
+                    if (sent <= 0) {
+                        setup_ipc_connection();
+                        if (m_ipc_socket >= 0) {
+                            send(m_ipc_socket, &msg1, sizeof(msg1), MSG_NOSIGNAL);
+                        }
+                    }
                 } else {
                     log::warn("[Server] Ctrl+K: Persistent IPC socket not connected!");
                 }

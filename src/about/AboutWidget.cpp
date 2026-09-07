@@ -251,35 +251,6 @@ void AboutWidget::paint_override(txui::Painter& painter) const noexcept {
     // ── 1. Window Background ────────────────────────────────────────────────
     painter.fill_rect(f, BG_WINDOW);
 
-    // ── Traffic Light Window Controls (Top Left) ───────────────────────────
-    double tl_y = f.y() + 24.0;
-    double close_x = f.x() + 22.0;
-    double min_x   = f.x() + 40.0;
-    double max_x   = f.x() + 58.0;
-
-    // Red (Close)
-    painter.fill_circle({close_x, tl_y}, 6.0, txui::Color(255, 95, 87, 255));
-    painter.draw_circle({close_x, tl_y}, 6.0, 1.0, txui::Color(224, 66, 58, 255));
-    if (m_hover_close) {
-        painter.draw_line({close_x - 2.5, tl_y - 2.5}, {close_x + 2.5, tl_y + 2.5}, 1.2, txui::Color(100, 20, 20, 240));
-        painter.draw_line({close_x - 2.5, tl_y + 2.5}, {close_x + 2.5, tl_y - 2.5}, 1.2, txui::Color(100, 20, 20, 240));
-    }
-
-    // Yellow (Minimize)
-    painter.fill_circle({min_x, tl_y}, 6.0, txui::Color(254, 188, 46, 255));
-    painter.draw_circle({min_x, tl_y}, 6.0, 1.0, txui::Color(222, 161, 35, 255));
-    if (m_hover_minimize) {
-        painter.draw_line({min_x - 3.0, tl_y}, {min_x + 3.0, tl_y}, 1.2, txui::Color(120, 80, 15, 240));
-    }
-
-    // Green (Maximize / Zoom)
-    painter.fill_circle({max_x, tl_y}, 6.0, txui::Color(40, 200, 64, 255));
-    painter.draw_circle({max_x, tl_y}, 6.0, 1.0, txui::Color(30, 169, 52, 255));
-    if (m_hover_maximize) {
-        painter.draw_line({max_x - 2.5, tl_y}, {max_x + 2.5, tl_y}, 1.2, txui::Color(15, 90, 25, 240));
-        painter.draw_line({max_x, tl_y - 2.5}, {max_x, tl_y + 2.5}, 1.2, txui::Color(15, 90, 25, 240));
-    }
-
     // ── 2. Top Segmented Tabs Bar (Integrated Luxury Segmented Control) ───
     painter.fill_rounded_rect({m_tabbar_rect.x() - 1.0, m_tabbar_rect.y() - 1.0, m_tabbar_rect.width() + 2.0, m_tabbar_rect.height() + 2.0}, 16, txui::Color(255, 255, 255, 20));
     painter.fill_rounded_rect(m_tabbar_rect, 15, TAB_BG);
@@ -542,25 +513,10 @@ void AboutWidget::paint_override(txui::Painter& painter) const noexcept {
 }
 
 bool AboutWidget::handle_event(const txui::Event& event) noexcept {
-    const auto& f = frame();
+    (void)frame();
 
     if (event.type == txui::EventType::PointerMove) {
         double mx = event.pointer.x, my = event.pointer.y;
-
-        // Check window traffic lights hover
-        double tl_y = f.y() + 24.0;
-        double close_x = f.x() + 22.0, min_x = f.x() + 40.0, max_x = f.x() + 58.0;
-
-        bool h_close = (std::hypot(mx - close_x, my - tl_y) <= 8.0);
-        bool h_min   = (std::hypot(mx - min_x,   my - tl_y) <= 8.0);
-        bool h_max   = (std::hypot(mx - max_x,   my - tl_y) <= 8.0);
-
-        if (m_hover_close != h_close || m_hover_minimize != h_min || m_hover_maximize != h_max) {
-            m_hover_close = h_close;
-            m_hover_minimize = h_min;
-            m_hover_maximize = h_max;
-            mark_needs_paint();
-        }
 
         // Check tabs hover
         int new_tab_hover = -1;
@@ -588,21 +544,6 @@ bool AboutWidget::handle_event(const txui::Event& event) noexcept {
     } else if (event.type == txui::EventType::PointerButtonPress) {
         if (event.pointer.button == txui::MouseButton::Left) {
             double mx = event.pointer.x, my = event.pointer.y;
-
-            // Traffic lights actions
-            double tl_y = f.y() + 24.0;
-            double close_x = f.x() + 22.0, min_x = f.x() + 40.0;
-
-            if (std::hypot(mx - close_x, my - tl_y) <= 8.0) {
-                log::info("[About] Close window requested");
-                if (on_close_requested) on_close_requested();
-                return true;
-            }
-            if (std::hypot(mx - min_x, my - tl_y) <= 8.0) {
-                log::info("[About] Minimize window requested");
-                if (on_minimize_requested) on_minimize_requested();
-                return true;
-            }
 
             // Tab selection
             if (m_tabbar_rect.contains({mx, my})) {

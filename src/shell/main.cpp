@@ -3,6 +3,7 @@
 #include <txui/window/Window.hpp>
 #include <txui/render/WaylandRenderTarget.hpp>
 #include <txui/input/Event.hpp>
+#include <ipcd/protocol/header.hpp>
 #include <common/logger.hpp>
 #include <csignal>
 #include <sys/socket.h>
@@ -16,13 +17,6 @@ using namespace tinexus::shell;
 
 static std::atomic<int> g_ipc_fd{-1};
 static std::atomic<bool> g_toggle_pulse{false};
-
-#pragma pack(push, 1)
-struct IpcHdr {
-    uint32_t magic = 0x544E5853; uint16_t version = 0x0100; uint16_t msg_type;
-    uint16_t flags = 0; uint32_t seq = 0; uint32_t payload_len; uint32_t csum = 0;
-};
-#pragma pack(pop)
 
 static char key_to_char(txui::Key key, bool shift) {
     if (key >= txui::Key::A && key <= txui::Key::Z) {
@@ -54,14 +48,19 @@ void ipc_listener_thread() {
     if (fd < 0) { log::warn("[Shell] Could not connect to ipcd"); return; }
     g_ipc_fd.store(fd);
 
-    uint16_t topic = 1000;
-    IpcHdr sh; sh.msg_type = 2 /* SYS_SUBSCRIBE_TOPIC */; sh.payload_len = sizeof(topic);
+    uint16_t topic = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_OPEN);
+    tinexus::ipcd::protocol::Header sh{};
+    sh.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+    sh.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+    sh.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC);
+    sh.payload_len = sizeof(topic);
     send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
     send(fd, &topic, sizeof(topic), MSG_NOSIGNAL);
     log::info("[Shell] Subscribed to LAUNCHER_OPEN (1000) via ipcd");
 
     while (true) {
-        IpcHdr rx; ssize_t got = 0;
+        tinexus::ipcd::protocol::Header rx{};
+        ssize_t got = 0;
         auto* raw = reinterpret_cast<uint8_t*>(&rx);
         while (got < static_cast<ssize_t>(sizeof(rx))) {
             ssize_t n = recv(fd, raw + got, sizeof(rx) - static_cast<size_t>(got), 0);
@@ -77,9 +76,11 @@ void ipc_listener_thread() {
                 pg += n;
             }
         }
-        if (rx.msg_type == 1004) {
+        if (rx.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_SHOW) ||
+            rx.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_OPEN) ||
+            rx.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED)) {
             g_toggle_pulse.store(true);
-            log::info("[Shell] LAUNCHER_SHOW received — toggling Pulse");
+            log::info("[Shell] LAUNCHER_SHOW/SHORTCUT received (type={}) — toggling Pulse", rx.msg_type);
         }
     }
 done:
@@ -134,6 +135,10 @@ int main(int argc, char** argv) {
         target_w = 1920.0;
         target_h = 46.0;
         needs_redraw = true;
+    };
+
+    shell_widget->on_pulse_toggle_requested = [&]() {
+        g_toggle_pulse.store(true);
     };
 
     window->set_root_widget(txui::Ref<txui::Widget>(shell_widget.get()));
@@ -216,6 +221,12 @@ int main(int argc, char** argv) {
             } else if (event.type == txui::EventType::KeyDown) {
                 needs_redraw = true;
                 const bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
+                const bool ctrl  = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Ctrl);
+
+                if (ctrl && (event.keyboard.key == txui::Key::K || event.keyboard.key == txui::Key::Space)) {
+                    g_toggle_pulse.store(true);
+                    continue;
+                }
 
                 if (shell_widget->pulse_active) {
                     if (event.keyboard.key == txui::Key::Escape) {

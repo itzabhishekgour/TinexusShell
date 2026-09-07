@@ -54,9 +54,6 @@ public:
 
     void switch_tab(AboutTab tab);
 
-    std::function<void()> on_close_requested;
-    std::function<void()> on_minimize_requested;
-
 protected:
     txui::Size measure_override(const txui::Constraints& c) noexcept override;
     void       layout_override(const txui::Rect& frame)    noexcept override;
@@ -86,11 +83,6 @@ private:
     txui::Rect m_content_rect;
     txui::Rect m_btn_report_rect;
     txui::Rect m_btn_update_rect;
-
-    // Window controls (Traffic lights)
-    bool m_hover_close{false};
-    bool m_hover_minimize{false};
-    bool m_hover_maximize{false};
 
     bool m_btn_report_hovered{false};
     bool m_btn_update_hovered{false};

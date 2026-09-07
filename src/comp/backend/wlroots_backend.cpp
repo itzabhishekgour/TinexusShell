@@ -995,7 +995,7 @@ private:
         // SECURITY: when locked, ALL shortcuts are suppressed — keys go to lock client only
         if (!wrapper->backend->m_is_locked) {
             uint32_t wlr_mods = wlr_keyboard_get_modifiers(wrapper->keyboard);
-            if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed)) {
+            if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed, primary_sym)) {
                 log::info("[Keyboard] Global shortcut intercepted — swallowing key event.");
                 return;
             }

@@ -1017,6 +1017,11 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                     mark_needs_paint();
                     return true;
                 }
+                if (mx >= cx - 22.0 && mx <= cx + 22.0 && my >= 6.0 && my <= 38.0) {
+                    close_all_flyouts();
+                    if (on_pulse_toggle_requested) on_pulse_toggle_requested();
+                    return true;
+                }
                 if (hover_aura_date) {
                     calendar_open = !calendar_open;
                     logo_menu_open = false;

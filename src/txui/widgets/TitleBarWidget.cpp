@@ -86,9 +86,9 @@ bool TitleBarWidget::handle_event(const Event& event) noexcept {
 
         for (int i = 0; i < 3; ++i) {
             Rect r = button_rect(i);
-            double lx = p.x - frame().left();
-            double ly = p.y - frame().top();
-            if (lx >= r.left() && lx <= r.right() && ly >= r.top() && ly <= r.bottom()) {
+            double cx = r.left() + BUTTON_RADIUS;
+            double cy = r.top() + BUTTON_RADIUS;
+            if (std::hypot(p.x - cx, p.y - cy) <= (BUTTON_RADIUS + 4.0)) {
                 m_hovered_button = i;
                 break;
             }
@@ -98,39 +98,53 @@ bool TitleBarWidget::handle_event(const Event& event) noexcept {
             mark_needs_paint();
             return true;
         }
+    } else if (event.type == EventType::PointerLeave) {
+        if (m_hovered_button != -1) {
+            m_hovered_button = -1;
+            mark_needs_paint();
+            return true;
+        }
     } else if (event.type == EventType::PointerButtonPress
                && event.pointer.button == MouseButton::Left) {
-        // Only process click if it's within the TitleBar's bounds
         double px = event.pointer.x;
         double py = event.pointer.y;
+
+        // Check if click is inside this titlebar
         if (px < frame().left() || px > frame().right() || py < frame().top() || py > frame().bottom()) {
             return Widget::handle_event(event);
         }
 
-        int hit_index = m_hovered_button;
-        if (hit_index >= 0) {
-            // Ignore drags on buttons
-        } else if (m_on_move) {
-            // Clicked on the title bar background -> trigger move grab
-            m_on_move(event.pointer.serial);
-            return true;
+        // Direct hit test on each button circle with generous 10px radius
+        int hit_button = -1;
+        for (int i = 0; i < 3; ++i) {
+            Rect r = button_rect(i);
+            double cx = r.left() + BUTTON_RADIUS;
+            double cy = r.top() + BUTTON_RADIUS;
+            if (std::hypot(px - cx, py - cy) <= (BUTTON_RADIUS + 4.0)) {
+                hit_button = i;
+                break;
+            }
         }
 
-        if (m_hovered_button == 0) {
+        if (hit_button == 0) {
             // ── Close ────────────────────────────────────────────────────────
             if (m_on_close) m_on_close();
             return true;
-        } else if (m_hovered_button == 1) {
+        } else if (hit_button == 1) {
             // ── Minimize ─────────────────────────────────────────────────────
-            // Sends xdg_toplevel.minimize to compositor; compositor hides the
-            // scene node. No restore until a dock/taskbar is implemented.
             if (m_on_minimize) m_on_minimize();
             return true;
-        } else if (m_hovered_button == 2) {
+        } else if (hit_button == 2) {
             // ── Maximize / Restore ───────────────────────────────────────────
             m_is_maximized = !m_is_maximized;
             if (m_on_maximize) m_on_maximize();
-            mark_needs_paint(); // repaint to update any visual state
+            mark_needs_paint();
+            return true;
+        }
+
+        // Clicked outside buttons on title bar -> start interactive move grab
+        if (m_on_move) {
+            m_on_move(event.pointer.serial);
             return true;
         }
     }

@@ -45,6 +45,7 @@ class DesktopShellWidget : public txui::Widget {
 public:
     std::function<void(double new_h)> on_resize_requested;
     std::function<void(const AppItem& item)> on_app_launch;
+    std::function<void()> on_pulse_toggle_requested;
 
     // Interactive State Flags
     bool logo_menu_open{false};

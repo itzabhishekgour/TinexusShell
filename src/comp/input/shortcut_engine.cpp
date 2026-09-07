@@ -13,7 +13,7 @@ void ShortcutEngine::set_shortcut_callback(ShortcutCallback cb) {
     m_callback = std::move(cb);
 }
 
-bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, bool is_pressed) {
+bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, bool is_pressed, uint32_t keysym) {
     if (!is_pressed) return false;
 
     constexpr uint32_t MOD_CTRL  = (1 << 2);
@@ -36,6 +36,11 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
     constexpr uint32_t KEY_1          = 2;
     constexpr uint32_t KEY_9          = 10;
 
+    // Keysyms (XKB)
+    constexpr uint32_t SYM_k          = 0x006b;
+    constexpr uint32_t SYM_K          = 0x004b;
+    constexpr uint32_t SYM_space      = 0x0020;
+
     bool has_ctrl  = (modifiers & MOD_CTRL) != 0;
     bool has_alt   = (modifiers & MOD_ALT)  != 0;
     bool has_super = (modifiers & MOD_LOGO) != 0;
@@ -44,11 +49,14 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
     if (!m_callback) return false;
 
     // ── Launcher: Ctrl+K, Ctrl+Space, Alt+Space, bare Super key ──────────────
-    if ((has_ctrl && keycode == KEY_K) ||
-        (has_ctrl && keycode == KEY_SPACE) ||
-        (has_alt  && keycode == KEY_SPACE) ||
+    bool is_k = (keycode == KEY_K || keysym == SYM_k || keysym == SYM_K);
+    bool is_space = (keycode == KEY_SPACE || keysym == SYM_space);
+
+    if ((has_ctrl && is_k) ||
+        (has_ctrl && is_space) ||
+        (has_alt  && is_space) ||
         is_super_key) {
-        log::info("ShortcutEngine: launcher_toggle (keycode={}, mods={})", keycode, modifiers);
+        log::info("ShortcutEngine: launcher_toggle (keycode={}, keysym=0x{:x}, mods={})", keycode, keysym, modifiers);
         m_callback("launcher_toggle");
         return true;
     }
