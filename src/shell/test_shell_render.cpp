@@ -121,5 +121,59 @@ int main() {
         widget->notifications_open = false;
     }
 
+    // ── 5. Render Volume Flyout Open (1920 x 220) ───────────────────────────
+    {
+        const uint32_t H = 220;
+        widget->volume_flyout_open = true;
+
+        txui::Constraints constraints(0, W, 0, H);
+        widget->measure(constraints);
+        widget->layout(txui::Rect(0, 0, W, H));
+
+        txui::Canvas canvas(W, H);
+        canvas.clear(txui::Color(0, 0, 0, 0));
+
+        txui::CommandBuffer buffer_cmds;
+        txui::Painter painter(buffer_cmds);
+        painter.begin_frame();
+        widget->paint(painter);
+        painter.end_frame();
+        backend.execute(buffer_cmds, canvas);
+
+        if (!txui::ImageWriter::save_png(canvas, "desktop_volume_flyout_open.png")) {
+            std::cerr << "FAIL: Failed to save desktop_volume_flyout_open.png" << std::endl;
+            return 1;
+        }
+        std::cout << "[Visual Test] Successfully saved desktop_volume_flyout_open.png" << std::endl;
+        widget->volume_flyout_open = false;
+    }
+
+    // ── 6. Render Brightness Flyout Open (1920 x 220) ─────────────────────────
+    {
+        const uint32_t H = 220;
+        widget->brightness_flyout_open = true;
+
+        txui::Constraints constraints(0, W, 0, H);
+        widget->measure(constraints);
+        widget->layout(txui::Rect(0, 0, W, H));
+
+        txui::Canvas canvas(W, H);
+        canvas.clear(txui::Color(0, 0, 0, 0));
+
+        txui::CommandBuffer buffer_cmds;
+        txui::Painter painter(buffer_cmds);
+        painter.begin_frame();
+        widget->paint(painter);
+        painter.end_frame();
+        backend.execute(buffer_cmds, canvas);
+
+        if (!txui::ImageWriter::save_png(canvas, "desktop_brightness_flyout_open.png")) {
+            std::cerr << "FAIL: Failed to save desktop_brightness_flyout_open.png" << std::endl;
+            return 1;
+        }
+        std::cout << "[Visual Test] Successfully saved desktop_brightness_flyout_open.png" << std::endl;
+        widget->brightness_flyout_open = false;
+    }
+
     return 0;
 }

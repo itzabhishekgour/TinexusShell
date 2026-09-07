@@ -17,6 +17,7 @@ target_link_libraries(unit_test_common PRIVATE
 
 add_test(NAME unit_test_common COMMAND unit_test_common)
 
+
 add_executable(unit_test_txui_clipboard
     unit/test_txui_clipboard.cpp
 )

@@ -7,6 +7,9 @@
 #include "serviced/heartbeat_watchdog.hpp"
 #include "serviced/ipcd_client.hpp"
 #include "serviced/logind_mimic.hpp"
+#include "common/HardwareConfig.hpp"
+#include "common/AudioUtils.hpp"
+#include "common/BacklightUtils.hpp"
 #include <iostream>
 #include <fstream>
 #include <csignal>
@@ -35,29 +38,82 @@ void run_udev_setup() {
         }
     };
 
-    tinexus::log::info("Starting udev daemon for Wayland input device discovery...");
+    tinexus::log::info("Starting udev daemon for automated kernel driver and device discovery...");
     run_cmd("/lib/systemd/systemd-udevd", {
         const_cast<char*>("/lib/systemd/systemd-udevd"),
         const_cast<char*>("--daemon"),
         nullptr
     });
+    run_cmd("/sbin/udevd", {
+        const_cast<char*>("/sbin/udevd"),
+        const_cast<char*>("--daemon"),
+        nullptr
+    });
+    run_cmd("/bin/udevd", {
+        const_cast<char*>("/bin/udevd"),
+        const_cast<char*>("--daemon"),
+        nullptr
+    });
     sleep(1); // Give udevd time to bind netlink and control sockets
 
-    tinexus::log::info("Triggering udev device enumeration...");
+    // Universal Hardware Discovery: Trigger subsystems and devices.
+    // Kernel MODALIAS events will prompt udev rules to load all required vendor modules
+    // (Intel HDA, Realtek, AMD, USB audio, Wi-Fi, Ethernet, DRM/i915/amdgpu) automatically.
+    tinexus::log::info("Triggering udev coldplug discovery (subsystems)...");
     run_cmd("/usr/bin/udevadm", {
         const_cast<char*>("/usr/bin/udevadm"),
         const_cast<char*>("trigger"),
         const_cast<char*>("--action=add"),
+        const_cast<char*>("--type=subsystems"),
+        nullptr
+    });
+
+    tinexus::log::info("Triggering udev coldplug discovery (devices)...");
+    run_cmd("/usr/bin/udevadm", {
+        const_cast<char*>("/usr/bin/udevadm"),
+        const_cast<char*>("trigger"),
+        const_cast<char*>("--action=add"),
+        const_cast<char*>("--type=devices"),
         nullptr
     });
 
     run_cmd("/usr/bin/udevadm", {
         const_cast<char*>("/usr/bin/udevadm"),
         const_cast<char*>("settle"),
-        const_cast<char*>("--timeout=5"),
+        const_cast<char*>("--timeout=8"),
         nullptr
     });
-    sleep(1); // Ensure udev database is flushed to /run/udev/data/ before libinput starts
+    sleep(1); // Ensure udev database is flushed to /run/udev/data/ before session starts
+
+    // ── Universal RF Unblock (Wi-Fi & Bluetooth) ──
+    tinexus::log::info("Unblocking all wireless radios via rfkill...");
+    run_cmd("/usr/sbin/rfkill", {
+        const_cast<char*>("/usr/sbin/rfkill"),
+        const_cast<char*>("unblock"),
+        const_cast<char*>("all"),
+        nullptr
+    });
+    run_cmd("/bin/rfkill", {
+        const_cast<char*>("/bin/rfkill"),
+        const_cast<char*>("unblock"),
+        const_cast<char*>("all"),
+        nullptr
+    });
+
+    // ── Conditional VM-Only Module Probing ──
+    // virtio_snd is only probed if running inside a virtual machine (/sys/bus/virtio exists).
+    // On physical hardware, this is silently skipped to avoid kernel error noise.
+    if (std::filesystem::exists("/sys/bus/virtio")) {
+        tinexus::log::info("Virtual machine detected (/sys/bus/virtio present); loading virtio_snd...");
+        pid_t vp = fork();
+        if (vp == 0) {
+            execl("/sbin/modprobe", "modprobe", "-q", "virtio_snd", nullptr);
+            execl("/bin/modprobe", "modprobe", "-q", "virtio_snd", nullptr);
+            execl("/usr/bin/modprobe", "modprobe", "-q", "virtio_snd", nullptr);
+            _exit(0);
+        }
+        if (vp > 0) waitpid(vp, nullptr, 0);
+    }
 
     tinexus::log::info("--- CHECKING /dev/input NODES ---");
     if (std::filesystem::exists("/dev/input")) {
@@ -109,6 +165,80 @@ void run_udev_setup() {
     } else {
         tinexus::log::error("/sys/class/drm directory does NOT exist!");
     }
+}
+
+void setup_default_audio_routing() {
+    int card_id = tinexus::hardware::AudioUtils::detect_primary_card_id();
+    tinexus::log::info("Configuring default ALSA sound routing to Card {}", card_id);
+
+    // Generate /etc/asound.conf so all applications default to the analog audio card
+    std::ofstream ofs("/etc/asound.conf");
+    if (ofs.is_open()) {
+        ofs << "defaults.pcm.card " << card_id << "\n";
+        ofs << "defaults.ctl.card " << card_id << "\n";
+        ofs.close();
+        tinexus::log::info("Generated /etc/asound.conf with defaults.pcm.card = {}", card_id);
+    }
+
+    auto run_amixer = [](const std::vector<const char*>& args) {
+        pid_t p = fork();
+        if (p == 0) {
+            std::vector<char*> c_args;
+            c_args.push_back(const_cast<char*>("/usr/bin/amixer"));
+            for (auto* a : args) c_args.push_back(const_cast<char*>(a));
+            c_args.push_back(nullptr);
+            execv("/usr/bin/amixer", c_args.data());
+            execv("/bin/amixer", c_args.data());
+            _exit(0);
+        }
+        if (p > 0) waitpid(p, nullptr, 0);
+    };
+
+    std::string cid_str = std::to_string(card_id);
+    for (const char* ctrl : {"Master", "Speaker", "Headphone", "PCM", "Front", "Line Out"}) {
+        run_amixer({"-c", cid_str.c_str(), "sset", ctrl, "unmute", "-q"});
+        if (std::string(ctrl) != "Master") {
+            run_amixer({"-c", cid_str.c_str(), "sset", ctrl, "100%", "unmute", "-q"});
+        }
+    }
+}
+
+void restore_hardware_state() {
+    tinexus::log::info("Restoring hardware configuration from hardware.toml...");
+    setup_default_audio_routing();
+
+    auto cfg = tinexus::hardware::HardwareConfig::load();
+
+    // 1. Backlight / Brightness
+    int b_pct = cfg.brightness;
+    tinexus::hardware::BacklightUtils::set_brightness_percent(b_pct, /*persist=*/false, /*throttle=*/false);
+    tinexus::log::info("Applied display brightness: {}%", b_pct);
+
+    // 2. Audio Volume & Unmute
+    int v_pct = cfg.volume;
+    bool is_muted = cfg.muted;
+    int card_id = tinexus::hardware::AudioUtils::detect_primary_card_id();
+    std::string card_str = std::to_string(card_id);
+    std::string ctrl = tinexus::hardware::AudioUtils::detect_primary_control();
+    tinexus::log::info("Detected primary ALSA control on card {}: {}", card_id, ctrl);
+    tinexus::hardware::AudioUtils::set_volume_percent(v_pct, /*persist=*/false, /*throttle=*/false);
+
+    if (is_muted) {
+        pid_t p = fork();
+        if (p == 0) {
+            execl("/usr/bin/amixer", "amixer", "-c", card_str.c_str(), "sset", ctrl.c_str(), "mute", "-q", nullptr);
+            _exit(0);
+        }
+        if (p > 0) waitpid(p, nullptr, 0);
+    } else {
+        pid_t p = fork();
+        if (p == 0) {
+            execl("/usr/bin/amixer", "amixer", "-c", card_str.c_str(), "sset", ctrl.c_str(), "unmute", "-q", nullptr);
+            _exit(0);
+        }
+        if (p > 0) waitpid(p, nullptr, 0);
+    }
+    tinexus::log::info("Applied audio volume: {}% on card {} (muted={})", v_pct, card_id, is_muted);
 }
 
 void signal_handler(int signal) {
@@ -258,6 +388,15 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Unblock wireless radios before interface scan
+            pid_t rfk_p = fork();
+            if (rfk_p == 0) {
+                execl("/usr/sbin/rfkill", "rfkill", "unblock", "all", nullptr);
+                execl("/bin/rfkill", "rfkill", "unblock", "all", nullptr);
+                _exit(0);
+            }
+            if (rfk_p > 0) waitpid(rfk_p, nullptr, 0);
+
             // Bring up loopback
             pid_t lo_p = fork();
             if (lo_p == 0) {
@@ -361,6 +500,7 @@ int main(int argc, char** argv) {
 
     tinexus::log::info("Platform Runtime Manager ready. Auto-spawning supervision tree...");
     run_udev_setup();
+    restore_hardware_state();
     
     // First, explicitly start dbus-daemon so we can poll for its socket
     pm.start_service("dbus-daemon");

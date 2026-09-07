@@ -2,6 +2,9 @@
 #include <txui/render/FontMetrics.hpp>
 #include <txui/input/Event.hpp>
 #include <common/NetUtils.hpp>
+#include <common/AudioUtils.hpp>
+#include <common/BacklightUtils.hpp>
+#include <common/DisplayUtils.hpp>
 #include "settings/WifiManager.hpp"
 #include <guard/crypto_validator.hpp>
 
@@ -104,10 +107,11 @@ SettingsWidget::SettingsWidget() {
 }
 
 void SettingsWidget::init_child_widgets() {
-    // 1. Sidebar Navigation Items (7 items)
+    // 1. Sidebar Navigation Items (8 items)
     m_nav_items.clear();
     const struct NavDef { const char* label; SettingsPage page; } nav_defs[] = {
         {"Display",            SettingsPage::Display},
+        {"Sound",              SettingsPage::Sound},
         {"Personalization",    SettingsPage::Personalization},
         {"Network",            SettingsPage::Network},
         {"System & Power",     SettingsPage::System},
@@ -122,6 +126,7 @@ void SettingsWidget::init_child_widgets() {
             [this, page = def.page](Painter& p, const Rect& r) {
                 switch (page) {
                     case SettingsPage::Display:           draw_icon_display(p, r.x(), r.y()); break;
+                    case SettingsPage::Sound:             draw_icon_sound(p, r.x(), r.y()); break;
                     case SettingsPage::Personalization:   draw_icon_personalization(p, r.x(), r.y()); break;
                     case SettingsPage::Network:           draw_icon_network(p, r.x(), r.y()); break;
                     case SettingsPage::System:            draw_icon_system(p, r.x(), r.y()); break;
@@ -149,6 +154,14 @@ void SettingsWidget::init_child_widgets() {
         mark_needs_paint();
     });
 
+    m_brightness_slider = make_ref<Slider>(
+        0.0, 100.0, static_cast<double>(hardware::BacklightUtils::get_brightness_percent())
+    );
+    m_brightness_slider->set_on_value_changed([this](double val) {
+        hardware::BacklightUtils::set_brightness_percent(static_cast<int>(val), /*persist=*/false, /*throttle=*/true);
+        mark_needs_paint();
+    });
+
     m_night_light_toggle = make_ref<ToggleSwitch>(m_night_light_enabled, [this](bool checked) {
         m_night_light_enabled = checked;
         save_config();
@@ -160,6 +173,34 @@ void SettingsWidget::init_child_widgets() {
         save_config();
         mark_needs_paint();
     });
+
+    // 2b. Sound Page Widgets
+    m_volume_slider = make_ref<Slider>(
+        0.0, 100.0, static_cast<double>(hardware::AudioUtils::get_volume_percent())
+    );
+    m_volume_slider->set_on_value_changed([this](double val) {
+        int v = static_cast<int>(val);
+        hardware::AudioUtils::set_volume_percent(v, /*persist=*/false, /*throttle=*/true);
+        if (m_sound_mute_toggle) {
+            m_sound_mute_toggle->set_checked(hardware::AudioUtils::is_muted());
+        }
+        mark_needs_paint();
+    });
+
+    m_sound_mute_toggle = make_ref<ToggleSwitch>(
+        hardware::AudioUtils::is_muted(),
+        [this](bool checked) {
+            if (checked != hardware::AudioUtils::is_muted()) {
+                hardware::AudioUtils::toggle_mute(/*persist=*/true);
+                mark_needs_paint();
+            }
+        }
+    );
+
+    m_sound_test_btn = make_ref<Button>("Play Test Sound", []() {
+        hardware::AudioUtils::play_chime();
+    });
+    m_sound_test_btn->set_style(Button::Style::Standard);
 
     // 3. Personalization Page Widgets
     std::vector<Color> swatch_colors;
@@ -316,8 +357,11 @@ void SettingsWidget::update_accent_styling() noexcept {
     for (auto& item : m_nav_items) {
         item->set_accent_color(active_col);
     }
+    if (m_brightness_slider)     m_brightness_slider->set_active_color(active_col);
     if (m_night_light_toggle)    m_night_light_toggle->set_active_color(active_col);
     if (m_vrr_toggle)            m_vrr_toggle->set_active_color(active_col);
+    if (m_volume_slider)         m_volume_slider->set_active_color(active_col);
+    if (m_sound_mute_toggle)     m_sound_mute_toggle->set_active_color(active_col);
     if (m_wifi_master_toggle)    m_wifi_master_toggle->set_active_color(active_col);
     if (m_timeout_slider)        m_timeout_slider->set_active_color(active_col);
     if (m_sleep_slider)          m_sleep_slider->set_active_color(active_col);
@@ -375,7 +419,7 @@ void SettingsWidget::read_compositor_info() {
         }
     }
     if (m_cpu_model.empty()) m_cpu_model = "Generic x86_64 Processor";
-    m_comp_info = "tinexus-comp (wlroots 0.17 + Vulkan Renderer)";
+    m_comp_info = hardware::DisplayUtils::get_compositor_version_string();
 }
 
 void SettingsWidget::scan_wallpapers() {
@@ -599,12 +643,27 @@ void SettingsWidget::layout_override(const txui::Rect& f) noexcept {
     if (m_display_scale_control) {
         m_display_scale_control->layout(txui::Rect(cx + cw - 264.0, y1 + 114.0, 244.0, 30.0));
     }
-    float64 disp_y2 = y1 + 180.0;
+    float64 disp_y2 = y1 + 176.0;
+    if (m_brightness_slider) {
+        m_brightness_slider->layout(txui::Rect(cx + 20.0, disp_y2 + 46.0, cw - 40.0, 24.0));
+    }
+    float64 disp_y3 = disp_y2 + 96.0;
     if (m_night_light_toggle) {
-        m_night_light_toggle->layout(txui::Rect(cx + cw - 56.0, disp_y2 + 18.0, 44.0, 24.0));
+        m_night_light_toggle->layout(txui::Rect(cx + cw - 56.0, disp_y3 + 18.0, 44.0, 24.0));
     }
     if (m_vrr_toggle) {
-        m_vrr_toggle->layout(txui::Rect(cx + cw - 56.0, disp_y2 + 96.0, 44.0, 24.0));
+        m_vrr_toggle->layout(txui::Rect(cx + cw - 56.0, disp_y3 + 96.0, 44.0, 24.0));
+    }
+
+    // 1b. Sound Page Widgets
+    if (m_volume_slider) {
+        m_volume_slider->layout(txui::Rect(cx + 20.0, y1 + 52.0, cw - 40.0, 24.0));
+    }
+    if (m_sound_test_btn) {
+        m_sound_test_btn->layout(txui::Rect(cx + 20.0, y1 + 96.0, 150.0, 32.0));
+    }
+    if (m_sound_mute_toggle) {
+        m_sound_mute_toggle->layout(txui::Rect(cx + cw - 56.0, y1 + 100.0, 44.0, 24.0));
     }
 
     // 2. Personalization Page Widgets
@@ -733,8 +792,29 @@ bool SettingsWidget::handle_event(const txui::Event& event) noexcept {
     switch (m_current_page) {
         case SettingsPage::Display:
             if (m_display_scale_control && m_display_scale_control->handle_event(event)) return true;
+            if (m_brightness_slider && m_brightness_slider->handle_event(event)) {
+                if (event.type == txui::EventType::PointerButtonRelease) {
+                    hardware::BacklightUtils::set_brightness_percent(
+                        static_cast<int>(m_brightness_slider->value()), /*persist=*/true, /*throttle=*/false
+                    );
+                }
+                return true;
+            }
             if (m_night_light_toggle && m_night_light_toggle->handle_event(event))       return true;
             if (m_vrr_toggle && m_vrr_toggle->handle_event(event))                       return true;
+            break;
+
+        case SettingsPage::Sound:
+            if (m_volume_slider && m_volume_slider->handle_event(event)) {
+                if (event.type == txui::EventType::PointerButtonRelease) {
+                    hardware::AudioUtils::set_volume_percent(
+                        static_cast<int>(m_volume_slider->value()), /*persist=*/true, /*throttle=*/false
+                    );
+                }
+                return true;
+            }
+            if (m_sound_mute_toggle && m_sound_mute_toggle->handle_event(event)) return true;
+            if (m_sound_test_btn && m_sound_test_btn->handle_event(event)) return true;
             break;
 
         case SettingsPage::Personalization:
@@ -862,6 +942,7 @@ void SettingsWidget::paint_override(txui::Painter& p) const noexcept {
 
     switch (m_current_page) {
         case SettingsPage::Display:           paint_display_page(p, area); break;
+        case SettingsPage::Sound:             paint_sound_page(p, area); break;
         case SettingsPage::Personalization:   paint_personalization_page(p, area); break;
         case SettingsPage::Network:           paint_network_page(p, area); break;
         case SettingsPage::System:            paint_system_page(p, area); break;
@@ -880,14 +961,7 @@ void SettingsWidget::paint_override(txui::Painter& p) const noexcept {
 void SettingsWidget::paint_sidebar(txui::Painter& p) const noexcept {
     p.fill_rect(m_sidebar_rect, SIDEBAR_BG);
 
-    // Window control pills (macOS style: Close, Minimize, Zoom)
-    float64 ctrl_x = m_sidebar_rect.x() + 18.0;
-    float64 ctrl_y = m_sidebar_rect.y() + 18.0;
-    p.fill_circle(txui::Point(ctrl_x, ctrl_y), 6.0, txui::Color(255, 95, 87, 255));
-    p.fill_circle(txui::Point(ctrl_x + 20.0, ctrl_y), 6.0, txui::Color(254, 188, 46, 255));
-    p.fill_circle(txui::Point(ctrl_x + 40.0, ctrl_y), 6.0, txui::Color(40, 200, 64, 255));
-
-    // Title label
+    // Title label (Window controls are rendered natively by txui::ChromeWidget titlebar)
     p.draw_text(txui::Point(m_sidebar_rect.x() + 18.0, m_sidebar_rect.y() + 42.0),
                 "Settings", TXT_PRI, 15.0, true);
 
@@ -909,7 +983,7 @@ static void draw_page_header(txui::Painter& p, const txui::Rect& area,
 // ── 1. Page: Display ─────────────────────────────────────────────────────────
 void SettingsWidget::paint_display_page(txui::Painter& p, const txui::Rect& area) const noexcept {
     draw_page_header(p, area, "Display",
-                     "Resolution, display scaling, Night Light, and refresh rates",
+                     "Resolution, brightness, display scaling, Night Light, and refresh rates",
                      SettingsPage::Display);
 
     float64 cx = area.x();
@@ -919,9 +993,11 @@ void SettingsWidget::paint_display_page(txui::Painter& p, const txui::Rect& area
     // Card 1: Display Information
     draw_card(p, txui::Rect(cx, y1, cw, 160.0));
 
-    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Primary Display (eDP-1)", TXT_PRI, 15.0, true);
+    auto disp = hardware::DisplayUtils::get_primary_display();
+    std::string disp_title = "Primary Display (" + disp.connector_name + ")";
+    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), disp_title, TXT_PRI, 15.0, true);
     draw_badge_pill(p, cx + cw - 80.0, y1 + 18.0, "Primary", SUCCESS_BG, SUCCESS_TXT);
-    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), "3840 × 2160 @ 120 Hz  •  Vulkan Direct Scanout (wlroots)", TXT_SEC, 12.0);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 48.0), disp.formatted_line, TXT_SEC, 12.0);
 
     p.fill_rect(txui::Rect(cx + 20.0, y1 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
@@ -931,22 +1007,103 @@ void SettingsWidget::paint_display_page(txui::Painter& p, const txui::Rect& area
         m_display_scale_control->paint(p);
     }
 
-    // Card 2: Features
-    float64 y2 = y1 + 180.0;
-    draw_card(p, txui::Rect(cx, y2, cw, 160.0));
+    // Card 2: Display Backlight Brightness
+    float64 y2 = y1 + 176.0;
+    draw_card(p, txui::Rect(cx, y2, cw, 84.0));
+    p.draw_text(txui::Point(cx + 20.0, y2 + 18.0), "Display Brightness", TXT_PRI, 13.0, true);
+    int cur_bright = m_brightness_slider ? static_cast<int>(m_brightness_slider->value()) : hardware::BacklightUtils::get_brightness_percent();
+    p.draw_text(txui::Point(cx + cw - 60.0, y2 + 18.0), std::to_string(cur_bright) + "%", TXT_PRI, 13.0, true);
+    if (m_brightness_slider) {
+        m_brightness_slider->paint(p);
+    }
 
-    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Night Light", TXT_PRI, 13.0, true);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), "Warmer screen colors reduce eye strain at night (3400K color temp)", TXT_DIM, 11.5);
+    // Card 3: Features
+    float64 y3 = y2 + 96.0;
+    draw_card(p, txui::Rect(cx, y3, cw, 160.0));
+
+    p.draw_text(txui::Point(cx + 20.0, y3 + 20.0), "Night Light", TXT_PRI, 13.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y3 + 48.0), "Warmer screen colors reduce eye strain at night (3400K color temp)", TXT_DIM, 11.5);
     if (m_night_light_toggle) {
         m_night_light_toggle->paint(p);
     }
 
-    p.fill_rect(txui::Rect(cx + 20.0, y2 + 78.0, cw - 40.0, 1.0), DIVIDER);
+    p.fill_rect(txui::Rect(cx + 20.0, y3 + 78.0, cw - 40.0, 1.0), DIVIDER);
 
-    p.draw_text(txui::Point(cx + 20.0, y2 + 98.0), "Adaptive Sync (VRR)", TXT_PRI, 13.0, true);
-    p.draw_text(txui::Point(cx + 20.0, y2 + 126.0), "Variable refresh rate for tear-free gaming and low latency rendering", TXT_DIM, 11.5);
+    p.draw_text(txui::Point(cx + 20.0, y3 + 98.0), "Adaptive Sync (VRR)", TXT_PRI, 13.0, true);
+    p.draw_text(txui::Point(cx + 20.0, y3 + 126.0), "Variable refresh rate for tear-free gaming and low latency rendering", TXT_DIM, 11.5);
     if (m_vrr_toggle) {
         m_vrr_toggle->paint(p);
+    }
+}
+
+// ── 1b. Page: Sound ──────────────────────────────────────────────────────────
+void SettingsWidget::paint_sound_page(txui::Painter& p, const txui::Rect& area) const noexcept {
+    draw_page_header(p, area, "Sound",
+                     "Audio output volume, hardware codecs, and sound playback test",
+                     SettingsPage::Sound);
+
+    float64 cx = area.x();
+    float64 cw = area.width();
+    float64 y1 = area.y() + 94.0;
+
+    // Card 1: Master Volume & Output Controls
+    draw_card(p, txui::Rect(cx, y1, cw, 146.0));
+
+    int cur_vol = m_volume_slider ? static_cast<int>(m_volume_slider->value()) : hardware::AudioUtils::get_volume_percent();
+    bool muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
+    p.draw_text(txui::Point(cx + 20.0, y1 + 20.0), "Output Volume", TXT_PRI, 14.5, true);
+    std::string vol_pct_str = muted ? "Muted" : (std::to_string(cur_vol) + "%");
+    txui::Color vol_col = muted ? DANGER_TXT : TXT_PRI;
+    p.draw_text(txui::Point(cx + cw - 66.0, y1 + 20.0), vol_pct_str, vol_col, 13.0, true);
+
+    if (m_volume_slider) {
+        m_volume_slider->paint(p);
+    }
+
+    p.fill_rect(txui::Rect(cx + 20.0, y1 + 86.0, cw - 40.0, 1.0), DIVIDER);
+
+    if (m_sound_test_btn) {
+        m_sound_test_btn->paint(p);
+    }
+
+    p.draw_text(txui::Point(cx + cw - 160.0, y1 + 104.0), "Mute Audio Output", TXT_SEC, 12.0);
+    if (m_sound_mute_toggle) {
+        m_sound_mute_toggle->paint(p);
+    }
+
+    // Card 2: Output Hardware Devices
+    float64 y2 = y1 + 162.0;
+    draw_card(p, txui::Rect(cx, y2, cw, 180.0));
+
+    p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Detected Sound Hardware", TXT_PRI, 15.0, true);
+    draw_badge_pill(p, cx + cw - 90.0, y2 + 18.0, "ALSA Native", SUCCESS_BG, SUCCESS_TXT);
+
+    std::string active_ctrl = hardware::AudioUtils::detect_primary_control();
+    std::string dev_desc = "Primary Active Mixer Channel: [" + active_ctrl + "]  •  Direct ALSA Kernel Driver";
+    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), dev_desc, TXT_SEC, 12.0);
+
+    p.fill_rect(txui::Rect(cx + 20.0, y2 + 76.0, cw - 40.0, 1.0), DIVIDER);
+
+    // Enumerate sound cards from /proc/asound/cards
+    std::vector<std::string> sound_cards;
+    std::ifstream asound_in("/proc/asound/cards");
+    if (asound_in.is_open()) {
+        std::string line;
+        while (std::getline(asound_in, line)) {
+            if (!line.empty() && std::isdigit(line[0])) {
+                sound_cards.push_back(line);
+            }
+        }
+    }
+    if (sound_cards.empty()) {
+        sound_cards.push_back("0 [DefaultAudio  ]: Universal Audio Controller (Realtek / Intel HDA / VirtIO)");
+    }
+
+    float64 card_y = y2 + 96.0;
+    for (size_t i = 0; i < std::min<size_t>(sound_cards.size(), 2); ++i) {
+        p.draw_text(txui::Point(cx + 20.0, card_y), sound_cards[i], TXT_PRI, 12.0, true);
+        p.draw_text(txui::Point(cx + 20.0, card_y + 18.0), "Direct Hardware PCM Playback  •  48 kHz / 24-bit", TXT_DIM, 11.0);
+        card_y += 38.0;
     }
 }
 
@@ -1338,6 +1495,17 @@ void SettingsWidget::draw_icon_display(txui::Painter& p, float64 tx, float64 ty)
     p.fill_rect(txui::Rect(cx - 4.5, cy - 3.5, 9.0, 5.0), txui::Color(35, 100, 220, 255));
     p.fill_rect(txui::Rect(cx - 1.0, cy + 3.0, 2.0, 2.0), TXT_PRI);
     p.fill_rect(txui::Rect(cx - 3.0, cy + 5.0, 6.0, 1.0), TXT_PRI);
+}
+
+void SettingsWidget::draw_icon_sound(txui::Painter& p, float64 tx, float64 ty) const noexcept {
+    draw_icon_badge_base(p, tx, ty, txui::Color(245, 158, 11, 255), txui::Color(217, 119, 6, 255));
+    float64 cx = tx + 10.0, cy = ty + 10.0;
+    p.fill_rect(txui::Rect(cx - 5.0, cy - 2.5, 3.5, 5.0), TXT_PRI);
+    p.draw_line(txui::Point(cx - 1.5, cy - 2.5), txui::Point(cx + 2.0, cy - 5.0), 1.5, TXT_PRI);
+    p.draw_line(txui::Point(cx + 2.0, cy - 5.0), txui::Point(cx + 2.0, cy + 5.0), 1.5, TXT_PRI);
+    p.draw_line(txui::Point(cx + 2.0, cy + 5.0), txui::Point(cx - 1.5, cy + 2.5), 1.5, TXT_PRI);
+    p.draw_line(txui::Point(cx + 4.0, cy - 3.0), txui::Point(cx + 5.5, cy), 1.2, TXT_PRI);
+    p.draw_line(txui::Point(cx + 5.5, cy), txui::Point(cx + 4.0, cy + 3.0), 1.2, TXT_PRI);
 }
 
 void SettingsWidget::draw_icon_personalization(txui::Painter& p, float64 tx, float64 ty) const noexcept {

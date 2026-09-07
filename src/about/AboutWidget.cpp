@@ -3,6 +3,7 @@
 #include <txui/input/Event.hpp>
 #include <common/logger.hpp>
 #include <common/TinexusLogo.hpp>
+#include <common/DisplayUtils.hpp>
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
 #include <sys/statvfs.h>
@@ -132,7 +133,7 @@ void AboutWidget::read_system_info() {
     }
 
     // 4. Compositor / Graphics
-    m_comp_info = "wlroots 0.17 (Vulkan RHI Compositor)";
+    m_comp_info = tinexus::hardware::DisplayUtils::get_compositor_version_string();
 
     // 5. Storage Specs
     m_storage_spec.root_mount = "/";
@@ -171,37 +172,16 @@ void AboutWidget::read_system_info() {
     }
 
     // 6. Display Specs
-    m_display_spec.name = "Built-in Display (eDP-1)";
-    m_display_spec.resolution = "1920 × 1080 (Full HD)";
-    m_display_spec.refresh_rate = "60.00 Hz (Hardware VSync)";
+    auto disp = tinexus::hardware::DisplayUtils::get_primary_display();
+    m_display_spec.name = disp.connector_name + (disp.connected ? " (Connected)" : " (Built-in Display)");
+    std::string res_fmt = disp.resolution;
+    auto x_p = res_fmt.find('x');
+    if (x_p != std::string::npos) res_fmt.replace(x_p, 1, " × ");
+    m_display_spec.resolution = res_fmt + " (Native)";
+    m_display_spec.refresh_rate = disp.refresh_rate + " (Hardware VSync)";
     m_display_spec.scale = "100% (Native 1:1 Pixel Grid)";
     m_display_spec.format = "32-bit ARGB8888 (sRGB D65)";
-    m_display_spec.renderer = "Vulkan RHI via wlroots (DRM Direct)";
-
-    DIR* drm_dir = opendir("/sys/class/drm");
-    if (drm_dir) {
-        struct dirent* entry;
-        while ((entry = readdir(drm_dir)) != nullptr) {
-            std::string name = entry->d_name;
-            if (name.find("card") != std::string::npos && name.find("-") != std::string::npos) {
-                std::string status_path = "/sys/class/drm/" + name + "/status";
-                std::ifstream sf(status_path);
-                std::string status;
-                if (sf >> status && status == "connected") {
-                    auto dash = name.find('-');
-                    m_display_spec.name = name.substr(dash + 1) + " (Connected)";
-                    std::string mode_path = "/sys/class/drm/" + name + "/modes";
-                    std::ifstream mf(mode_path);
-                    std::string first_mode;
-                    if (mf >> first_mode && !first_mode.empty()) {
-                        m_display_spec.resolution = first_mode + " (Native)";
-                    }
-                    break;
-                }
-            }
-        }
-        closedir(drm_dir);
-    }
+    m_display_spec.renderer = tinexus::hardware::DisplayUtils::get_renderer_backend_string();
 
     // 7. Platform Services
     auto find_pid = [](const std::string& comm_name) -> pid_t {

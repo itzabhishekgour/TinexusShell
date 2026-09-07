@@ -1,6 +1,8 @@
 #include "comp/backend/drm_backend.hpp"
 #include "common/logger.hpp"
 #include <utility>
+#include <filesystem>
+#include <fstream>
 
 namespace tinexus::comp {
 
@@ -10,13 +12,30 @@ DrmBackend::DrmBackend(std::string device_path)
 bool DrmBackend::initialize() {
     log::info("DrmBackend: Opening DRM/KMS device node '{}'...", m_device_path);
 
-    // Profile PCI Vendor (Intel 0x8086, AMD 0x1002, NVIDIA 0x10de)
-    if (m_device_path.find("card1") != std::string::npos) {
+    // Dynamically profile PCI Vendor from sysfs if present
+    std::string card_name = std::filesystem::path(m_device_path).filename().string();
+    std::filesystem::path vendor_path = std::filesystem::path("/sys/class/drm") / card_name / "device" / "vendor";
+    std::string vendor_id;
+    if (std::filesystem::exists(vendor_path)) {
+        std::ifstream vf(vendor_path);
+        vf >> vendor_id;
+    }
+
+    if (vendor_id == "0x1002" || vendor_id == "0x1002\n") {
         m_gpu_vendor = GpuVendor::Amd;
         log::info("DrmBackend: Detected AMD Radeon GPU (Vendor ID: 0x1002, Driver: amdgpu)");
+    } else if (vendor_id == "0x8086" || vendor_id == "0x8086\n") {
+        m_gpu_vendor = GpuVendor::Intel;
+        log::info("DrmBackend: Detected Intel Iris/UHD/Arc GPU (Vendor ID: 0x8086, Driver: i915/xe)");
+    } else if (vendor_id == "0x10de" || vendor_id == "0x10de\n") {
+        m_gpu_vendor = GpuVendor::Nvidia;
+        log::info("DrmBackend: Detected NVIDIA GeForce/RTX GPU (Vendor ID: 0x10de, Driver: nouveau)");
+    } else if (m_device_path.find("card1") != std::string::npos) {
+        m_gpu_vendor = GpuVendor::Amd;
+        log::info("DrmBackend: Fallback detected AMD Radeon GPU (Driver: amdgpu)");
     } else {
         m_gpu_vendor = GpuVendor::Intel;
-        log::info("DrmBackend: Detected Intel Iris/UHD GPU (Vendor ID: 0x8086, Driver: i915)");
+        log::info("DrmBackend: Fallback detected Intel Iris/UHD GPU (Driver: i915)");
     }
 
     // Discover connected DRM connectors and modes

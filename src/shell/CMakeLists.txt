@@ -5,6 +5,8 @@ add_executable(tinexus-shell
     ui/LogoMenuWidget.cpp
     ui/CalendarFlyoutWidget.cpp
     ui/NotificationFlyoutWidget.cpp
+    ui/VolumeFlyoutWidget.cpp
+    ui/BrightnessFlyoutWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
 )
 
@@ -32,6 +34,8 @@ add_executable(test-shell-render
     ui/LogoMenuWidget.cpp
     ui/CalendarFlyoutWidget.cpp
     ui/NotificationFlyoutWidget.cpp
+    ui/VolumeFlyoutWidget.cpp
+    ui/BrightnessFlyoutWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
 )
 
@@ -60,6 +64,8 @@ add_executable(test-full-desktop
     ui/LogoMenuWidget.cpp
     ui/CalendarFlyoutWidget.cpp
     ui/NotificationFlyoutWidget.cpp
+    ui/VolumeFlyoutWidget.cpp
+    ui/BrightnessFlyoutWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
     ${CMAKE_SOURCE_DIR}/src/about/AboutWidget.cpp
 )

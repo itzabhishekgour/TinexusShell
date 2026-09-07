@@ -35,11 +35,22 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
     // Number keys 1–9 (evdev codes 2–10)
     constexpr uint32_t KEY_1          = 2;
     constexpr uint32_t KEY_9          = 10;
+    // Multimedia keys (evdev codes)
+    constexpr uint32_t KEY_MUTE            = 113;
+    constexpr uint32_t KEY_VOLUMEDOWN       = 114;
+    constexpr uint32_t KEY_VOLUMEUP         = 115;
+    constexpr uint32_t KEY_BRIGHTNESSDOWN   = 232;
+    constexpr uint32_t KEY_BRIGHTNESSUP     = 233;
 
     // Keysyms (XKB)
     constexpr uint32_t SYM_k          = 0x006b;
     constexpr uint32_t SYM_K          = 0x004b;
     constexpr uint32_t SYM_space      = 0x0020;
+    constexpr uint32_t SYM_AudioLowerVolume = 0x1008ff11;
+    constexpr uint32_t SYM_AudioMute        = 0x1008ff12;
+    constexpr uint32_t SYM_AudioRaiseVolume = 0x1008ff13;
+    constexpr uint32_t SYM_MonBrightnessDown= 0x1008ff03;
+    constexpr uint32_t SYM_MonBrightnessUp  = 0x1008ff02;
 
     bool has_ctrl  = (modifiers & MOD_CTRL) != 0;
     bool has_alt   = (modifiers & MOD_ALT)  != 0;
@@ -47,6 +58,33 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
     bool is_super_key = (keycode == KEY_LEFTMETA || keycode == KEY_RIGHTMETA);
 
     if (!m_callback) return false;
+
+    // ── Multimedia: Volume & Brightness Keys ─────────────────────────────────
+    if (keycode == KEY_VOLUMEUP || keysym == SYM_AudioRaiseVolume) {
+        log::info("ShortcutEngine: volume_up (keycode={}, keysym=0x{:x})", keycode, keysym);
+        m_callback("volume_up");
+        return true;
+    }
+    if (keycode == KEY_VOLUMEDOWN || keysym == SYM_AudioLowerVolume) {
+        log::info("ShortcutEngine: volume_down (keycode={}, keysym=0x{:x})", keycode, keysym);
+        m_callback("volume_down");
+        return true;
+    }
+    if (keycode == KEY_MUTE || keysym == SYM_AudioMute) {
+        log::info("ShortcutEngine: volume_mute (keycode={}, keysym=0x{:x})", keycode, keysym);
+        m_callback("volume_mute");
+        return true;
+    }
+    if (keycode == KEY_BRIGHTNESSUP || keysym == SYM_MonBrightnessUp) {
+        log::info("ShortcutEngine: brightness_up (keycode={}, keysym=0x{:x})", keycode, keysym);
+        m_callback("brightness_up");
+        return true;
+    }
+    if (keycode == KEY_BRIGHTNESSDOWN || keysym == SYM_MonBrightnessDown) {
+        log::info("ShortcutEngine: brightness_down (keycode={}, keysym=0x{:x})", keycode, keysym);
+        m_callback("brightness_down");
+        return true;
+    }
 
     // ── Launcher: Ctrl+K, Ctrl+Space, Alt+Space, bare Super key ──────────────
     bool is_k = (keycode == KEY_K || keysym == SYM_k || keysym == SYM_K);

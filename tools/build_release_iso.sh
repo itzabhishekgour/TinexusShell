@@ -2,6 +2,22 @@
 # ==============================================================================
 # Tinexus Platform — Real Hybrid Bootable ISO Builder (Production Grade)
 #
+# CRITICAL HARDWARE DRIVERS & FIRMWARE PRESERVATION LIST:
+# DO NOT REMOVE the following modules or firmware without explicit architectural review:
+# 1. Laptop Input / Touchpad (ASUS TUF / Intel LPSS / AMD I2C / Synaptics / ELAN):
+#    - pinctrl-cannonlake, pinctrl-amd, intel-lpss, intel-lpss-pci
+#    - i2c-designware-core, i2c-designware-pci, i2c-hid, i2c-hid-acpi
+#    - hid-multitouch, psmouse, hid, hid-generic, usbhid, evdev
+# 2. Wi-Fi / Networking:
+#    - mt7921e, mt7921-common, iwlwifi, iwlmvm, rtw88_8821ce, rtw89_8852be
+#    - All matching firmware under /lib/firmware (mediatek, intel, rtw88, rtw89)
+# 3. Audio:
+#    - snd-hda-intel, snd-hda-codec-realtek, snd-soc-sof, virtio_snd
+#    - /etc/asound.conf targeting analog card (defaults.pcm.card, defaults.ctl.card)
+# 4. Display / Graphics:
+#    - i915, amdgpu, nouveau, bochs, virtio-gpu
+#    - Intel DMC/GuC/HuC firmware under /lib/firmware/i915
+#
 # REQUIREMENTS before running:
 #   1. build/kernel/vmlinuz      — Tinexus kernel image
 #   2. build/kernel/initramfs.img — Tinexus initramfs (optional; built here if absent)
@@ -16,9 +32,9 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 KERNEL_DIR="$BUILD_DIR/kernel"
 OUTPUT_ISO="$BUILD_DIR/Tinexus-x86_64.iso"
-ROOTFS_DIR="/tmp/tinexus_rootfs"
-ISO_TREE="/tmp/tinexus_iso_tree"
-WORK_DIR="/tmp/tinexus_iso_work"
+ROOTFS_DIR="/var/tmp/tinexus_rootfs"
+ISO_TREE="/var/tmp/tinexus_iso_tree"
+WORK_DIR="/var/tmp/tinexus_iso_work"
 
 SMOKE_TEST=0
 if [[ "${1:-}" == "--smoke-test" ]]; then
@@ -618,36 +634,14 @@ EOF_DHCP
         success "Staged busybox networking tools (udhcpc, ip, ifconfig, route, ping, wget)."
     fi
 
-    # ── Stage Intel iGPU Firmware (Comet Lake / Kaby Lake / Skylake) ─────────
-    info "Staging Intel iGPU firmware for Comet Lake-H (ASUS TUF F15)..."
-    mkdir -p "$ROOTFS_DIR/lib/firmware/i915"
-    if [ -d "/lib/firmware/i915" ]; then
-        for fw in /lib/firmware/i915/cml* /lib/firmware/i915/kbl* /lib/firmware/i915/skl*; do
-            [ -e "$fw" ] || continue
-            cp -L "$fw" "$ROOTFS_DIR/lib/firmware/i915/" 2>/dev/null || true
-        done
-        for compressed in "$ROOTFS_DIR/lib/firmware/i915"/*.zst; do
-            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
-        done
-        success "Staged $(ls "$ROOTFS_DIR/lib/firmware/i915" | wc -l) Intel i915 firmware files into rootfs."
+    # ── Stage Complete Distro Firmware Tree (/lib/firmware) into RootFS ───────
+    info "Staging complete firmware tree (/lib/firmware) into rootfs for universal hardware support..."
+    mkdir -p "$ROOTFS_DIR/lib/firmware"
+    if [ -d "/lib/firmware" ]; then
+        cp -a /lib/firmware/* "$ROOTFS_DIR/lib/firmware/" 2>/dev/null || true
+        success "Staged complete firmware tree into rootfs ($(du -sh "$ROOTFS_DIR/lib/firmware" | cut -f1))."
     else
-        warn "/lib/firmware/i915 not found on host. Intel iGPU may fail to initialize without firmware."
-    fi
-
-    # ── Stage MediaTek Wi-Fi 6 MT7921 / MT7922 / MT7961 Firmware ────────────
-    info "Staging MediaTek Wi-Fi 6 firmware (MT7921 / MT7922 / MT7961)..."
-    mkdir -p "$ROOTFS_DIR/lib/firmware/mediatek"
-    if [ -d "/lib/firmware/mediatek" ]; then
-        for fw in /lib/firmware/mediatek/*MT7922* /lib/firmware/mediatek/*MT7961*; do
-            [ -e "$fw" ] || continue
-            cp -L "$fw" "$ROOTFS_DIR/lib/firmware/mediatek/" 2>/dev/null || true
-        done
-        for compressed in "$ROOTFS_DIR/lib/firmware/mediatek"/*.zst; do
-            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
-        done
-        success "Staged $(ls "$ROOTFS_DIR/lib/firmware/mediatek" | wc -l) MediaTek firmware files into rootfs."
-    else
-        warn "/lib/firmware/mediatek not found on host."
+        warn "/lib/firmware not found on host."
     fi
 
     # ── Stage Wireless Utilities (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill) ──
@@ -747,41 +741,79 @@ esac
 EOF_WIFI
     chmod 0755 "$ROOTFS_DIR/usr/bin/tinexus-wifi"
 
-    info "Staging real hardware kernel modules (i915, NVMe, USB, Ethernet, Touchpad, Wi-Fi, QEMU) into rootfs..."
-    mkdir -p "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" "$ROOTFS_DIR/lib/modules"
-    if [ -d "/lib/modules/7.0.0-28-generic" ]; then
-        find "/lib/modules/7.0.0-28-generic" -type f \( \
-            -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
-            -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
-            -o -name "uas.ko*" -o -name "usb-storage.ko*" \
-            -o -name "overlay.ko*" \
-            -o -name "i915.ko*" -o -name "drm_display_helper.ko*" -o -name "ttm.ko*" -o -name "video.ko*" \
-            -o -name "drm_buddy.ko*" -o -name "cec.ko*" -o -name "rc-core.ko*" -o -name "i2c-algo-bit.ko*" -o -name "wmi.ko*" -o -name "intel-gtt.ko*" \
-            -o -name "intel-lpss.ko*" -o -name "intel-lpss-pci.ko*" \
-            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" -o -name "i2c-ccgx-ucsi.ko*" \
-            -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" -o -name "hid-multitouch.ko*" \
-            -o -name "pinctrl-cannonlake.ko*" \
-            -o -name "mt7921e.ko*" -o -name "mt7921-common.ko*" -o -name "mt792x-lib.ko*" -o -name "mt76-connac-lib.ko*" -o -name "mt76.ko*" \
-            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "libarc4.ko*" -o -name "rfkill.ko*" \
-            -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
-            -o -name "virtio_input.ko*" \
-            -o -name "virtio_net.ko*" -o -name "net_failover.ko*" -o -name "failover.ko*" \
-            -o -name "e1000.ko*" -o -name "e1000e.ko*" -o -name "r8169.ko*" -o -name "igb.ko*" -o -name "tg3.ko*" \
-            -o -name "evdev.ko*" \
-            -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
-        \) | while read -r mod; do
-            cp -L "$mod" "$ROOTFS_DIR/lib/modules/7.0.0-28-generic/"
-            cp -L "$mod" "$ROOTFS_DIR/lib/modules/"
-        done
-        for compressed in "$ROOTFS_DIR/lib/modules/7.0.0-28-generic"/*.zst "$ROOTFS_DIR/lib/modules"/*.zst; do
-            [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
-        done
-        # Copy modules.order and modules.builtin so depmod can resolve symbols accurately
-        cp /lib/modules/7.0.0-28-generic/modules.order "$ROOTFS_DIR/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
-        cp /lib/modules/7.0.0-28-generic/modules.builtin* "$ROOTFS_DIR/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
-        if [ -f "/usr/sbin/depmod" ]; then
-            /usr/sbin/depmod -b "$ROOTFS_DIR" 7.0.0-28-generic 2>/dev/null || true
+    # ── Stage Audio Utilities (amixer, alsamixer, alsactl, aplay, speaker-test) ──
+    info "Staging ALSA audio utilities (amixer, alsamixer, alsactl, aplay, speaker-test)..."
+    for tool in amixer alsamixer alsactl aplay speaker-test; do
+        tool_path="$(command -v "$tool" || true)"
+        if [ -n "$tool_path" ] && [ -f "$tool_path" ]; then
+            cp -L "$tool_path" "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
+            cp -L "$tool_path" "$ROOTFS_DIR/usr/sbin/" 2>/dev/null || true
+            ldd "$tool_path" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+            ldd "$tool_path" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+            done
         fi
+    done
+
+    # Stage ALSA configuration & card profiles (/usr/share/alsa)
+    if [ -d "/usr/share/alsa" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/share/alsa"
+        cp -a /usr/share/alsa/* "$ROOTFS_DIR/usr/share/alsa/" 2>/dev/null || true
+    fi
+    mkdir -p "$ROOTFS_DIR/var/lib/alsa"
+
+    # Stage volume chime sound
+    mkdir -p "$ROOTFS_DIR/usr/share/sounds/tinexus"
+    if [ -f "$PROJECT_DIR/assets/sounds/volume-chime.wav" ]; then
+        cp -L "$PROJECT_DIR/assets/sounds/volume-chime.wav" "$ROOTFS_DIR/usr/share/sounds/tinexus/volume-chime.wav"
+    fi
+
+    # ── Stage Display Backlight Utilities (brightnessctl) ───────────────────
+    info "Staging brightnessctl..."
+    local bctl_path="$(command -v brightnessctl || true)"
+    if [ -n "$bctl_path" ] && [ -f "$bctl_path" ]; then
+        cp -L "$bctl_path" "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
+        chmod 4755 "$ROOTFS_DIR/usr/bin/brightnessctl" 2>/dev/null || true
+        ldd "$bctl_path" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+        done
+        ldd "$bctl_path" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+        done
+    fi
+
+    # ── Secure Udev Rules for Backlight and Sound Devices ────────────────────
+    mkdir -p "$ROOTFS_DIR/etc/udev/rules.d" "$ROOTFS_DIR/lib/udev/rules.d"
+    cat > "$ROOTFS_DIR/etc/udev/rules.d/90-backlight.rules" << 'EOF_BACKLIGHT_RULES'
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"
+EOF_BACKLIGHT_RULES
+    cp -L "$ROOTFS_DIR/etc/udev/rules.d/90-backlight.rules" "$ROOTFS_DIR/lib/udev/rules.d/" 2>/dev/null || true
+
+    cat > "$ROOTFS_DIR/etc/udev/rules.d/90-alsa.rules" << 'EOF_ALSA_RULES'
+SUBSYSTEM=="sound", GROUP="audio", MODE="0660"
+KERNEL=="controlC[0-9]*", GROUP="audio", MODE="0660"
+KERNEL=="pcmC[0-9]*D[0-9]*[cp]", GROUP="audio", MODE="0660"
+EOF_ALSA_RULES
+    cp -L "$ROOTFS_DIR/etc/udev/rules.d/90-alsa.rules" "$ROOTFS_DIR/lib/udev/rules.d/" 2>/dev/null || true
+
+    # ── Stage Complete Kernel Modules Tree into RootFS (SquashFS) ────────────
+    info "Staging complete kernel module tree (/lib/modules/7.0.0-28-generic) into rootfs..."
+    mkdir -p "$ROOTFS_DIR/lib/modules"
+    if [ -d "/lib/modules/7.0.0-28-generic" ]; then
+        cp -a "/lib/modules/7.0.0-28-generic" "$ROOTFS_DIR/lib/modules/"
+        # Decompress any .zst module files so all modprobe and depmod operations work flawlessly
+        find "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
+        
+        # Run depmod to rebuild modules.dep, modules.alias, modules.symbols accurately for the rootfs
+        if [ -f "/usr/sbin/depmod" ]; then
+            info "Running depmod -a to generate modules.dep and modules.alias for rootfs..."
+            /usr/sbin/depmod -a -b "$ROOTFS_DIR" 7.0.0-28-generic 2>/dev/null || true
+        fi
+        success "Staged complete kernel modules tree ($(du -sh "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" | cut -f1))."
+    else
+        warn "/lib/modules/7.0.0-28-generic not found on host!"
     fi
 
     if [ -f "$ROOTFS_DIR/usr/bin/tinexus-serviced" ]; then
@@ -894,19 +926,6 @@ build_initramfs() {
         success "Staged $(ls "$init_staging/lib/firmware/i915" | wc -l) Intel i915 firmware files into initramfs."
     fi
 
-    # Stage MediaTek Wi-Fi 6 firmware into initramfs (MT7921 / MT7922 / MT7961)
-    mkdir -p "$init_staging/lib/firmware/mediatek"
-    if [ -d "/lib/firmware/mediatek" ]; then
-        for fw in /lib/firmware/mediatek/*MT7922* /lib/firmware/mediatek/*MT7961*; do
-            [ -e "$fw" ] || continue
-            cp -L "$fw" "$init_staging/lib/firmware/mediatek/" 2>/dev/null || true
-        done
-        for compressed in "$init_staging/lib/firmware/mediatek"/*.zst; do
-            [ -f "$compressed" ] && zstd -d --keep "$compressed" 2>/dev/null || true
-        done
-        success "Staged $(ls "$init_staging/lib/firmware/mediatek" | wc -l) MediaTek firmware files into initramfs."
-    fi
-
     mkdir -p "$init_staging/lib/modules/7.0.0-28-generic" "$init_staging/lib/modules"
     local kver="7.0.0-28-generic"
     if [ -d "/lib/modules/$kver" ]; then
@@ -914,19 +933,21 @@ build_initramfs() {
             -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
             -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
             -o -name "uas.ko*" -o -name "usb-storage.ko*" \
+            -o -name "xhci-pci.ko*" -o -name "xhci-hcd.ko*" -o -name "ehci-pci.ko*" -o -name "ehci-hcd.ko*" \
+            -o -name "virtio.ko*" -o -name "virtio_ring.ko*" -o -name "virtio_pci.ko*" -o -name "virtio_pci_modern_dev.ko*" \
+            -o -name "virtio_blk.ko*" -o -name "virtio_scsi.ko*" \
             -o -name "overlay.ko*" \
             -o -name "i915.ko*" -o -name "drm_display_helper.ko*" -o -name "ttm.ko*" -o -name "video.ko*" \
             -o -name "drm_buddy.ko*" -o -name "cec.ko*" -o -name "rc-core.ko*" -o -name "i2c-algo-bit.ko*" -o -name "wmi.ko*" -o -name "intel-gtt.ko*" \
-            -o -name "intel-lpss.ko*" -o -name "intel-lpss-pci.ko*" \
-            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" -o -name "i2c-ccgx-ucsi.ko*" \
-            -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" -o -name "hid-multitouch.ko*" \
-            -o -name "pinctrl-cannonlake.ko*" \
-            -o -name "mt7921e.ko*" -o -name "mt7921-common.ko*" -o -name "mt792x-lib.ko*" -o -name "mt76-connac-lib.ko*" -o -name "mt76.ko*" \
-            -o -name "mac80211.ko*" -o -name "cfg80211.ko*" -o -name "libarc4.ko*" -o -name "rfkill.ko*" \
             -o -name "virtio-gpu.ko*" -o -name "virtio_dma_buf.ko*" -o -name "bochs.ko*" \
             -o -name "virtio_input.ko*" \
             -o -name "evdev.ko*" \
             -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
+            -o -name "pinctrl-cannonlake.ko*" -o -name "pinctrl-amd.ko*" \
+            -o -name "intel-lpss.ko*" -o -name "intel-lpss-pci.ko*" \
+            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" \
+            -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" \
+            -o -name "hid-multitouch.ko*" -o -name "psmouse.ko*" \
         \) | while read -r mod; do
             cp -L "$mod" "$init_staging/lib/modules/7.0.0-28-generic/"
             cp -L "$mod" "$init_staging/lib/modules/"
@@ -997,32 +1018,20 @@ load_mod() {
 }
 
 # 1. Storage & bus controllers (with sub-dependencies)
-for m in libahci ahci isofs hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas overlay; do
+# 1. Storage & bus controllers (Universal: NVMe, SATA AHCI, USB 3.x/2.0, VirtIO Disk/SCSI)
+for m in virtio virtio_ring virtio_pci virtio_pci_modern_dev virtio_blk virtio_scsi xhci-hcd xhci-pci ehci-hcd ehci-pci libahci ahci isofs hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas overlay; do
     load_mod "$m" || true
 done
 
-# 2. Input devices & Touchpad (ASUS ELAN1203 on Intel Serial IO I2C Host 06E8)
-for m in hid hid-generic usbhid evdev intel-lpss intel-lpss-pci pinctrl-cannonlake i2c-ccgx-ucsi i2c-designware-pci i2c-hid i2c-hid-acpi hid-multitouch; do
+# 2. Console input devices (Touchpad, keyboard, mouse, multitouch)
+for m in pinctrl-cannonlake pinctrl-amd intel-lpss intel-lpss-pci i2c-designware-core i2c-designware-pci i2c-hid i2c-hid-acpi hid-multitouch psmouse hid hid-generic usbhid evdev virtio_input; do
     load_mod "$m" || true
 done
 
-# 3. Graphics display: strict topological dependency order for Intel i915
-# rc-core -> cec -> drm_display_helper
-# wmi -> video
-# ttm, drm_buddy, i2c-algo-bit -> i915
-for m in rc-core cec drm_display_helper wmi video ttm drm_buddy i2c-algo-bit i915; do
-    load_mod "$m" || true
-done
-
-# 4. Wireless network (MediaTek Wi-Fi 6 MT7921)
-# libarc4 -> rfkill -> cfg80211 -> mac80211 -> mt76 -> mt76-connac-lib -> mt792x-lib -> mt7921-common -> mt7921e
-for m in libarc4 rfkill cfg80211 mac80211 mt76 mt76-connac-lib mt792x-lib mt7921-common mt7921e; do
-    load_mod "$m" || true
-done
-[ -x /bin/rfkill ] && rfkill unblock all 2>/dev/null || true
-
-# 5. Virtualization / fallback graphics drivers
-for m in virtio_dma_buf virtio-gpu virtio_input bochs; do
+# 3. Graphics display drivers (Early display / splash fallback)
+# Note: Full vendor GPU drivers (amdgpu, i915, nouveau, xe), Touchpad, Wi-Fi, and Sound
+# are dynamically loaded in RootFS by serviced via udev coldplug discovery.
+for m in rc-core cec drm_display_helper wmi video ttm drm_buddy i2c-algo-bit i915 virtio_dma_buf virtio-gpu bochs; do
     load_mod "$m" || true
 done
 
@@ -1346,9 +1355,11 @@ build_grub_bios() {
 build_esp() {
     info "Building EFI System Partition (esp.img)..."
     export ESP_IMG="$WORK_DIR/esp.img"
+    mkdir -p "$WORK_DIR"
     dd if=/dev/zero of="$ESP_IMG" bs=1K count=4096 status=none
-    mkfs.vfat "$ESP_IMG" -n "TINEXUS_EFI" >/dev/null
-    mmd -i "$ESP_IMG" ::/EFI ::/EFI/BOOT
+    mkfs.vfat -n "TINEXUS_EFI" "$ESP_IMG" >/dev/null
+    mmd -i "$ESP_IMG" ::/EFI
+    mmd -i "$ESP_IMG" ::/EFI/BOOT
     mcopy -i "$ESP_IMG" "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
     success "EFI System Partition created."
 }
@@ -1375,7 +1386,7 @@ assemble_iso() {
         -e '--interval:appended_partition_2:all::' \
         -no-emul-boot \
         -o "$OUTPUT_ISO" \
-        "$ISO_TREE" >/dev/null 2>&1
+        "$ISO_TREE"
 
     success "ISO Assembled: $OUTPUT_ISO"
 }

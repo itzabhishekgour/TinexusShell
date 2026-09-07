@@ -1,5 +1,7 @@
 #include "DesktopShellWidget.hpp"
 #include <common/TinexusLogo.hpp>
+#include <common/AudioUtils.hpp>
+#include <common/BacklightUtils.hpp>
 #include <txui/render/FontMetrics.hpp>
 #include <unistd.h>
 #include <sys/reboot.h>
@@ -115,18 +117,55 @@ pid_t spawn_app(const AppItem& item) {
 }
 
 double read_battery_percent() {
-    const char* paths[] = {
-        "/sys/class/power_supply/BAT0/capacity",
-        "/sys/class/power_supply/BAT1/capacity",
-        "/sys/class/power_supply/battery/capacity",
-    };
-    for (const char* p : paths) {
-        FILE* f = fopen(p, "r");
-        if (!f) continue;
-        int cap = -1;
-        if (fscanf(f, "%d", &cap) != 1) cap = -1;
-        fclose(f);
-        if (cap >= 0 && cap <= 100) return static_cast<double>(cap);
+    if (!fs::exists("/sys/class/power_supply")) {
+        return -1.0;
+    }
+
+    double total_cap = 0.0;
+    int battery_count = 0;
+
+    try {
+        for (const auto& entry : fs::directory_iterator("/sys/class/power_supply")) {
+            if (!entry.is_directory()) continue;
+
+            // Check supply type: must be "Battery"
+            std::string type;
+            fs::path type_file = entry.path() / "type";
+            if (fs::exists(type_file)) {
+                std::ifstream tf(type_file);
+                tf >> type;
+            }
+
+            // Also check name for BAT* prefix as a reliable fallback
+            std::string name = entry.path().filename().string();
+            bool is_battery = (type == "Battery" || name.rfind("BAT", 0) == 0 || name.find("battery") != std::string::npos);
+            if (!is_battery) continue;
+
+            // Check if battery is present
+            fs::path present_file = entry.path() / "present";
+            if (fs::exists(present_file)) {
+                std::ifstream pf(present_file);
+                int present = 1;
+                if (pf >> present && present == 0) continue;
+            }
+
+            // Read capacity
+            fs::path cap_file = entry.path() / "capacity";
+            if (fs::exists(cap_file)) {
+                std::ifstream cf(cap_file);
+                int cap = -1;
+                if (cf >> cap && cap >= 0 && cap <= 100) {
+                    total_cap += cap;
+                    battery_count++;
+                }
+            }
+        }
+    } catch (...) {
+        return -1.0;
+    }
+
+    if (battery_count > 0) {
+        return total_cap / battery_count;
     }
     return -1.0;
 }
@@ -204,6 +243,8 @@ DesktopShellWidget::DesktopShellWidget() {
     m_logo_menu = txui::make_ref<LogoMenuWidget>();
     m_calendar_flyout = txui::make_ref<CalendarFlyoutWidget>();
     m_notification_flyout = txui::make_ref<NotificationFlyoutWidget>();
+    m_volume_flyout = txui::make_ref<VolumeFlyoutWidget>();
+    m_brightness_flyout = txui::make_ref<BrightnessFlyoutWidget>();
 
     // Notch triggers
     m_notch->on_center_clicked = [this]() {
@@ -278,11 +319,14 @@ void DesktopShellWidget::sync_notifications() {
 }
 
 void DesktopShellWidget::close_all_flyouts() {
-    bool changed = (logo_menu_open || app_menu_open || calendar_open || notifications_open || pulse_active);
+    bool changed = (logo_menu_open || app_menu_open || calendar_open || notifications_open ||
+                    volume_flyout_open || brightness_flyout_open || pulse_active);
     logo_menu_open = false;
     app_menu_open = false;
     calendar_open = false;
     notifications_open = false;
+    volume_flyout_open = false;
+    brightness_flyout_open = false;
     pulse_active = false;
 
     if (m_notch) m_notch->set_calendar_open(false);
@@ -313,6 +357,12 @@ void DesktopShellWidget::layout_override(const txui::Rect& f) noexcept {
     if (m_notification_flyout) {
         double nh = m_notification_flyout->calculate_height();
         m_notification_flyout->layout(txui::Rect(f.x() + W - 406.0, f.y() + 44.0, 390.0, nh));
+    }
+    if (m_volume_flyout) {
+        m_volume_flyout->layout(txui::Rect(f.x() + W - 250.0, f.y() + 42.0, 240.0, 140.0));
+    }
+    if (m_brightness_flyout) {
+        m_brightness_flyout->layout(txui::Rect(f.x() + W - 280.0, f.y() + 42.0, 240.0, 135.0));
     }
 }
 
@@ -372,33 +422,46 @@ void DesktopShellWidget::paint_override(txui::Painter& painter) const noexcept {
     }
 
     // Right: Status Tray Icons
-    // Sun / Theme Toggle
+    // Sun / Brightness Toggle
+    int cur_brightness = hardware::BacklightUtils::get_brightness_percent();
     double sun_x = f.x() + W - 225.0;
-    if (hover_sun) painter.fill_rounded_rect(txui::Rect(sun_x - 4.0, f.y() + 3.0, 26.0, 26.0), 5.0, txui::Color(255, 255, 255, 20));
+    if (hover_sun || brightness_flyout_open) painter.fill_rounded_rect(txui::Rect(sun_x - 4.0, f.y() + 3.0, 26.0, 26.0), 5.0, txui::Color(255, 255, 255, 20));
     painter.draw_circle(txui::Point(sun_x + 9.0, f.y() + 16.0), 4.5, 1.5, TXT_PRI);
+    int ray_alpha = std::clamp(static_cast<int>(100 + (cur_brightness * 155) / 100), 100, 255);
+    txui::Color ray_col(245, 158, 11, static_cast<uint8_t>(ray_alpha));
     for (int a = 0; a < 8; ++a) {
         double ang = static_cast<double>(a) * (3.14159265 / 4.0);
         double px1 = (sun_x + 9.0) + std::cos(ang) * 6.5;
         double py1 = (f.y() + 16.0) + std::sin(ang) * 6.5;
         double px2 = (sun_x + 9.0) + std::cos(ang) * 8.5;
         double py2 = (f.y() + 16.0) + std::sin(ang) * 8.5;
-        painter.draw_line(txui::Point(px1, py1), txui::Point(px2, py2), 1.2, TXT_SEC);
+        painter.draw_line(txui::Point(px1, py1), txui::Point(px2, py2), 1.2, ray_col);
     }
 
     // Volume
+    int cur_volume = hardware::AudioUtils::get_volume_percent();
+    bool is_vol_muted = hardware::AudioUtils::is_muted() || (cur_volume == 0);
     double vol_x = f.x() + W - 190.0;
-    if (hover_vol) painter.fill_rounded_rect(txui::Rect(vol_x - 4.0, f.y() + 3.0, 28.0, 26.0), 5.0, txui::Color(255, 255, 255, 20));
+    if (hover_vol || volume_flyout_open) painter.fill_rounded_rect(txui::Rect(vol_x - 4.0, f.y() + 3.0, 28.0, 26.0), 5.0, txui::Color(255, 255, 255, 20));
     painter.fill_rect(txui::Rect(vol_x + 2.0, f.y() + 13.0, 4.0, 6.0), TXT_PRI);
     painter.draw_line(txui::Point(vol_x + 6.0, f.y() + 13.0), txui::Point(vol_x + 11.0, f.y() + 10.0), 1.5, TXT_PRI);
     painter.draw_line(txui::Point(vol_x + 11.0, f.y() + 10.0), txui::Point(vol_x + 11.0, f.y() + 22.0), 1.5, TXT_PRI);
     painter.draw_line(txui::Point(vol_x + 11.0, f.y() + 22.0), txui::Point(vol_x + 6.0, f.y() + 19.0), 1.5, TXT_PRI);
-    if (sound_muted) {
+    if (is_vol_muted) {
         painter.draw_line(txui::Point(vol_x + 14.0, f.y() + 12.0), txui::Point(vol_x + 20.0, f.y() + 20.0), 1.5, txui::Color(239, 68, 68, 240));
     } else {
-        painter.draw_line(txui::Point(vol_x + 15.0, f.y() + 13.0), txui::Point(vol_x + 16.5, f.y() + 16.0), 1.2, ACCENT_CYAN);
-        painter.draw_line(txui::Point(vol_x + 16.5, f.y() + 16.0), txui::Point(vol_x + 15.0, f.y() + 19.0), 1.2, ACCENT_CYAN);
-        painter.draw_line(txui::Point(vol_x + 19.0, f.y() + 11.0), txui::Point(vol_x + 21.0, f.y() + 16.0), 1.2, ACCENT_BLUE);
-        painter.draw_line(txui::Point(vol_x + 21.0, f.y() + 16.0), txui::Point(vol_x + 19.0, f.y() + 21.0), 1.2, ACCENT_BLUE);
+        if (cur_volume > 0) {
+            painter.draw_line(txui::Point(vol_x + 14.0, f.y() + 14.0), txui::Point(vol_x + 15.5, f.y() + 16.0), 1.2, ACCENT_CYAN);
+            painter.draw_line(txui::Point(vol_x + 15.5, f.y() + 16.0), txui::Point(vol_x + 14.0, f.y() + 18.0), 1.2, ACCENT_CYAN);
+        }
+        if (cur_volume > 33) {
+            painter.draw_line(txui::Point(vol_x + 17.0, f.y() + 12.0), txui::Point(vol_x + 19.0, f.y() + 16.0), 1.2, ACCENT_CYAN);
+            painter.draw_line(txui::Point(vol_x + 19.0, f.y() + 16.0), txui::Point(vol_x + 17.0, f.y() + 20.0), 1.2, ACCENT_CYAN);
+        }
+        if (cur_volume > 66) {
+            painter.draw_line(txui::Point(vol_x + 20.5, f.y() + 10.0), txui::Point(vol_x + 22.5, f.y() + 16.0), 1.2, ACCENT_BLUE);
+            painter.draw_line(txui::Point(vol_x + 22.5, f.y() + 16.0), txui::Point(vol_x + 20.5, f.y() + 22.0), 1.2, ACCENT_BLUE);
+        }
     }
 
     // Battery
@@ -479,6 +542,12 @@ void DesktopShellWidget::paint_override(txui::Painter& painter) const noexcept {
     if (notifications_open && m_notification_flyout) {
         m_notification_flyout->paint(painter);
     }
+    if (volume_flyout_open && m_volume_flyout) {
+        m_volume_flyout->paint(painter);
+    }
+    if (brightness_flyout_open && m_brightness_flyout) {
+        m_brightness_flyout->paint(painter);
+    }
 }
 
 bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
@@ -493,6 +562,12 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
         return true;
     }
     if (notifications_open && m_notification_flyout && m_notification_flyout->handle_event(event)) {
+        return true;
+    }
+    if (volume_flyout_open && m_volume_flyout && m_volume_flyout->handle_event(event)) {
+        return true;
+    }
+    if (brightness_flyout_open && m_brightness_flyout && m_brightness_flyout->handle_event(event)) {
         return true;
     }
 
@@ -540,6 +615,23 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
         return true;
     }
 
+    if (event.type == txui::EventType::PointerScroll) {
+        if (hover_vol) {
+            int step = (event.pointer.scroll_delta_y > 0) ? 5 : -5;
+            hardware::AudioUtils::step_volume(step, /*persist=*/true);
+            if (m_volume_flyout) m_volume_flyout->refresh_state();
+            mark_needs_paint();
+            return true;
+        }
+        if (hover_sun) {
+            int step = (event.pointer.scroll_delta_y > 0) ? 5 : -5;
+            hardware::BacklightUtils::step_brightness(step, /*persist=*/true);
+            if (m_brightness_flyout) m_brightness_flyout->refresh_state();
+            mark_needs_paint();
+            return true;
+        }
+    }
+
     if (event.type == txui::EventType::PointerButtonPress) {
         if (event.pointer.button == txui::MouseButton::Left) {
             double mx = event.pointer.x, my = event.pointer.y;
@@ -562,14 +654,24 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                     return true;
                 }
                 if (hover_sun) {
-                    dark_theme = !dark_theme;
-                    log::info("[Shell] Theme toggled");
+                    bool was_open = brightness_flyout_open;
+                    close_all_flyouts();
+                    brightness_flyout_open = !was_open;
+                    if (brightness_flyout_open && m_brightness_flyout) {
+                        m_brightness_flyout->refresh_state();
+                    }
+                    if (on_resize_requested) on_resize_requested(brightness_flyout_open ? 180.0 : 46.0);
                     mark_needs_paint();
                     return true;
                 }
                 if (hover_vol) {
-                    sound_muted = !sound_muted;
-                    log::info("[Shell] Sound mute state: {}", sound_muted);
+                    bool was_open = volume_flyout_open;
+                    close_all_flyouts();
+                    volume_flyout_open = !was_open;
+                    if (volume_flyout_open && m_volume_flyout) {
+                        m_volume_flyout->refresh_state();
+                    }
+                    if (on_resize_requested) on_resize_requested(volume_flyout_open ? 190.0 : 46.0);
                     mark_needs_paint();
                     return true;
                 }

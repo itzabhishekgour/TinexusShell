@@ -5,6 +5,10 @@ add_library(tinexus_common SHARED
     dbus_power.cpp
     NetUtils.cpp
     TinexusLogo.cpp
+    HardwareConfig.cpp
+    BacklightUtils.cpp
+    AudioUtils.cpp
+    DisplayUtils.cpp
 )
 
 target_include_directories(tinexus_common PUBLIC
@@ -25,4 +29,12 @@ set_target_properties(tinexus_common PROPERTIES
 install(TARGETS tinexus_common
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
+)
+
+add_executable(test-hardware-utils
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_hardware_utils.cpp
+)
+target_link_libraries(test-hardware-utils PRIVATE tinexus_common)
+set_target_properties(test-hardware-utils PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

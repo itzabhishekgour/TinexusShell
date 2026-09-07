@@ -19,6 +19,7 @@ namespace tinexus::settings_ui {
 
 enum class SettingsPage {
     Display,
+    Sound,
     Personalization,
     Network,
     System,
@@ -51,7 +52,7 @@ private:
     txui::Rect m_content_rect;
     static constexpr txui::float64 SIDEBAR_W     = 222.0;
     static constexpr txui::float64 ITEM_H        = 44.0;
-    static constexpr int           SIDEBAR_PAGES = 7;
+    static constexpr int           SIDEBAR_PAGES = 8;
 
     // ── Modern Child Widgets ──────────────────────────────────────────────
     // Sidebar
@@ -59,8 +60,14 @@ private:
 
     // Display Page
     txui::Ref<txui::SegmentedControl> m_display_scale_control;
+    txui::Ref<txui::Slider>           m_brightness_slider;
     txui::Ref<txui::ToggleSwitch>     m_night_light_toggle;
     txui::Ref<txui::ToggleSwitch>     m_vrr_toggle;
+
+    // Sound Page
+    txui::Ref<txui::Slider>           m_volume_slider;
+    txui::Ref<txui::ToggleSwitch>     m_sound_mute_toggle;
+    txui::Ref<txui::Button>           m_sound_test_btn;
 
     // Personalization Page
     txui::Ref<txui::ColorPicker>      m_accent_picker;
@@ -160,6 +167,7 @@ private:
 
     // ── Icon glyphs (drawn relative to 20×20 tile origin) ─────────────────
     void draw_icon_display        (txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
+    void draw_icon_sound          (txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
     void draw_icon_personalization(txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
     void draw_icon_network        (txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
     void draw_icon_system         (txui::Painter& p, txui::float64 tx, txui::float64 ty) const noexcept;
@@ -169,6 +177,7 @@ private:
 
     // ── Content pages ─────────────────────────────────────────────────────
     void paint_display_page            (txui::Painter& p, const txui::Rect& area) const noexcept;
+    void paint_sound_page              (txui::Painter& p, const txui::Rect& area) const noexcept;
     void paint_personalization_page    (txui::Painter& p, const txui::Rect& area) const noexcept;
     void paint_network_page            (txui::Painter& p, const txui::Rect& area) const noexcept;
     void paint_system_page             (txui::Painter& p, const txui::Rect& area) const noexcept;

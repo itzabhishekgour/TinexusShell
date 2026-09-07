@@ -42,6 +42,10 @@ int main() {
     widget->select_page(SettingsPage::Display);
     if (!render_page_to_png(widget, "settings_display_page.png")) return 1;
 
+    // 1b. Sound Page
+    widget->select_page(SettingsPage::Sound);
+    if (!render_page_to_png(widget, "settings_sound_page.png")) return 1;
+
     // 2. Personalization Page
     widget->select_page(SettingsPage::Personalization);
     if (!render_page_to_png(widget, "settings_personalization_page.png")) return 1;

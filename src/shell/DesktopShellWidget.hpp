@@ -11,6 +11,8 @@
 #include "shell/ui/LogoMenuWidget.hpp"
 #include "shell/ui/CalendarFlyoutWidget.hpp"
 #include "shell/ui/NotificationFlyoutWidget.hpp"
+#include "shell/ui/VolumeFlyoutWidget.hpp"
+#include "shell/ui/BrightnessFlyoutWidget.hpp"
 
 #include <vector>
 #include <string>
@@ -83,6 +85,10 @@ public:
     bool sound_muted{false};
     bool dark_theme{true};
 
+    // Flyouts State
+    bool volume_flyout_open{false};
+    bool brightness_flyout_open{false};
+
     DesktopShellWidget();
     ~DesktopShellWidget() override = default;
 
@@ -99,6 +105,8 @@ private:
     txui::Ref<LogoMenuWidget>           m_logo_menu;
     txui::Ref<CalendarFlyoutWidget>     m_calendar_flyout;
     txui::Ref<NotificationFlyoutWidget> m_notification_flyout;
+    txui::Ref<VolumeFlyoutWidget>       m_volume_flyout;
+    txui::Ref<BrightnessFlyoutWidget>   m_brightness_flyout;
 };
 
 } // namespace tinexus::shell

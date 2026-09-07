@@ -575,9 +575,9 @@ private:
                 }
             }
             int32_t target_width = output_box.width;
-            int32_t target_height = output_box.height - 48; // Exclude top panel
+            int32_t target_height = output_box.height - 32; // Snap flush to 32px top bar (Aura notch floats over window)
             log::info("[Window] Maximize window to {}x{}", target_width, target_height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 48);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 32);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, true);
             wlr_xdg_toplevel_set_size(wrapper->toplevel, target_width, target_height);
         } else {

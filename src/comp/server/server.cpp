@@ -7,6 +7,8 @@
 #include "comp/render/frame_scheduler.hpp"
 #include "comp/input/shortcut_engine.hpp"
 #include "common/logger.hpp"
+#include "common/AudioUtils.hpp"
+#include "common/BacklightUtils.hpp"
 #include <thread>
 #include <chrono>
 #include <cstdlib>
@@ -156,28 +158,24 @@ bool TinexusServer::initialize() {
                     log::warn("[Server] Launcher blocked — screen is locked.");
                     return;
                 }
-                log::info("[Server] Ctrl+K: Sending SHORTCUT_ACTIVATED to ipcd");
-                
-                // Use the persistent IPC socket if available
-                if (m_ipc_socket < 0) {
-                    setup_ipc_connection();
-                }
-                if (m_ipc_socket >= 0) {
-                    tinexus::ipcd::protocol::Header msg1{};
-                    msg1.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-                    msg1.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-                    msg1.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SHORTCUT_ACTIVATED);
-                    msg1.payload_len = 0;
-                    ssize_t sent = send(m_ipc_socket, &msg1, sizeof(msg1), MSG_NOSIGNAL);
-                    if (sent <= 0) {
-                        setup_ipc_connection();
-                        if (m_ipc_socket >= 0) {
-                            send(m_ipc_socket, &msg1, sizeof(msg1), MSG_NOSIGNAL);
-                        }
+                log::info("[Server] Ctrl+K: Spawning tinexus-launcher directly");
+                pid_t pid = fork();
+                if (pid < 0) { log::error("[Server] fork() failed for launcher"); return; }
+                if (pid == 0) {
+                    pid_t grandchild = fork();
+                    if (grandchild < 0) { _exit(1); }
+                    if (grandchild == 0) {
+                        setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
+                        setsid();
+                        execlp("tinexus-launcher", "tinexus-launcher", nullptr);
+                        execl("/usr/bin/tinexus-launcher", "tinexus-launcher", nullptr);
+                        _exit(127);
                     }
-                } else {
-                    log::warn("[Server] Ctrl+K: Persistent IPC socket not connected!");
+                    _exit(0);
                 }
+                // Wait for the intermediate child; the grandchild (launcher) is now orphaned
+                int status = 0;
+                waitpid(pid, &status, 0);
                 return;
             }
 
@@ -254,9 +252,36 @@ bool TinexusServer::initialize() {
                 return;
             }
 
+            // ── Multimedia Shortcuts ──────────────────────────────────────────
+            if (shortcut_name == "volume_up") {
+                int vol = tinexus::hardware::AudioUtils::step_volume(+5);
+                log::info("[Server] Volume stepped up to {}%", vol);
+                return;
+            }
+            if (shortcut_name == "volume_down") {
+                int vol = tinexus::hardware::AudioUtils::step_volume(-5);
+                log::info("[Server] Volume stepped down to {}%", vol);
+                return;
+            }
+            if (shortcut_name == "volume_mute") {
+                bool muted = tinexus::hardware::AudioUtils::toggle_mute();
+                log::info("[Server] Volume mute toggled: {}", muted);
+                return;
+            }
+            if (shortcut_name == "brightness_up") {
+                int bl = tinexus::hardware::BacklightUtils::step_brightness(+5);
+                log::info("[Server] Brightness stepped up to {}%", bl);
+                return;
+            }
+            if (shortcut_name == "brightness_down") {
+                int bl = tinexus::hardware::BacklightUtils::step_brightness(-5);
+                log::info("[Server] Brightness stepped down to {}%", bl);
+                return;
+            }
+
             log::warn("[Server] Unknown shortcut: {}", shortcut_name);
         });
-    log::info("[Server] ShortcutEngine registered: Ctrl+K, Super+1–9, Super+L, Super+Arrows, Alt+Tab");
+    log::info("[Server] ShortcutEngine registered: Ctrl+K, Super+1–9, Super+L, Super+Arrows, Alt+Tab, Volume/Brightness keys");
 
     setup_ipc_connection();
 
