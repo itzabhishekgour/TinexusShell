@@ -1576,3 +1576,14 @@ add_test(NAME unit_test_txui_gate1_resize COMMAND unit_test_txui_gate1_resize)
 add_executable(unit_test_txui_gate1_memory unit/test_txui_gate1_memory.cpp)
 target_link_libraries(unit_test_txui_gate1_memory PRIVATE txui tinexus_warnings)
 add_test(NAME unit_test_txui_gate1_memory COMMAND unit_test_txui_gate1_memory)
+
+add_executable(unit_test_store_render
+    unit/test_store_render.cpp
+    ${CMAKE_SOURCE_DIR}/src/app-installer/StoreWidget.cpp
+)
+target_include_directories(unit_test_store_render PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/app-installer
+)
+target_link_libraries(unit_test_store_render PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_store_render COMMAND unit_test_store_render)
+

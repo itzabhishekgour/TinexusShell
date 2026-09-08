@@ -260,6 +260,21 @@ void Icon::render(Painter& painter, IconType type, const Rect& bounds) noexcept 
             painter.draw_line(Point(x_start_d, cy + tri_h * 0.5), Point(x_end_d, cy), stroke_t, white);
             break;
         }
+        case IconType::Globe: {
+            // Elegant blue earth sphere with white latitude and longitude lines
+            const Color blue(37, 99, 235, 255);
+            const Color cyan(56, 189, 248, 255);
+            const Color white(255, 255, 255, 220);
+            painter.fill_circle(Point(cx, cy), s * 0.40, blue);
+            // Equator
+            painter.draw_line(Point(cx - s * 0.38, cy), Point(cx + s * 0.38, cy), std::max(1.0, s * 0.04), cyan);
+            // Latitude lines
+            painter.draw_line(Point(cx - s * 0.32, cy - s * 0.18), Point(cx + s * 0.32, cy - s * 0.18), std::max(1.0, s * 0.03), white);
+            painter.draw_line(Point(cx - s * 0.32, cy + s * 0.18), Point(cx + s * 0.32, cy + s * 0.18), std::max(1.0, s * 0.03), white);
+            // Central meridian
+            painter.draw_line(Point(cx, cy - s * 0.38), Point(cx, cy + s * 0.38), std::max(1.0, s * 0.04), cyan);
+            break;
+        }
         default: {
             // Fallback document
             painter.fill_rounded_rect(Rect(fx + s * 0.15, fy + s * 0.10, s * 0.70, s * 0.80), s * 0.08, Color(200, 205, 215, 255));

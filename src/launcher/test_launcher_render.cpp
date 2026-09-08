@@ -79,5 +79,11 @@ int main() {
         lw.set_selected_index(0);
     }, "launcher_calculator.png");
 
+    // 4. App Store Fallback Search (searching 'chrome' triggers store card with 'Get on Store' badge)
+    render_launcher_frame("Launcher Store Fallback", [](LauncherWidget& lw) {
+        lw.set_query("chrome");
+        lw.set_selected_index(0);
+    }, "launcher_store_search.png");
+
     return 0;
 }

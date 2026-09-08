@@ -18,7 +18,8 @@ enum class IconType {
     Settings,
     Gear,
     BarChart,
-    Package
+    Package,
+    Globe
 };
 
 class Icon : public Widget {

@@ -163,18 +163,19 @@ EOF
     
     success "Staged $staged Tinexus ELF binaries and dependencies."
 
-    # Generate .desktop file for Tinexus App Installer so it appears in the Launcher
+    # Generate .desktop file for Tinexus App Store so it appears in the Launcher
     mkdir -p "$ROOTFS_DIR/usr/share/applications"
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-app-installer.desktop" << 'EOF'
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-store.desktop" << 'EOF'
 [Desktop Entry]
-Name=Tinexus App Installer
-Comment=Install .txapp packages
-Exec=/usr/bin/tinexus-app-installer
+Name=App Store
+Comment=Discover and install Linux & Flathub applications
+Exec=/usr/bin/tinexus-store
 Icon=system-software-install
 Terminal=false
 Type=Application
-Categories=System;
+Categories=System;Utility;PackageManager;
 EOF
+    ln -sf tinexus-store.desktop "$ROOTFS_DIR/usr/share/applications/tinexus-app-installer.desktop" 2>/dev/null || true
 
     # Generate .desktop file for Tinexus Files (Miller Column Browser)
     cat > "$ROOTFS_DIR/usr/share/applications/tinexus-files.desktop" << 'EOF'
@@ -740,6 +741,54 @@ EOF_OPEN
 esac
 EOF_WIFI
     chmod 0755 "$ROOTFS_DIR/usr/bin/tinexus-wifi"
+
+    # ── Stage Network Downloader, SSL Trust Store & DNS Resolvers (curl, ca-certificates, NSS) ──
+    info "Staging curl, SSL CA certificates, and glibc NSS DNS resolvers..."
+    local curl_bin="$(command -v curl || true)"
+    if [ -n "$curl_bin" ] && [ -f "$curl_bin" ]; then
+        cp -L "$curl_bin" "$ROOTFS_DIR/usr/bin/curl"
+        ldd "$curl_bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+        done
+        ldd "$curl_bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+        done
+        success "curl binary and shared libraries staged."
+    fi
+
+    # Stage CA Certificates bundle for verified HTTPS connections
+    mkdir -p "$ROOTFS_DIR/etc/ssl/certs" "$ROOTFS_DIR/usr/share/ca-certificates" "$ROOTFS_DIR/etc/pki/tls/certs"
+    if [ -f "/etc/ssl/certs/ca-certificates.crt" ]; then
+        cp -L "/etc/ssl/certs/ca-certificates.crt" "$ROOTFS_DIR/etc/ssl/certs/ca-certificates.crt"
+        ln -sf certs/ca-certificates.crt "$ROOTFS_DIR/etc/ssl/cert.pem" 2>/dev/null || true
+        cp -L "/etc/ssl/certs/ca-certificates.crt" "$ROOTFS_DIR/etc/pki/tls/certs/ca-bundle.crt" 2>/dev/null || true
+        success "CA certificate store staged."
+    fi
+
+    # Stage glibc NSS dynamic resolver libraries (required for getaddrinfo / DNS lookups)
+    for nss_lib in /lib/x86_64-linux-gnu/libnss_dns* /lib/x86_64-linux-gnu/libnss_files* /lib/x86_64-linux-gnu/libresolv*; do
+        if [ -f "$nss_lib" ]; then
+            mkdir -p "$ROOTFS_DIR/lib/x86_64-linux-gnu"
+            cp -L "$nss_lib" "$ROOTFS_DIR/lib/x86_64-linux-gnu/" 2>/dev/null || true
+        fi
+    done
+
+    # Stage nsswitch.conf
+    if [ -f "/etc/nsswitch.conf" ]; then
+        cp -L "/etc/nsswitch.conf" "$ROOTFS_DIR/etc/nsswitch.conf"
+    else
+        cat > "$ROOTFS_DIR/etc/nsswitch.conf" << 'EOF_NSSWITCH'
+passwd:         files
+group:          files
+shadow:         files
+hosts:          files dns
+networks:       files
+protocols:      db files
+services:       db files
+ethers:         db files
+rpc:            db files
+EOF_NSSWITCH
+    fi
 
     # ── Stage Audio Utilities (amixer, alsamixer, alsactl, aplay, speaker-test) ──
     info "Staging ALSA audio utilities (amixer, alsamixer, alsactl, aplay, speaker-test)..."

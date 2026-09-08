@@ -29,7 +29,7 @@ DockWidget::DockWidget() {
         DockIconState{"tinexus-files",     "Files",     "tinexus-files",       IconType::Folder},
         DockIconState{"tinexus-settings",  "Settings",  "tinexus-settings-ui", IconType::Gear},
         DockIconState{"tinexus-monitor",   "Monitor",   "tinexus-monitor",     IconType::BarChart},
-        DockIconState{"tinexus-pkg",       "Packages",  "tinexus-pkg",         IconType::Package},
+        DockIconState{"tinexus-store",     "App Store", "tinexus-store",       IconType::Package},
     };
     // Pre-init springs to 1.0 so icons render at correct size from frame 1
     for (auto& icon : m_icons) {

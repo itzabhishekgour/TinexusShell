@@ -167,6 +167,18 @@ txui::IconType LauncherWidget::resolve_icon_type(const AppItem& item) noexcept {
         return txui::IconType::Package;
     }
 
+    if (item.kind == ResultKind::Store) {
+        if (name.find("chrome") != std::string::npos || name.find("firefox") != std::string::npos ||
+            name.find("browser") != std::string::npos) {
+            return txui::IconType::Globe;
+        }
+        if (name.find("code") != std::string::npos || name.find("ide") != std::string::npos ||
+            name.find("antigravity") != std::string::npos) {
+            return txui::IconType::Terminal;
+        }
+        return txui::IconType::Package;
+    }
+
     return txui::IconType::Executable;
 }
 
@@ -211,6 +223,41 @@ void LauncherWidget::refresh_results() noexcept {
                 to_lower_str(app.exec).find(lq) != std::string::npos ||
                 to_lower_str(app.description).find(lq) != std::string::npos) {
                 m_results.push_back(app);
+            }
+        }
+
+        // 4. App Store search fallback for popular uninstalled applications
+        struct StoreDef {
+            const char* name;
+            const char* summary;
+            const char* id;
+        };
+        static constexpr StoreDef POPULAR_STORE_APPS[] = {
+            {"Google Chrome", "Fast & secure web browser by Google • Flathub", "com.google.Chrome"},
+            {"Visual Studio Code", "Code editing redefined by Microsoft • Flathub", "com.visualstudio.code"},
+            {"Mozilla Firefox", "Privacy-respecting web browser • Flathub", "org.mozilla.firefox"},
+            {"Spotify", "Music and podcast streaming • Flathub", "com.spotify.Client"},
+            {"Antigravity IDE", "Next-generation AI coding workspace • TxApp", "ai.antigravity.ide"},
+            {"VLC Media Player", "Cross-platform multimedia player • Flathub", "org.videolan.VLC"},
+            {"Discord", "Chat and communities • Flathub", "com.discordapp.Discord"}
+        };
+
+        for (const auto& sa : POPULAR_STORE_APPS) {
+            std::string sname = to_lower_str(sa.name);
+            std::string sid = to_lower_str(sa.id);
+            if (sname.find(lq) != std::string::npos || sid.find(lq) != std::string::npos) {
+                // Check if already in m_results (installed)
+                bool already_present = false;
+                for (const auto& res : m_results) {
+                    if (to_lower_str(res.name).find(sname) != std::string::npos ||
+                        to_lower_str(res.exec).find(sname) != std::string::npos) {
+                        already_present = true;
+                        break;
+                    }
+                }
+                if (!already_present) {
+                    m_results.push_back({sa.name, "tinexus-store", sa.summary, false, "package", ResultKind::Store});
+                }
             }
         }
     }
@@ -347,7 +394,8 @@ void LauncherWidget::paint_override(txui::Painter& painter) const noexcept {
             const double ry  = cur_y + static_cast<double>(i) * (ROW_H + ROW_GAP);
 
             txui::Color cat_col = (item.kind == ResultKind::Calculator) ? SEL_CALC :
-                                  (item.kind == ResultKind::System)     ? SEL_SYS  : SEL_APP;
+                                  (item.kind == ResultKind::System)     ? SEL_SYS  :
+                                  (item.kind == ResultKind::Store)      ? txui::Color(59, 130, 246, 220) : SEL_APP;
 
             // Highlight background
             if (sel) {
@@ -394,6 +442,11 @@ void LauncherWidget::paint_override(txui::Painter& painter) const noexcept {
                                           5.0, txui::Color(239, 68, 68, 40));
                 painter.draw_text(txui::Point(panel_x + PANEL_W - 170.0, ry + 17.0),
                                   "System Action", txui::Color(248, 113, 113, 240), 11.0);
+            } else if (item.kind == ResultKind::Store) {
+                painter.fill_rounded_rect(txui::Rect(panel_x + PANEL_W - 190.0, ry + 13.0, 95.0, 20.0),
+                                          5.0, txui::Color(59, 130, 246, 45));
+                painter.draw_text(txui::Point(panel_x + PANEL_W - 182.0, ry + 17.0),
+                                  "Get on Store", txui::Color(96, 165, 250, 240), 11.0);
             } else if (!item.description.empty()) {
                 double max_desc_w = 260.0;
                 std::string desc = item.description;

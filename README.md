@@ -40,6 +40,9 @@ Tinexus Platform tracks component maturity transparently across three tiers:
 | **Package Manager (`tinexus-pkg`)** | 🟡 **PARTIAL / FRAMEWORK** | `.tinexus` manifest parser, SHA256 checksums, Ed25519 signatures, topological DAG solver, package DB. |
 | **Production ISO Builder** | 🟢 **PRODUCTION READY** | Full hybrid BIOS + UEFI bootable ISO generator with Linux 6.x kernel, Intel/MediaTek firmware, and rootfs compression (`~90 MB`). |
 
+> **⚠️ Third-Party App Execution Note:**  
+> Flatpak and XWayland are **NOT** implemented — do not add these claims until infrastructure is built and verified. Current application execution for external binaries relies on standalone Wayland binaries or the `tx-appimage` runner.
+
 ---
 
 ## 🎨 TxUI Design System & Architecture

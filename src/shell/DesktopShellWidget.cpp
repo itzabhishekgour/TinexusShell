@@ -276,7 +276,7 @@ DesktopShellWidget::DesktopShellWidget() {
                 spawn_app({"Settings", "tinexus-settings-ui", "Settings", false, ""});
                 break;
             case LogoMenuAction::AppInstaller:
-                spawn_app({"App Installer", "tinexus-app-installer", "Installer", false, ""});
+                spawn_app({"App Store", "tinexus-store", "Store", false, ""});
                 break;
             case LogoMenuAction::SystemMonitor:
                 spawn_app({"Activity Monitor", "tinexus-monitor", "Monitor", false, ""});

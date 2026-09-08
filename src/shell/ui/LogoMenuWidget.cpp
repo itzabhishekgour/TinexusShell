@@ -25,7 +25,7 @@ namespace {
         {"About Tinexus",       false, true,  ACCENT_CYAN,                  "",       LogoMenuAction::AboutTinexus},
         {"---",                 true,  false, txui::Color(),                "",       LogoMenuAction::AboutTinexus},
         {"System Settings...",  false, false, ACCENT_BLUE,                  "",       LogoMenuAction::SystemSettings},
-        {"App Installer...",    false, false, ACCENT_CYAN,                  "",       LogoMenuAction::AppInstaller},
+        {"App Store...",        false, false, ACCENT_CYAN,                  "",       LogoMenuAction::AppInstaller},
         {"Activity Monitor...",  false, false, txui::Color(168, 85, 247, 255),"",       LogoMenuAction::SystemMonitor},
         {"---",                 true,  false, txui::Color(),                "",       LogoMenuAction::AboutTinexus},
         {"Sleep",               false, false, txui::Color(245, 158, 11, 255), "",      LogoMenuAction::Sleep},

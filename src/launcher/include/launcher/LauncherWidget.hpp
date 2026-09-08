@@ -14,7 +14,8 @@ namespace tinexus::launcher {
 enum class ResultKind {
     App,
     System,
-    Calculator
+    Calculator,
+    Store
 };
 
 struct AppItem {
