@@ -21,11 +21,24 @@ MemoryMetrics MemoryParser::parse_memory() {
             mem.total_ram_bytes = val * 1024;
         } else if (key == "MemAvailable:") {
             mem.available_ram_bytes = val * 1024;
+        } else if (key == "MemFree:") {
+            mem.free_ram_bytes = val * 1024;
+        } else if (key == "Buffers:") {
+            mem.buffers_bytes = val * 1024;
+        } else if (key == "Cached:") {
+            mem.cached_bytes = val * 1024;
         } else if (key == "SwapTotal:") {
             mem.total_swap_bytes = val * 1024;
         } else if (key == "SwapFree:") {
             mem.free_swap_bytes = val * 1024;
         }
+    }
+
+    if (mem.total_ram_bytes > mem.available_ram_bytes) {
+        mem.used_ram_bytes = mem.total_ram_bytes - mem.available_ram_bytes;
+    }
+    if (mem.total_swap_bytes > mem.free_swap_bytes) {
+        mem.used_swap_bytes = mem.total_swap_bytes - mem.free_swap_bytes;
     }
 
     return mem;

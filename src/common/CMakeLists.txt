@@ -9,6 +9,7 @@ add_library(tinexus_common SHARED
     BacklightUtils.cpp
     AudioUtils.cpp
     DisplayUtils.cpp
+    PlatformServices.cpp
 )
 
 target_include_directories(tinexus_common PUBLIC

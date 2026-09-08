@@ -1,20 +1,58 @@
-#include "monitor/resource_monitor.hpp"
-#include "tinexus/client.hpp"
-#include "common/logger.hpp"
-#include <iostream>
+#include "monitor/MonitorWidget.hpp"
+#include <txui/window/Window.hpp>
+#include <txui/widgets/ChromeWidget.hpp>
+#include <txui/input/Event.hpp>
+#include <common/logger.hpp>
+#include <common/version.hpp>
+#include <chrono>
 
-int main() {
-    tinexus::log::set_component_name("monitor");
-    tinexus::log::info("Starting Tinexus System Monitor (tinexus-monitor)...");
+int main(int /*argc*/, char** /*argv*/) {
+    tinexus::log::set_component_name("tinexus-monitor");
+    tinexus::log::info("Starting Tinexus Activity Monitor v{}", tinexus::VERSION_STRING);
 
-    tinexus::Client sdk_client;
-    if (sdk_client.connect().is_ok()) {
-        tinexus::log::info("Tinexus Monitor: Connected to Tinexus Platform IPC broker via SDK.");
+    // 860 x 580 window — premium Activity Monitor proportions
+    auto window = txui::Window::create(860, 580, "Activity Monitor");
+    if (!window || !window->is_wayland_connected()) {
+        tinexus::log::error("[monitor] Failed to connect to Wayland display!");
+        return 1;
     }
 
-    auto snap = tinexus::monitor::ResourceMonitor::instance().collect_snapshot();
-    tinexus::log::info("Tinexus Monitor running actively. Initialized system inspection.");
+    auto root = txui::make_ref<tinexus::monitor::MonitorWidget>();
 
-    sdk_client.disconnect();
+    // Wrap in ChromeWidget for native traffic lights (🔴 🟡 🟢) and titlebar
+    auto chrome = txui::make_ref<txui::ChromeWidget>(
+        "Activity Monitor",
+        root,
+        [w = window.get()]() { w->on_close_request(); },
+        [w = window.get()]() { w->minimize(); },
+        [w = window.get()]() { w->set_maximized(!w->is_maximized()); },
+        [w = window.get()](uint32_t serial) { w->start_interactive_move(serial); }
+    );
+    window->set_root_widget(chrome);
+
+    auto last_telemetry_time = std::chrono::steady_clock::now();
+    bool running = true;
+
+    while (running && !window->should_close()) {
+        txui::Event event;
+        while (window->poll_event(event)) {
+            if (event.type == txui::EventType::WindowClose) {
+                running = false;
+            }
+            chrome->handle_event(event);
+        }
+
+        // Live refresh every 1.5 seconds
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_telemetry_time).count() >= 1500) {
+            root->refresh_telemetry();
+            last_telemetry_time = now;
+        }
+
+        window->present();
+        window->wait_timeout(50);
+    }
+
+    tinexus::log::info("[monitor] Exiting cleanly.");
     return 0;
 }

@@ -30,6 +30,7 @@ add_library(txui STATIC
     widgets/NavItem.cpp
     widgets/ColorPicker.cpp
     widgets/Badge.cpp
+    widgets/LineGraphWidget.cpp
     layout/FlexLayout.cpp
     layout/ScrollArea.cpp
     animation/KineticScroller.cpp

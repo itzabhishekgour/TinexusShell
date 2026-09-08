@@ -4,6 +4,7 @@
 #include <common/logger.hpp>
 #include <common/TinexusLogo.hpp>
 #include <common/DisplayUtils.hpp>
+#include <common/PlatformServices.hpp>
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
 #include <sys/statvfs.h>
@@ -184,52 +185,15 @@ void AboutWidget::read_system_info() {
     m_display_spec.renderer = tinexus::hardware::DisplayUtils::get_renderer_backend_string();
 
     // 7. Platform Services
-    auto find_pid = [](const std::string& comm_name) -> pid_t {
-        DIR* dir = opendir("/proc");
-        if (!dir) return 0;
-        struct dirent* ent;
-        pid_t found_pid = 0;
-        while ((ent = readdir(dir)) != nullptr) {
-            if (ent->d_type == DT_DIR) {
-                std::string pid_str = ent->d_name;
-                if (!pid_str.empty() && std::all_of(pid_str.begin(), pid_str.end(), ::isdigit)) {
-                    std::ifstream cf("/proc/" + pid_str + "/comm");
-                    std::string comm;
-                    if (cf >> comm && comm == comm_name) {
-                        found_pid = static_cast<pid_t>(std::stoi(pid_str));
-                        break;
-                    }
-                }
-            }
-        }
-        closedir(dir);
-        return found_pid;
-    };
-
-    struct DaemonMeta { const char* bin; const char* role; };
-    DaemonMeta metas[] = {
-        {"tinexus-serviced", "Platform Supervisor (Supervision Tree)"},
-        {"tinexus-comp",     "Wayland Vulkan Compositor"},
-        {"tinexus-ipcd",     "IPC Broker & Router Daemon"},
-        {"tinexus-searchd",  "Ranking Engine & Index Daemon"},
-        {"tinexus-notif",    "Desktop Notification Daemon"}
-    };
-
+    auto svcs = tinexus::platform::PlatformServices::query_supervised_services();
     m_services.clear();
-    for (const auto& dm : metas) {
-        pid_t pid = find_pid(dm.bin);
+    for (const auto& s : svcs) {
         ServiceSpec ss;
-        ss.name = dm.bin;
-        ss.role = dm.role;
-        if (pid > 0) {
-            ss.active = true;
-            ss.status = "ACTIVE";
-            ss.pid_str = "PID " + std::to_string(pid);
-        } else {
-            ss.active = true;
-            ss.status = "STANDBY";
-            ss.pid_str = "Supervised";
-        }
+        ss.name = s.name;
+        ss.role = s.role;
+        ss.active = s.active;
+        ss.status = s.active ? "ACTIVE" : "STANDBY";
+        ss.pid_str = s.active ? ("PID " + std::to_string(s.pid)) : "Supervised";
         m_services.push_back(ss);
     }
 }

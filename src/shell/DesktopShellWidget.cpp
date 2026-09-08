@@ -279,7 +279,7 @@ DesktopShellWidget::DesktopShellWidget() {
                 spawn_app({"App Installer", "tinexus-app-installer", "Installer", false, ""});
                 break;
             case LogoMenuAction::SystemMonitor:
-                spawn_app({"System Monitor", "tinexus-monitor", "Monitor", false, ""});
+                spawn_app({"Activity Monitor", "tinexus-monitor", "Monitor", false, ""});
                 break;
             case LogoMenuAction::Sleep:
                 log::info("[Shell] System Sleep triggered");

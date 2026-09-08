@@ -14,7 +14,7 @@ static std::vector<AppItem> get_mock_apps() {
         {"Tinexus Terminal", "tinexus-terminal", "Default Wayland GPU Terminal", true, "utilities-terminal", ResultKind::App},
         {"Tinexus Files", "tinexus-files", "Lightweight Miller Column File Manager", false, "system-file-manager", ResultKind::App},
         {"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", false, "preferences-desktop", ResultKind::App},
-        {"Tinexus System Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor", ResultKind::App},
+        {"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor", ResultKind::App},
         {"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", false, "system-software-install", ResultKind::App},
     };
 }

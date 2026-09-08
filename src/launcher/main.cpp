@@ -96,7 +96,7 @@ static std::vector<AppItem> load_system_apps() {
 
     // Built-in system defaults
     apps.push_back({"Tinexus Terminal", "tinexus-terminal", "Default Wayland Terminal", true, "utilities-terminal", ResultKind::App});
-    apps.push_back({"Tinexus System Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor", ResultKind::App});
+    apps.push_back({"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor", ResultKind::App});
     apps.push_back({"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", false, "preferences-desktop", ResultKind::App});
     apps.push_back({"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", false, "system-software-install", ResultKind::App});
     apps.push_back({"Tinexus Files", "tinexus-files", "Lightweight Desktop File Manager", false, "system-file-manager", ResultKind::App});
