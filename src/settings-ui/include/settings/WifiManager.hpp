@@ -79,6 +79,7 @@ private:
     std::string send_wpa_command(const std::string& cmd);
     void refresh_status_internal();
     void parse_scan_results(const std::string& raw);
+    void parse_iw_scan_results(const std::string& iface);
     void scan_worker();
     void connect_worker(std::string ssid, std::string password);
 };

@@ -187,30 +187,11 @@ void read_network_status(int& out_bars, bool& out_connected) {
     int bars = 0;
     bool connected = false;
 
-    try {
-        if (fs::exists("/sys/class/net")) {
-            for (const auto& entry : fs::directory_iterator("/sys/class/net")) {
-                std::string ifname = entry.path().filename().string();
-                if (ifname == "lo" || ifname.rfind("wlan", 0) == 0 || ifname.rfind("wlo", 0) == 0 || ifname.rfind("wlp", 0) == 0) continue;
-                std::ifstream op(entry.path() / "operstate");
-                std::string st;
-                if (op >> st && st == "up") {
-                    connected = true;
-                    bars = 4;
-                    s_cached_bars = bars;
-                    s_cached_conn = connected;
-                    out_bars = bars;
-                    out_connected = connected;
-                    return;
-                }
-            }
-        }
-    } catch (...) {}
-
+    // Check Wi-Fi interface specifically
     auto wifi_res = tinexus::net::probe_primary_wifi_interface("/sys/class/net", "/sys/class/rfkill", 0);
     std::string wifi_iface = wifi_res.iface_name;
 
-    if (!wifi_iface.empty()) {
+    if (!wifi_iface.empty() && wifi_res.state == tinexus::net::WifiHardwareState::Available) {
         struct ifaddrs* ifaddr = nullptr;
         if (getifaddrs(&ifaddr) == 0) {
             for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
@@ -219,7 +200,8 @@ void read_network_status(int& out_bars, bool& out_connected) {
                 if (ifname == wifi_iface) {
                     auto* sa = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
                     uint32_t ip = ntohl(sa->sin_addr.s_addr);
-                    if (ip != 0 && (ip & 0xFF000000) != 0x7F000000) {
+                    // Valid non-loopback, non-zero IP address assigned to Wi-Fi interface
+                    if (ip != 0 && (ip & 0xFF000000) != 0x7F000000 && (ip & 0xFFFF0000) != 0xA9FE0000) {
                         connected = true;
                         bars = 4;
                         break;
@@ -309,8 +291,7 @@ void DesktopShellWidget::sync_notifications() {
     if (notifications.empty()) {
         notifications = {
             {1, "Platform Ready", "Tinexus Desktop v1.0", "Wayland Vulkan compositing active on DRM KMS", "Just now", ui::ACCENT_CYAN, 1},
-            {2, "Network", "Wi-Fi Connected", "Primary interface active and online", "5m ago", ui::WIFI_COL, 1},
-            {3, "Supervisor", "Platform Supervision", "Supervision tree active, daemons sandboxed", "12m ago", ui::ACCENT_BLUE, 0}
+            {2, "Supervisor", "Platform Supervision", "Supervision tree active, daemons sandboxed", "12m ago", ui::ACCENT_BLUE, 0}
         };
     }
     if (m_notification_flyout) {

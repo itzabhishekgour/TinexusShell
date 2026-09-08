@@ -100,6 +100,27 @@ void run_udev_setup() {
         nullptr
     });
 
+    // ── Universal Wi-Fi & Network Kernel Driver Probing ──
+    // Probe primary modern Wi-Fi drivers (MediaTek MT7921/MT7922, Intel iwlwifi, Realtek rtw88/rtw89, Qualcomm, Realtek r8169)
+    tinexus::log::info("Ensuring essential network/Wi-Fi kernel drivers are loaded...");
+    const char* wifi_drivers[] = {
+        "cfg80211", "mac80211", "mt76", "mt76_connac_lib", "mt7921_common", "mt7921e", "mt7921u",
+        "iwlwifi", "iwlmvm", "rtw88_8821ce", "rtw88_pci", "rtw89_8852be", "rtw89_pci", "r8169",
+        nullptr
+    };
+    for (int i = 0; wifi_drivers[i] != nullptr; ++i) {
+        pid_t p = fork();
+        if (p == 0) {
+            execl("/sbin/modprobe", "modprobe", "-q", wifi_drivers[i], nullptr);
+            execl("/usr/sbin/modprobe", "modprobe", "-q", wifi_drivers[i], nullptr);
+            execl("/bin/modprobe", "modprobe", "-q", wifi_drivers[i], nullptr);
+            execl("/usr/bin/modprobe", "modprobe", "-q", wifi_drivers[i], nullptr);
+            execlp("modprobe", "modprobe", "-q", wifi_drivers[i], nullptr);
+            _exit(0);
+        }
+        if (p > 0) waitpid(p, nullptr, 0);
+    }
+
     // ── Conditional VM-Only Module Probing ──
     // virtio_snd is only probed if running inside a virtual machine (/sys/bus/virtio exists).
     // On physical hardware, this is silently skipped to avoid kernel error noise.

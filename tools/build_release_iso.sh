@@ -640,6 +640,9 @@ EOF_DHCP
     mkdir -p "$ROOTFS_DIR/lib/firmware"
     if [ -d "/lib/firmware" ]; then
         cp -a /lib/firmware/* "$ROOTFS_DIR/lib/firmware/" 2>/dev/null || true
+        # Decompress any .zst and .xz compressed firmware (e.g. MediaTek MT7921, Intel, Realtek)
+        find "$ROOTFS_DIR/lib/firmware" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
+        find "$ROOTFS_DIR/lib/firmware" -type f -name "*.xz" -exec unxz {} + 2>/dev/null || true
         success "Staged complete firmware tree into rootfs ($(du -sh "$ROOTFS_DIR/lib/firmware" | cut -f1))."
     else
         warn "/lib/firmware not found on host."

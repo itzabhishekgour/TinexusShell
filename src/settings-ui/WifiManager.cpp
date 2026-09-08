@@ -178,7 +178,7 @@ bool WifiManager::ensure_wpa_supplicant_running() {
         return true;
     }
 
-    // Ensure config directory exists with secure 0755 permissions
+    // Ensure config directory exists with secure permissions
     try {
         std::filesystem::create_directories("/etc/wpa_supplicant");
         std::filesystem::create_directories("/var/run/wpa_supplicant");
@@ -190,11 +190,16 @@ bool WifiManager::ensure_wpa_supplicant_running() {
         }
     } catch (...) {}
 
-    // Bring interface up
+    // Bring interface up across all standard tool locations
     pid_t up_p = fork();
     if (up_p == 0) {
+        execl("/usr/bin/ip", "ip", "link", "set", iface.c_str(), "up", nullptr);
         execl("/bin/ip", "ip", "link", "set", iface.c_str(), "up", nullptr);
+        execl("/sbin/ip", "ip", "link", "set", iface.c_str(), "up", nullptr);
+        execl("/usr/sbin/ip", "ip", "link", "set", iface.c_str(), "up", nullptr);
+        execl("/bin/busybox", "busybox", "ip", "link", "set", iface.c_str(), "up", nullptr);
         execl("/sbin/ifconfig", "ifconfig", iface.c_str(), "up", nullptr);
+        execlp("ip", "ip", "link", "set", iface.c_str(), "up", nullptr);
         _exit(0);
     }
     if (up_p > 0) waitpid(up_p, nullptr, 0);
@@ -205,8 +210,14 @@ bool WifiManager::ensure_wpa_supplicant_running() {
     if (wpa_p == 0) {
         execl("/usr/sbin/wpa_supplicant", "wpa_supplicant", "-B", "-D", "nl80211,wext", "-i", iface.c_str(),
               "-c", "/etc/wpa_supplicant/wpa_supplicant.conf", nullptr);
+        execl("/usr/bin/wpa_supplicant", "wpa_supplicant", "-B", "-D", "nl80211,wext", "-i", iface.c_str(),
+              "-c", "/etc/wpa_supplicant/wpa_supplicant.conf", nullptr);
         execl("/sbin/wpa_supplicant", "wpa_supplicant", "-B", "-D", "nl80211,wext", "-i", iface.c_str(),
               "-c", "/etc/wpa_supplicant/wpa_supplicant.conf", nullptr);
+        execl("/bin/wpa_supplicant", "wpa_supplicant", "-B", "-D", "nl80211,wext", "-i", iface.c_str(),
+              "-c", "/etc/wpa_supplicant/wpa_supplicant.conf", nullptr);
+        execlp("wpa_supplicant", "wpa_supplicant", "-B", "-D", "nl80211,wext", "-i", iface.c_str(),
+               "-c", "/etc/wpa_supplicant/wpa_supplicant.conf", nullptr);
         _exit(127);
     }
     if (wpa_p > 0) waitpid(wpa_p, nullptr, 0);
@@ -438,9 +449,126 @@ void WifiManager::parse_scan_results(const std::string& raw) {
     m_networks = std::move(deduped);
 }
 
+void WifiManager::parse_iw_scan_results(const std::string& iface) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) return;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+
+        execl("/usr/sbin/iw", "iw", "dev", iface.c_str(), "scan", nullptr);
+        execl("/usr/bin/iw", "iw", "dev", iface.c_str(), "scan", nullptr);
+        execl("/sbin/iw", "iw", "dev", iface.c_str(), "scan", nullptr);
+        execl("/bin/iw", "iw", "dev", iface.c_str(), "scan", nullptr);
+        execlp("iw", "iw", "dev", iface.c_str(), "scan", nullptr);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    std::string raw_output;
+    char buffer[4096];
+    ssize_t bytes_read = 0;
+    while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
+        buffer[bytes_read] = '\0';
+        raw_output += buffer;
+    }
+    close(pipefd[0]);
+    if (pid > 0) waitpid(pid, nullptr, 0);
+
+    if (raw_output.empty()) return;
+
+    std::vector<WifiNetwork> parsed;
+    std::istringstream iss(raw_output);
+    std::string line;
+
+    WifiNetwork cur_net;
+    bool in_bss = false;
+
+    while (std::getline(iss, line)) {
+        if (line.rfind("BSS ", 0) == 0) {
+            if (in_bss && !cur_net.ssid.empty()) {
+                parsed.push_back(std::move(cur_net));
+            }
+            in_bss = true;
+            cur_net = WifiNetwork{};
+            auto space = line.find(' ', 4);
+            auto paren = line.find('(', 4);
+            size_t end_bssid = std::min(space, paren);
+            if (end_bssid != std::string::npos) {
+                cur_net.bssid = line.substr(4, end_bssid - 4);
+            }
+        } else if (in_bss) {
+            auto trimmed = trim_str(line);
+            if (trimmed.rfind("SSID: ", 0) == 0) {
+                cur_net.ssid = trim_str(trimmed.substr(6));
+            } else if (trimmed.rfind("signal: ", 0) == 0) {
+                try {
+                    auto sig_str = trimmed.substr(8);
+                    cur_net.signal_dbm = static_cast<int>(std::stof(sig_str));
+                } catch (...) { cur_net.signal_dbm = -70; }
+            } else if (trimmed.rfind("freq: ", 0) == 0) {
+                try {
+                    cur_net.frequency_mhz = std::stoi(trimmed.substr(6));
+                } catch (...) { cur_net.frequency_mhz = 2412; }
+            } else if (trimmed.find("RSN:") != std::string::npos || trimmed.find("WPA:") != std::string::npos || trimmed.find("Authentication suites:") != std::string::npos) {
+                cur_net.is_secured = true;
+                if (trimmed.find("SAE") != std::string::npos) cur_net.security_str = "WPA3-Personal";
+                else cur_net.security_str = "WPA2-Personal";
+            }
+        }
+    }
+    if (in_bss && !cur_net.ssid.empty()) {
+        parsed.push_back(std::move(cur_net));
+    }
+
+    if (parsed.empty()) return;
+
+    // Calculate signal bars
+    for (auto& net : parsed) {
+        if (net.signal_dbm >= -55) net.signal_bars = 4;
+        else if (net.signal_dbm >= -67) net.signal_bars = 3;
+        else if (net.signal_dbm >= -80) net.signal_bars = 2;
+        else net.signal_bars = 1;
+    }
+
+    // Deduplicate SSIDs keeping strongest signal
+    std::vector<WifiNetwork> deduped;
+    for (auto& item : parsed) {
+        auto existing = std::find_if(deduped.begin(), deduped.end(),
+                                     [&](const WifiNetwork& n) { return n.ssid == item.ssid; });
+        if (existing == deduped.end()) {
+            deduped.push_back(item);
+        } else if (item.signal_dbm > existing->signal_dbm) {
+            *existing = item;
+        }
+    }
+
+    // Mark connected if matches
+    std::string cur_connected;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cur_connected = m_connected_ssid;
+    }
+    for (auto& net : deduped) {
+        net.is_connected = (net.ssid == cur_connected);
+    }
+
+    std::sort(deduped.begin(), deduped.end(), [](const WifiNetwork& a, const WifiNetwork& b) {
+        if (a.is_connected != b.is_connected) return a.is_connected > b.is_connected;
+        return a.signal_dbm > b.signal_dbm;
+    });
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_networks = std::move(deduped);
+}
+
 void WifiManager::scan_worker() {
     // Run 3000ms polling probe asynchronously inside this background worker thread.
-    // This allows delayed kernel/firmware initialization (e.g. iwlwifi) without blocking the UI.
+    // This allows delayed kernel/firmware initialization (e.g. MediaTek MT7921/iwlwifi) without blocking the UI.
     auto hw_res = tinexus::net::probe_primary_wifi_interface("/sys/class/net", "/sys/class/rfkill", 3000);
 
     if (hw_res.state == tinexus::net::WifiHardwareState::NotDetected) {
@@ -468,6 +596,21 @@ void WifiManager::scan_worker() {
         m_active_iface = hw_res.iface_name;
     }
 
+    // Explicitly bring interface up before initiating scan
+    {
+        pid_t up_p = fork();
+        if (up_p == 0) {
+            execl("/usr/bin/ip", "ip", "link", "set", hw_res.iface_name.c_str(), "up", nullptr);
+            execl("/bin/ip", "ip", "link", "set", hw_res.iface_name.c_str(), "up", nullptr);
+            execl("/sbin/ip", "ip", "link", "set", hw_res.iface_name.c_str(), "up", nullptr);
+            execl("/usr/sbin/ip", "ip", "link", "set", hw_res.iface_name.c_str(), "up", nullptr);
+            execl("/bin/busybox", "busybox", "ip", "link", "set", hw_res.iface_name.c_str(), "up", nullptr);
+            execlp("ip", "ip", "link", "set", hw_res.iface_name.c_str(), "up", nullptr);
+            _exit(0);
+        }
+        if (up_p > 0) waitpid(up_p, nullptr, 0);
+    }
+
     ensure_wpa_supplicant_running();
     send_wpa_command("SCAN");
     
@@ -475,8 +618,11 @@ void WifiManager::scan_worker() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2500));
 
     std::string raw = send_wpa_command("SCAN_RESULTS");
-    if (!raw.empty()) {
+    if (!raw.empty() && raw.find("bssid") != std::string::npos) {
         parse_scan_results(raw);
+    } else {
+        // Direct kernel iw scan fallback if wpa_supplicant socket was delayed
+        parse_iw_scan_results(hw_res.iface_name);
     }
     refresh_status_internal();
     m_is_scanning.store(false);
@@ -558,13 +704,19 @@ void WifiManager::connect_worker(std::string ssid, std::string password) {
     if (connected) {
         tinexus::log::info("[WifiManager] Successfully associated with '{}'. Requesting DHCP lease on '{}'...", ssid, iface);
         
-        // Run udhcpc via default script with hostname Option 12
+        // Run udhcpc via default script across all standard binary paths with hostname Option 12
         pid_t dhcp_p = fork();
         if (dhcp_p == 0) {
-            execl("/bin/busybox", "busybox", "udhcpc", "-i", iface.c_str(),
+            execl("/usr/bin/udhcpc", "udhcpc", "-i", iface.c_str(),
+                  "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+            execl("/bin/udhcpc", "udhcpc", "-i", iface.c_str(),
                   "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
             execl("/sbin/udhcpc", "udhcpc", "-i", iface.c_str(),
                   "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+            execl("/bin/busybox", "busybox", "udhcpc", "-i", iface.c_str(),
+                  "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+            execlp("udhcpc", "udhcpc", "-i", iface.c_str(),
+                   "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
             _exit(0);
         }
         if (dhcp_p > 0) {

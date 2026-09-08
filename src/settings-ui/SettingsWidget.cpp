@@ -1198,6 +1198,14 @@ void SettingsWidget::paint_network_page(txui::Painter& p, const txui::Rect& area
     m_network_item_rects.clear();
     float64 item_y = y2 + 52.0;
 
+    if (networks.empty()) {
+        std::string status_txt = WifiManager::instance().get_status_message();
+        if (status_txt.empty() || status_txt == "Not Connected") {
+            status_txt = WifiManager::instance().is_scanning() ? "Scanning for nearby Wi-Fi networks..." : "No Wi-Fi networks found. Click 'Scan Networks' to refresh.";
+        }
+        p.draw_text(txui::Point(cx + 20.0, y2 + 58.0), status_txt, TXT_SEC, 12.5);
+    }
+
     for (size_t i = 0; i < networks.size(); ++i) {
         const auto& net = networks[i];
         txui::Rect nrect(cx + 12.0, item_y, cw - 24.0, 42.0);

@@ -23,13 +23,27 @@ set_target_properties(tinexus-store PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 install(TARGETS tinexus-store RUNTIME DESTINATION bin)
 
-# Maintain tinexus-app-installer backward-compatibility target
-add_custom_target(tinexus-app-installer ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_BINARY_DIR}/bin/tinexus-store"
-        "${CMAKE_BINARY_DIR}/bin/tinexus-app-installer"
-    DEPENDS tinexus-store
+# Maintain tinexus-app-installer backward-compatibility binary
+add_executable(tinexus-app-installer
+    main.cpp
+    StoreWidget.cpp
 )
+
+target_include_directories(tinexus-app-installer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
+)
+
+target_link_libraries(tinexus-app-installer PRIVATE
+    tinexus_common
+    tinexus_warnings
+    txui
+    PkgConfig::WAYLAND_CLIENT
+    OpenSSL::Crypto
+)
+
+set_target_properties(tinexus-app-installer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+install(TARGETS tinexus-app-installer RUNTIME DESTINATION bin)
 
 add_executable(test-store-render
     ${CMAKE_SOURCE_DIR}/tests/unit/test_store_render.cpp
