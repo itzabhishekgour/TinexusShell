@@ -4,12 +4,20 @@
 #include <txui/window/Window.hpp>
 #include <txui/widgets/ChromeWidget.hpp>
 #include <txui/input/Event.hpp>
+#include <txui/core/SingleInstance.hpp>
 
 int main(int argc, char** argv) {
     tinexus::log::set_component_name("tinexus-settings-ui");
+
+    txui::SingleInstance single_instance("tinexus-settings");
+    if (!single_instance.is_primary()) {
+        single_instance.request_focus_primary();
+        return 0;
+    }
+
     tinexus::log::info("Starting Tinexus Control Center v{}", tinexus::VERSION_STRING);
 
-    auto window = txui::Window::create(1000, 640, "Tinexus Settings");
+    auto window = txui::Window::create(1000, 640, "Tinexus Settings", false, "tinexus-settings");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("[settings-ui] Failed to connect to Wayland display!");
         return 1;
@@ -78,7 +86,7 @@ int main(int argc, char** argv) {
         }
 
         window->present();
-        window->wait_timeout(200);
+        window->wait();
     }
 
     tinexus::log::info("[settings-ui] Exiting.");

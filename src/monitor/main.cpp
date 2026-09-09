@@ -2,16 +2,24 @@
 #include <txui/window/Window.hpp>
 #include <txui/widgets/ChromeWidget.hpp>
 #include <txui/input/Event.hpp>
+#include <txui/core/SingleInstance.hpp>
 #include <common/logger.hpp>
 #include <common/version.hpp>
 #include <chrono>
 
 int main(int /*argc*/, char** /*argv*/) {
     tinexus::log::set_component_name("tinexus-monitor");
+
+    txui::SingleInstance single_instance("tinexus-monitor");
+    if (!single_instance.is_primary()) {
+        single_instance.request_focus_primary();
+        return 0;
+    }
+
     tinexus::log::info("Starting Tinexus Activity Monitor v{}", tinexus::VERSION_STRING);
 
     // 860 x 580 window — premium Activity Monitor proportions
-    auto window = txui::Window::create(860, 580, "Activity Monitor");
+    auto window = txui::Window::create(860, 580, "Activity Monitor", false, "tinexus-monitor");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("[monitor] Failed to connect to Wayland display!");
         return 1;
@@ -46,11 +54,12 @@ int main(int /*argc*/, char** /*argv*/) {
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_telemetry_time).count() >= 1500) {
             root->refresh_telemetry();
+            window->request_repaint();
             last_telemetry_time = now;
         }
 
         window->present();
-        window->wait_timeout(50);
+        window->wait_timeout(100);
     }
 
     tinexus::log::info("[monitor] Exiting cleanly.");

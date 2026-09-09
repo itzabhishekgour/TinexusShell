@@ -1,5 +1,6 @@
 #include <launcher/LauncherWidget.hpp>
 #include <txui/window/Window.hpp>
+#include <txui/core/SingleInstance.hpp>
 #include <common/logger.hpp>
 #include <indexer/desktop_entry.hpp>
 #include <common/dbus_power.hpp>
@@ -55,6 +56,19 @@ static pid_t spawn_app(const AppItem& item) {
 
     std::string clean_exec = indexer::DesktopParser::sanitize_exec(raw_exec);
     if (clean_exec.empty()) return -1;
+
+    // Check single-instance applications before blind fork
+    std::string canonical_app_id;
+    if (clean_exec.find("settings") != std::string::npos) canonical_app_id = "tinexus-settings";
+    else if (clean_exec.find("about") != std::string::npos) canonical_app_id = "tinexus-about";
+    else if (clean_exec.find("monitor") != std::string::npos) canonical_app_id = "tinexus-monitor";
+    else if (clean_exec.find("store") != std::string::npos) canonical_app_id = "tinexus-store";
+
+    if (!canonical_app_id.empty() && txui::SingleInstance::is_app_running(canonical_app_id)) {
+        log::info("[Launcher] App '{}' is already running; raising existing window", canonical_app_id);
+        txui::SingleInstance::focus_app(canonical_app_id);
+        return 0;
+    }
 
     // Track recent launch
     auto it = std::find_if(g_recent_launches.begin(), g_recent_launches.end(),
@@ -146,10 +160,17 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
     log::set_component_name("launcher");
+
+    txui::SingleInstance single_instance("tinexus-launcher");
+    if (!single_instance.is_primary()) {
+        single_instance.request_focus_primary();
+        return 0;
+    }
+
     log::info("[Launcher] Tinexus Command Palette starting...");
     signal(SIGCHLD, SIG_IGN);
 
-    auto window = txui::Window::create(900, 700, "Tinexus Launcher");
+    auto window = txui::Window::create(900, 700, "Tinexus Launcher", false, "tinexus-launcher");
     if (!window || !window->is_wayland_connected()) {
         log::error("[Launcher] Failed to connect to Wayland display! Exiting.");
         return 1;

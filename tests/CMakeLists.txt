@@ -17,6 +17,17 @@ target_link_libraries(unit_test_common PRIVATE
 
 add_test(NAME unit_test_common COMMAND unit_test_common)
 
+add_executable(unit_test_graphics_probe
+    unit/test_graphics_probe.cpp
+)
+
+target_link_libraries(unit_test_graphics_probe PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME unit_test_graphics_probe COMMAND unit_test_graphics_probe)
 
 add_executable(unit_test_txui_clipboard
     unit/test_txui_clipboard.cpp
@@ -1587,14 +1598,10 @@ target_include_directories(unit_test_store_render PRIVATE
 target_link_libraries(unit_test_store_render PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_store_render COMMAND unit_test_store_render)
 
-add_executable(unit_test_graphics_probe
-    unit/test_graphics_probe.cpp
-)
+add_executable(unit_test_single_instance unit/test_single_instance.cpp)
+target_link_libraries(unit_test_single_instance PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_single_instance COMMAND unit_test_single_instance)
 
-target_link_libraries(unit_test_graphics_probe PRIVATE
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-)
-
-add_test(NAME unit_test_graphics_probe COMMAND unit_test_graphics_probe)
+add_executable(unit_test_app_id_isolation unit/test_app_id_isolation.cpp)
+target_link_libraries(unit_test_app_id_isolation PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_app_id_isolation COMMAND unit_test_app_id_isolation)

@@ -3,6 +3,7 @@
 #include <common/AudioUtils.hpp>
 #include <common/BacklightUtils.hpp>
 #include <txui/render/FontMetrics.hpp>
+#include <txui/core/SingleInstance.hpp>
 #include <unistd.h>
 #include <sys/reboot.h>
 #include <csignal>
@@ -94,6 +95,18 @@ pid_t spawn_app(const AppItem& item) {
             log::info("[Shell] System action: Sleep");
             return -1;
         }
+    }
+    // Check single-instance applications before blind fork
+    std::string canonical_app_id;
+    if (item.exec.find("settings") != std::string::npos) canonical_app_id = "tinexus-settings";
+    else if (item.exec.find("about") != std::string::npos) canonical_app_id = "tinexus-about";
+    else if (item.exec.find("monitor") != std::string::npos) canonical_app_id = "tinexus-monitor";
+    else if (item.exec.find("store") != std::string::npos) canonical_app_id = "tinexus-store";
+
+    if (!canonical_app_id.empty() && txui::SingleInstance::is_app_running(canonical_app_id)) {
+        log::info("[Shell] App '{}' is already running; raising existing window", canonical_app_id);
+        txui::SingleInstance::focus_app(canonical_app_id);
+        return 0;
     }
 
     log::info("[Shell] Spawning application: {}", item.name);

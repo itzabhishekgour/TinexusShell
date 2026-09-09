@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Create the main window
-    auto window = txui::Window::create(800, 600, "Tinexus Terminal", false);
+    auto window = txui::Window::create(800, 600, "Tinexus Terminal", false, "tinexus-terminal");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("Failed to create Wayland window.");
         sdk_client.disconnect();

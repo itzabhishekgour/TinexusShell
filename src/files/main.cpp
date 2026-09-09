@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    auto window = txui::Window::create(1000, 620, "tinexus-files");
+    auto window = txui::Window::create(1000, 620, "Tinexus Files", false, "tinexus-files");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("Failed to connect to Wayland display.");
         return 1;

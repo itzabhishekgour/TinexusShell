@@ -2,6 +2,8 @@
 #include "ipcd/protocol/dock_protocol.hpp"
 #include "ipcd/protocol/header.hpp"
 #include <txui/render/FontMetrics.hpp>
+#include <txui/core/SingleInstance.hpp>
+#include <common/RuntimePaths.hpp>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -51,8 +53,8 @@ void DockWidget::setup_ipc() {
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
-        snprintf(addr.sun_path, sizeof(addr.sun_path),
-                 "/run/user/%d/tinexus/ipc.sock", getuid());
+        std::string sock_path = tinexus::common::RuntimePaths::get_ipc_socket_path();
+        strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
         if (connect(m_ipc_socket, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
             close(m_ipc_socket);
             m_ipc_socket = -1;
@@ -78,6 +80,18 @@ void DockWidget::send_ipc(uint16_t msg_type, const std::string& app_id) {
 }
 
 void DockWidget::spawn_app(const std::string& exec_cmd) {
+    // Check single-instance applications before blind fork
+    std::string canonical_app_id;
+    if (exec_cmd.find("settings") != std::string::npos) canonical_app_id = "tinexus-settings";
+    else if (exec_cmd.find("about") != std::string::npos) canonical_app_id = "tinexus-about";
+    else if (exec_cmd.find("monitor") != std::string::npos) canonical_app_id = "tinexus-monitor";
+    else if (exec_cmd.find("store") != std::string::npos) canonical_app_id = "tinexus-store";
+
+    if (!canonical_app_id.empty() && txui::SingleInstance::is_app_running(canonical_app_id)) {
+        txui::SingleInstance::focus_app(canonical_app_id);
+        return;
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
         if (fork() == 0) { execlp(exec_cmd.c_str(), exec_cmd.c_str(), nullptr); exit(1); }

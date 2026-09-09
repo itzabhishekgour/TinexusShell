@@ -2,15 +2,23 @@
 #include <txui/window/Window.hpp>
 #include <txui/widgets/ChromeWidget.hpp>
 #include <txui/input/Event.hpp>
+#include <txui/core/SingleInstance.hpp>
 #include <common/logger.hpp>
 #include <common/version.hpp>
 
 int main(int /*argc*/, char** /*argv*/) {
     tinexus::log::set_component_name("tinexus-about");
+
+    txui::SingleInstance single_instance("tinexus-about");
+    if (!single_instance.is_primary()) {
+        single_instance.request_focus_primary();
+        return 0;
+    }
+
     tinexus::log::info("Starting About Tinexus Profiler v{}", tinexus::VERSION_STRING);
 
     // 680 x 420 window — authentic macOS About window proportions
-    auto window = txui::Window::create(680, 420, "About Tinexus");
+    auto window = txui::Window::create(680, 420, "About Tinexus", false, "tinexus-about");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("[about] Failed to connect to Wayland display!");
         return 1;
@@ -40,7 +48,7 @@ int main(int /*argc*/, char** /*argv*/) {
         }
 
         window->present();
-        window->wait_timeout(100);
+        window->wait();
     }
 
     tinexus::log::info("[about] Exiting cleanly.");
