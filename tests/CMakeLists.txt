@@ -29,6 +29,7 @@ target_link_libraries(unit_test_graphics_probe PRIVATE
 
 add_test(NAME unit_test_graphics_probe COMMAND unit_test_graphics_probe)
 
+if(NOT TARGET unit_test_txui_clipboard)
 add_executable(unit_test_txui_clipboard
     unit/test_txui_clipboard.cpp
 )
@@ -41,6 +42,7 @@ target_link_libraries(unit_test_txui_clipboard PRIVATE
 )
 
 add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
+endif()
 
 add_executable(unit_test_wifi_contracts
     unit/test_wifi_backend_contracts.cpp
@@ -1605,3 +1607,19 @@ add_test(NAME unit_test_single_instance COMMAND unit_test_single_instance)
 add_executable(unit_test_app_id_isolation unit/test_app_id_isolation.cpp)
 target_link_libraries(unit_test_app_id_isolation PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_app_id_isolation COMMAND unit_test_app_id_isolation)
+
+add_executable(test_window_state_machine unit/test_window_state_machine.cpp)
+target_include_directories(test_window_state_machine PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+target_link_libraries(test_window_state_machine PRIVATE tinexus_common tinexus_warnings)
+add_test(NAME test_window_state_machine COMMAND test_window_state_machine)
+
+add_executable(test_memory_safety_during_anim unit/test_memory_safety_during_anim.cpp)
+target_include_directories(test_memory_safety_during_anim PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+target_link_libraries(test_memory_safety_during_anim PRIVATE tinexus_common tinexus_warnings)
+add_test(NAME test_memory_safety_during_anim COMMAND test_memory_safety_during_anim)

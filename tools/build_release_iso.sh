@@ -28,7 +28,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="${PROJECT_DIR:-$(dirname "$SCRIPT_DIR")}"
 BUILD_DIR="$PROJECT_DIR/build"
 KERNEL_DIR="$BUILD_DIR/kernel"
 OUTPUT_ISO="$BUILD_DIR/Tinexus-x86_64.iso"

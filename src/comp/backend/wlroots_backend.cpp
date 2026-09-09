@@ -41,6 +41,7 @@ extern "C" {
 #include "comp/cursor/cursor_manager.hpp"
 #include "comp/focus/focus_manager.hpp"
 #include "comp/server/server.hpp"
+#include "comp/window/window_state.hpp"
 #include <unistd.h>
 #include <cstdlib>
 #include <cstdarg>
@@ -407,6 +408,7 @@ private:
         // Window states
         bool is_maximized{false};
         bool is_fullscreen{false};
+        WindowStateMachine state_machine;
 
         // Saved geometry for restoring after maximize/fullscreen
         int32_t saved_x{50};
@@ -612,51 +614,214 @@ private:
         return false;
     }
 
-    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
-        if (wrapper->is_maximized == maximize) {
-            wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
-            return;
+    struct OutputWorkAreaInfo {
+        int32_t x{0};
+        int32_t y{0};
+        int32_t width{0};
+        int32_t height{0};
+    };
+
+    struct wlr_output* get_output_for_toplevel(ToplevelWrapper* wrapper) const {
+        if (!m_output_layout) return nullptr;
+
+        int32_t wx = wrapper->scene_tree ? wrapper->scene_tree->node.x : 0;
+        int32_t wy = wrapper->scene_tree ? wrapper->scene_tree->node.y : 0;
+        int32_t ww = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->current.geometry.width : 0;
+        int32_t wh = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->current.geometry.height : 0;
+        if (ww <= 0) ww = 800;
+        if (wh <= 0) wh = 600;
+
+        double cx = wx + (ww / 2.0);
+        double cy = wy + (wh / 2.0);
+
+        struct wlr_output* out = wlr_output_layout_output_at(m_output_layout, cx, cy);
+        if (!out) {
+            out = wlr_output_layout_get_center_output(m_output_layout);
         }
-        wrapper->is_maximized = maximize;
-        if (maximize) {
-            if (!wrapper->is_fullscreen) {
-                wrapper->saved_x = wrapper->scene_tree->node.x;
-                wrapper->saved_y = wrapper->scene_tree->node.y;
-                wrapper->saved_width = wrapper->toplevel->base->current.geometry.width;
-                wrapper->saved_height = wrapper->toplevel->base->current.geometry.height;
-                if (wrapper->saved_width <= 0) wrapper->saved_width = 800;
-                if (wrapper->saved_height <= 0) wrapper->saved_height = 600;
-            }
-            struct wlr_box output_box = {0, 0, 1280, 800};
-            if (!m_outputs.empty()) {
-                struct wlr_output* out = m_outputs.front()->get_wlr_output();
-                if (out) {
-                    wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
+        if (!out && !m_outputs.empty()) {
+            out = m_outputs.front()->get_wlr_output();
+        }
+        return out;
+    }
+
+    OutputWorkAreaInfo get_output_work_area(struct wlr_output* out) const {
+        OutputWorkAreaInfo area{};
+        if (!out || !m_output_layout) return area;
+
+        struct wlr_box out_box{0, 0, 0, 0};
+        wlr_output_layout_get_box(m_output_layout, out, &out_box);
+
+        int32_t eff_w = 0, eff_h = 0;
+        wlr_output_effective_resolution(out, &eff_w, &eff_h);
+        if (eff_w <= 0) eff_w = out_box.width;
+        if (eff_h <= 0) eff_h = out_box.height;
+
+        int32_t top_margin = 0;
+        int32_t bottom_margin = 0;
+        int32_t left_margin = 0;
+        int32_t right_margin = 0;
+
+        for (const auto* layer : m_layer_surfaces) {
+            if (!layer || !layer->layer_surface) continue;
+            if (layer->layer_surface->output == out && layer->layer_surface->surface && layer->layer_surface->surface->mapped) {
+                int32_t zone = layer->layer_surface->current.exclusive_zone;
+                uint32_t anchor = layer->layer_surface->current.anchor;
+                if (zone > 0) {
+                    if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) top_margin = std::max(top_margin, zone);
+                    if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) bottom_margin = std::max(bottom_margin, zone);
+                    if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) left_margin = std::max(left_margin, zone);
+                    if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) right_margin = std::max(right_margin, zone);
                 }
             }
-            int32_t target_width = output_box.width;
-            int32_t target_height = output_box.height - 32; // Snap flush to 32px top bar (Aura notch floats over window)
-            log::info("[Window] Maximize window to {}x{}", target_width, target_height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 32);
+        }
+
+        // Fallback for top bar if exclusive_zone was not explicitly populated
+        if (top_margin == 0) {
+            for (const auto* layer : m_layer_surfaces) {
+                if (!layer || !layer->layer_surface) continue;
+                if (layer->layer_surface->output == out && layer->layer_surface->surface && layer->layer_surface->surface->mapped) {
+                    uint32_t anchor = layer->layer_surface->current.anchor;
+                    if ((anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) && !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) {
+                        int32_t h = layer->layer_surface->surface->current.height;
+                        if (h > 0 && h < 100) {
+                            top_margin = std::max(top_margin, h);
+                        }
+                    }
+                }
+            }
+        }
+
+        area.x = out_box.x + left_margin;
+        area.y = out_box.y + top_margin;
+        area.width = eff_w - left_margin - right_margin;
+        area.height = eff_h - top_margin - bottom_margin;
+
+        return area;
+    }
+
+    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->scene_tree) return;
+
+        if (maximize) {
+            if (wrapper->state_machine.state() == WindowState::Maximized) {
+                wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+                return;
+            }
+
+            struct wlr_output* out = get_output_for_toplevel(wrapper);
+            if (!out) {
+                log::warn("[Window] Cannot maximize window: no active output found");
+                return;
+            }
+
+            OutputWorkAreaInfo work_area = get_output_work_area(out);
+            if (work_area.width <= 0 || work_area.height <= 0) {
+                log::warn("[Window] Invalid output work area for maximize");
+                return;
+            }
+
+            // Sync current scene position to floating geometry before maximize
+            if (wrapper->state_machine.state() == WindowState::Normal) {
+                int32_t cur_w = wrapper->toplevel->base->current.geometry.width;
+                int32_t cur_h = wrapper->toplevel->base->current.geometry.height;
+                if (cur_w <= 0) cur_w = 800;
+                if (cur_h <= 0) cur_h = 600;
+                wrapper->state_machine.update_floating_geometry(
+                    wrapper->scene_tree->node.x,
+                    wrapper->scene_tree->node.y,
+                    cur_w,
+                    cur_h
+                );
+            }
+
+            wrapper->state_machine.set_assigned_output(out);
+            wrapper->state_machine.request_maximize({work_area.x, work_area.y, work_area.width, work_area.height});
+            wrapper->is_maximized = true;
+
+            // Update legacy saved fields for backward compatibility
+            wrapper->saved_x = wrapper->state_machine.geometry().normal_geom.x;
+            wrapper->saved_y = wrapper->state_machine.geometry().normal_geom.y;
+            wrapper->saved_width = wrapper->state_machine.geometry().normal_geom.width;
+            wrapper->saved_height = wrapper->state_machine.geometry().normal_geom.height;
+
+            log::info("[Window] Maximize window to {}x{} at ({}, {}) on output '{}'",
+                      work_area.width, work_area.height, work_area.x, work_area.y, out->name ? out->name : "unknown");
+
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, work_area.x, work_area.y);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, true);
-            wlr_xdg_toplevel_set_size(wrapper->toplevel, target_width, target_height);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, work_area.width, work_area.height);
         } else {
-            log::info("[Window] Restore maximized window to {}x{}", wrapper->saved_width, wrapper->saved_height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->saved_x, wrapper->saved_y);
+            if (wrapper->state_machine.state() != WindowState::Maximized) {
+                wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+                return;
+            }
+
+            wrapper->state_machine.request_restore();
+            wrapper->is_maximized = false;
+
+            const auto& norm = wrapper->state_machine.geometry().normal_geom;
+            log::info("[Window] Restore maximized window to {}x{} at ({}, {})",
+                      norm.width, norm.height, norm.x, norm.y);
+
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, norm.x, norm.y);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, false);
-            wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
+    void toplevel_set_minimized(ToplevelWrapper* wrapper, bool minimize) {
+        if (!wrapper || !wrapper->scene_tree) return;
+
+        if (minimize) {
+            if (wrapper->state_machine.state() == WindowState::Minimized) return;
+
+            if (wrapper->state_machine.state() == WindowState::Normal) {
+                int32_t cur_w = wrapper->toplevel->base->current.geometry.width;
+                int32_t cur_h = wrapper->toplevel->base->current.geometry.height;
+                if (cur_w <= 0) cur_w = 800;
+                if (cur_h <= 0) cur_h = 600;
+                wrapper->state_machine.update_floating_geometry(
+                    wrapper->scene_tree->node.x,
+                    wrapper->scene_tree->node.y,
+                    cur_w,
+                    cur_h
+                );
+            }
+
+            wrapper->state_machine.request_minimize();
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+            log::info("[Window] Minimized toplevel — scene node disabled");
+
+            if (m_active_toplevel == wrapper) {
+                m_active_toplevel = nullptr;
+                ToplevelWrapper* next_focus = nullptr;
+                for (auto it = m_toplevels.rbegin(); it != m_toplevels.rend(); ++it) {
+                    if (it->get() != wrapper && it->get()->state_machine.state() != WindowState::Minimized) {
+                        next_focus = it->get();
+                        break;
+                    }
+                }
+                focus_toplevel(next_focus);
+            }
+        } else {
+            if (wrapper->state_machine.state() != WindowState::Minimized) return;
+
+            wrapper->state_machine.request_restore();
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+            log::info("[Window] Restored toplevel — scene node enabled");
+            focus_toplevel(wrapper);
+        }
+    }
+
     static void set_buffer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
         double opacity = *static_cast<double*>(user_data);
-        wlr_scene_buffer_set_opacity(buffer, opacity);
+        wlr_scene_buffer_set_opacity(buffer, static_cast<float>(opacity));
     }
 
     static int handle_fade_out(void* data) {
         auto* wrapper = static_cast<ToplevelWrapper*>(data);
-        if (!wrapper->is_closing) return 0;
+        if (!wrapper || !wrapper->is_closing) return 0;
         
         wrapper->opacity -= 0.15; // 100ms total roughly
         if (wrapper->opacity <= 0.0) {
@@ -681,6 +846,7 @@ private:
             return;
         }
         m_active_toplevel->is_closing = true;
+        m_active_toplevel->state_machine.mark_closing();
         m_active_toplevel->fade_timer = wl_event_loop_add_timer(
             wl_display_get_event_loop(m_display),
             handle_fade_out,
@@ -693,7 +859,12 @@ private:
     void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
         if (wrapper->is_fullscreen == fullscreen) {
             if (fullscreen && wrapper->scene_tree) {
-                wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+                struct wlr_output* out = get_output_for_toplevel(wrapper);
+                struct wlr_box out_box{0, 0, 0, 0};
+                if (out && m_output_layout) {
+                    wlr_output_layout_get_box(m_output_layout, out, &out_box);
+                }
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, out_box.x, out_box.y);
             }
             wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
             return;
@@ -707,16 +878,17 @@ private:
                 wrapper->saved_height = wrapper->toplevel->base->current.geometry.height;
                 if (wrapper->saved_width <= 0) wrapper->saved_width = 800;
                 if (wrapper->saved_height <= 0) wrapper->saved_height = 600;
+                wrapper->state_machine.update_floating_geometry(wrapper->saved_x, wrapper->saved_y, wrapper->saved_width, wrapper->saved_height);
             }
-            struct wlr_box output_box = {0, 0, 1280, 800};
-            if (!m_outputs.empty()) {
-                struct wlr_output* out = m_outputs.front()->get_wlr_output();
-                if (out) {
-                    wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
-                }
+            struct wlr_output* out = get_output_for_toplevel(wrapper);
+            struct wlr_box output_box = {0, 0, 0, 0};
+            if (out && m_output_layout) {
+                wlr_output_layout_get_box(m_output_layout, out, &output_box);
+                wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
             }
-            log::info("[Window] Fullscreen window to {}x{}", output_box.width, output_box.height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+            wrapper->state_machine.request_fullscreen(WindowBox{output_box.x, output_box.y, output_box.width, output_box.height});
+            log::info("[Window] Fullscreen window to {}x{} at ({}, {})", output_box.width, output_box.height, output_box.x, output_box.y);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, output_box.x, output_box.y);
             wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, true);
             wlr_xdg_toplevel_set_size(wrapper->toplevel, output_box.width, output_box.height);
         } else {
@@ -724,10 +896,12 @@ private:
                 wrapper->is_maximized = false; // reset flag to trigger correct resize logic
                 toplevel_set_maximized(wrapper, true);
             } else {
-                log::info("[Window] Restore fullscreen window to {}x{}", wrapper->saved_width, wrapper->saved_height);
-                wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->saved_x, wrapper->saved_y);
+                wrapper->state_machine.request_restore();
+                const auto& norm = wrapper->state_machine.geometry().normal_geom;
+                log::info("[Window] Restore fullscreen window to {}x{} at ({}, {})", norm.width, norm.height, norm.x, norm.y);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, norm.x, norm.y);
                 wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, false);
-                wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
+                wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
             }
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
@@ -824,6 +998,22 @@ private:
         log::info("[XDGShell] Toplevel mapped — app_id='{}' surface={}",
                   app_id, static_cast<void*>(surface));
 
+        // Initialize state machine with initial mapped position and geometry
+        int32_t init_w = wrapper->toplevel->base->current.geometry.width;
+        int32_t init_h = wrapper->toplevel->base->current.geometry.height;
+        if (init_w <= 0) init_w = 800;
+        if (init_h <= 0) init_h = 600;
+        wrapper->state_machine.update_floating_geometry(
+            wrapper->scene_tree->node.x,
+            wrapper->scene_tree->node.y,
+            init_w,
+            init_h
+        );
+        struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
+        if (out) {
+            wrapper->state_machine.set_assigned_output(out);
+        }
+
         // If the lock screen just connected, track surface pointer and mark session locked
         if (std::string(app_id) == "lock" || std::string(app_id) == "tinexus-lock") {
             log::info("[XDGShell] Lock screen mapped — m_lock_surface={} session LOCKED", static_cast<void*>(surface));
@@ -868,22 +1058,39 @@ private:
     static void handle_toplevel_request_minimize(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
-        // Minimize = hide the scene node. There is no dock/taskbar yet, so this
-        // is a "hide-only" minimize. The user can re-open from Pulse.
-        if (wrapper->scene_tree) {
-            if (TinexusServer::instance()) {
-                TinexusServer::instance()->trigger_minimize(reinterpret_cast<uint64_t>(wrapper->toplevel->base->surface));
-            }
-        }
+        log::info("[XDGShell] Request minimize for toplevel");
+        wrapper->backend->toplevel_set_minimized(wrapper, true);
         wlr_xdg_surface_schedule_configure(toplevel->base);
     }
 
     static void handle_toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
         WlrootsBackend* backend = wrapper->backend;
-        struct wlr_surface* surface = wrapper->toplevel->base->surface;
+        struct wlr_surface* surface = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->surface : nullptr;
 
-        const bool was_lock = (surface == backend->m_lock_surface);
+        log::info("[XDGShell] handle_toplevel_destroy for wrapper={}", static_cast<void*>(wrapper));
+
+        // 1. Cancel/disarm timers (F-03 safety)
+        if (wrapper->fade_timer != nullptr) {
+            wl_event_source_remove(wrapper->fade_timer);
+            wrapper->fade_timer = nullptr;
+            log::info("[XDGShell] Disarmed fade_timer during toplevel destruction");
+        }
+
+        // 2. Clear/release grabs (F-03 safety)
+        if (backend->m_grabbed_toplevel == wrapper) {
+            backend->m_grabbed_toplevel = nullptr;
+            backend->m_cursor_mode = CursorMode::Passthrough;
+            log::info("[XDGShell] Released cursor grab during toplevel destruction");
+        }
+
+        // 3. Cancel/remove references to the real wrapper
+        if (backend->m_active_toplevel == wrapper) {
+            backend->m_active_toplevel = nullptr;
+        }
+        wrapper->state_machine.mark_closing();
+
+        const bool was_lock = (surface && surface == backend->m_lock_surface);
         if (was_lock) {
             log::info("[XDGShell] Lock screen destroyed — marking session UNLOCKED atomically");
             backend->m_is_locked = false;
@@ -891,25 +1098,27 @@ private:
             backend->set_layer_surfaces_enabled(true);
         }
 
-        if (backend->m_active_toplevel == wrapper) {
-            backend->m_active_toplevel = nullptr;
+        // 4. Remove compositor registries / focus references
+        if (surface) {
+            if (FocusManager::instance().keyboard_focus() == surface) {
+                FocusManager::instance().set_keyboard_focus(nullptr);
+            }
+            if (FocusManager::instance().pointer_surface() == surface) {
+                FocusManager::instance().update_pointer_focus(PickResult{nullptr, 0.0, 0.0}, 0);
+            }
         }
 
-        // Defend against memory reuse bug: clear focus if this was the focused surface
-        if (FocusManager::instance().keyboard_focus() == surface) {
-            FocusManager::instance().set_keyboard_focus(nullptr);
-        }
+        // Remove wl_listeners safely and idempotently
+        if (wrapper->map.link.next != nullptr) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
+        if (wrapper->commit.link.next != nullptr) { wl_list_remove(&wrapper->commit.link); wrapper->commit.link.next = nullptr; }
+        if (wrapper->destroy.link.next != nullptr) { wl_list_remove(&wrapper->destroy.link); wrapper->destroy.link.next = nullptr; }
+        if (wrapper->request_maximize.link.next != nullptr) { wl_list_remove(&wrapper->request_maximize.link); wrapper->request_maximize.link.next = nullptr; }
+        if (wrapper->request_fullscreen.link.next != nullptr) { wl_list_remove(&wrapper->request_fullscreen.link); wrapper->request_fullscreen.link.next = nullptr; }
+        if (wrapper->request_minimize.link.next != nullptr) { wl_list_remove(&wrapper->request_minimize.link); wrapper->request_minimize.link.next = nullptr; }
+        if (wrapper->request_move.link.next != nullptr) { wl_list_remove(&wrapper->request_move.link); wrapper->request_move.link.next = nullptr; }
+        if (wrapper->request_resize.link.next != nullptr) { wl_list_remove(&wrapper->request_resize.link); wrapper->request_resize.link.next = nullptr; }
 
-        wl_list_remove(&wrapper->map.link);
-        wl_list_remove(&wrapper->commit.link);
-        wl_list_remove(&wrapper->destroy.link);
-        wl_list_remove(&wrapper->request_maximize.link);
-        wl_list_remove(&wrapper->request_fullscreen.link);
-        wl_list_remove(&wrapper->request_minimize.link);
-        wl_list_remove(&wrapper->request_move.link);
-        wl_list_remove(&wrapper->request_resize.link);
-
-        // Remove from list
+        // 5. Remove from list (destroys wrapper and its scene resources via unique_ptr)
         for (auto it = backend->m_toplevels.begin(); it != backend->m_toplevels.end(); ++it) {
             if (it->get() == wrapper) {
                 backend->m_toplevels.erase(it);
@@ -917,11 +1126,15 @@ private:
             }
         }
 
-        // Restore focus to top available toplevel immediately without gap
+        // 6. Restore focus to top available toplevel immediately without gap
         if (backend->m_active_toplevel == nullptr) {
             ToplevelWrapper* next_focus = nullptr;
-            if (!backend->m_toplevels.empty()) {
-                next_focus = backend->m_toplevels.back().get();
+            for (auto it = backend->m_toplevels.rbegin(); it != backend->m_toplevels.rend(); ++it) {
+                if (it->get()->state_machine.state() != WindowState::Minimized &&
+                    it->get()->state_machine.state() != WindowState::Closing) {
+                    next_focus = it->get();
+                    break;
+                }
             }
             backend->focus_toplevel(next_focus);
         }
@@ -1137,13 +1350,29 @@ private:
             int new_x = m_grab_geo_x + static_cast<int>(m_cursor->x - m_grab_x);
             int new_y = m_grab_geo_y + static_cast<int>(m_cursor->y - m_grab_y);
             wlr_scene_node_set_position(&m_grabbed_toplevel->scene_tree->node, new_x, new_y);
+            if (m_grabbed_toplevel->state_machine.state() == WindowState::Normal) {
+                m_grabbed_toplevel->state_machine.update_floating_geometry(
+                    new_x,
+                    new_y,
+                    m_grabbed_toplevel->state_machine.geometry().current_geom.width,
+                    m_grabbed_toplevel->state_machine.geometry().current_geom.height
+                );
+            }
             return;
         } else if (m_cursor_mode == CursorMode::Resize && m_grabbed_toplevel != nullptr) {
-            // Simplified resize: just update width/height
-            // Edge logic would normally be more complex (adjusting position for left/top edges)
             int new_width = m_grab_geobox.width + static_cast<int>(m_cursor->x - m_grab_x);
             int new_height = m_grab_geobox.height + static_cast<int>(m_cursor->y - m_grab_y);
-            wlr_xdg_toplevel_set_size(m_grabbed_toplevel->toplevel, new_width, new_height);
+            if (new_width > 50 && new_height > 50) {
+                wlr_xdg_toplevel_set_size(m_grabbed_toplevel->toplevel, new_width, new_height);
+                if (m_grabbed_toplevel->state_machine.state() == WindowState::Normal) {
+                    m_grabbed_toplevel->state_machine.update_floating_geometry(
+                        m_grabbed_toplevel->scene_tree->node.x,
+                        m_grabbed_toplevel->scene_tree->node.y,
+                        new_width,
+                        new_height
+                    );
+                }
+            }
             return;
         }
 
