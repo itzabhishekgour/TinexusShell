@@ -22,9 +22,7 @@ WaylandEventLoop& WaylandEventLoop::operator=(WaylandEventLoop&& other) noexcept
 }
 
 void WaylandEventLoop::wait() noexcept {
-    if (m_display != nullptr) {
-        wl_display_dispatch(m_display);
-    }
+    wait_timeout(-1);
 }
 
 void WaylandEventLoop::wait_timeout(int timeout_ms) noexcept {
@@ -50,7 +48,8 @@ void WaylandEventLoop::wait_timeout(int timeout_ms) noexcept {
             for (size_t i = 1; i < pfds.size(); ++i) {
                 if (pfds[i].revents) {
                     if (auto it = m_extra_fds.find(pfds[i].fd); it != m_extra_fds.end()) {
-                        it->second(pfds[i].fd, pfds[i].revents);
+                        auto cb = it->second;
+                        cb(pfds[i].fd, static_cast<uint32_t>(pfds[i].revents));
                     }
                 }
             }
@@ -84,7 +83,8 @@ void WaylandEventLoop::poll() noexcept {
             for (size_t i = 1; i < pfds.size(); ++i) {
                 if (pfds[i].revents) {
                     if (auto it = m_extra_fds.find(pfds[i].fd); it != m_extra_fds.end()) {
-                        it->second(pfds[i].fd, pfds[i].revents);
+                        auto cb = it->second;
+                        cb(pfds[i].fd, static_cast<uint32_t>(pfds[i].revents));
                     }
                 }
             }

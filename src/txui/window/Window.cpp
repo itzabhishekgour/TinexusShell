@@ -122,10 +122,13 @@ Window::~Window() {
     m_state = WindowState::Destroyed;
 }
 
-Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, bool layer_shell) noexcept {
+Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, bool layer_shell, std::string_view app_id) noexcept {
     uint32 win_id = s_next_window_id.fetch_add(1, std::memory_order_relaxed);
     auto* raw_win = new Window(width, height, title);
     raw_win->m_id = win_id;
+    if (!app_id.empty()) {
+        raw_win->m_app_id = app_id;
+    }
     Ref<Window> win(raw_win);
 
     auto conn_opt = wayland::WaylandConnection::connect();
@@ -191,11 +194,19 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
                             xdg_toplevel_add_listener(win->m_xdg_toplevel, &xdg_toplevel_listener, win.get());
                             xdg_toplevel_set_title(win->m_xdg_toplevel, win->m_title.c_str());
                             
-                            std::string app_id = "io.tinexus.shell";
-                            if (win->m_title == "Tinexus Lock") app_id = "tinexus-lock";
-                            else if (win->m_title == "Tinexus Launcher") app_id = "tinexus-launcher";
-                            else if (win->m_title == "Tinexus Settings") app_id = "tinexus-settings";
-                            xdg_toplevel_set_app_id(win->m_xdg_toplevel, app_id.c_str());
+                            std::string effective_app_id = "io.tinexus.shell";
+                            if (!win->m_app_id.empty()) {
+                                effective_app_id = win->m_app_id;
+                            } else if (win->m_title == "Tinexus Lock") effective_app_id = "tinexus-lock";
+                            else if (win->m_title == "Tinexus Launcher") effective_app_id = "tinexus-launcher";
+                            else if (win->m_title == "Tinexus Settings") effective_app_id = "tinexus-settings";
+                            else if (win->m_title == "About Tinexus" || win->m_title == "Tinexus About") effective_app_id = "tinexus-about";
+                            else if (win->m_title == "Activity Monitor" || win->m_title == "Tinexus Activity Monitor") effective_app_id = "tinexus-monitor";
+                            else if (win->m_title == "App Store" || win->m_title == "Tinexus Store") effective_app_id = "tinexus-store";
+                            else if (win->m_title == "Tinexus Terminal") effective_app_id = "tinexus-terminal";
+                            else if (win->m_title == "tinexus-files" || win->m_title == "Tinexus Files") effective_app_id = "tinexus-files";
+                            win->m_app_id = effective_app_id;
+                            xdg_toplevel_set_app_id(win->m_xdg_toplevel, effective_app_id.c_str());
                         }
                     }
                 }
@@ -220,7 +231,7 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
 }
 
 bool Window::poll_event(Event& out_event) noexcept {
-    if (m_event_loop.has_value()) {
+    if (m_events.empty() && m_event_loop.has_value()) {
         m_event_loop->poll();
     }
     if (!m_events.empty()) {
@@ -324,7 +335,7 @@ void Window::present(const Rect& damage) noexcept {
         m_tick_callback();
     }
 
-    if (!m_frame_ready) {
+    if (!m_needs_repaint || !m_frame_ready) {
         return;
     }
 
@@ -347,6 +358,7 @@ void Window::present(const Rect& damage) noexcept {
     m_backend.execute(m_command_buffer, *m_render_target);
     m_command_buffer.clear();
     m_frame_ready = false;
+    m_needs_repaint = false;
 
     if (m_connection.has_value()) {
         auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
@@ -370,7 +382,9 @@ void Window::close() noexcept {
 }
 
 void Window::on_configure(uint32 width, uint32 height) noexcept {
+    const bool was_configured = m_configured;
     m_configured = true;
+
     if (width == 0 || height == 0) {
         return;
     }
@@ -378,17 +392,23 @@ void Window::on_configure(uint32 width, uint32 height) noexcept {
     // For layer surfaces anchored TOP|LEFT|RIGHT, the compositor sends the
     // full output width as the configure width — use it to keep Aura centered.
     if (m_layer_surface && width > m_width) {
-        m_output_width = static_cast<int32_t>(width);
-        const int32_t side_margin = (m_output_width - static_cast<int32_t>(m_width)) / 2;
-        const int32_t clamped = side_margin > 0 ? side_margin : 0;
-        zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
+        if (m_output_width != static_cast<int32_t>(width)) {
+            m_output_width = static_cast<int32_t>(width);
+            const int32_t side_margin = (m_output_width - static_cast<int32_t>(m_width)) / 2;
+            const int32_t clamped = side_margin > 0 ? side_margin : 0;
+            zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
+            m_needs_repaint = true;
+        } else if (!was_configured) {
+            m_needs_repaint = true;
+        }
         // Don't update m_width — our actual content width stays at m_width (pill size).
         return;
     }
 
-    if (width != m_width || height != m_height) {
+    if (!was_configured || width != m_width || height != m_height) {
         m_width = width;
         m_height = height;
+        m_needs_repaint = true;
 
         if (m_root_widget != nullptr) {
             m_root_widget->mark_needs_measure();
@@ -438,6 +458,10 @@ void Window::on_frame_ready() noexcept {
 }
 
 void Window::push_event(const Event& event) noexcept {
+    if (event.type != EventType::FrameReady) {
+        m_needs_repaint = true;
+    }
+
     if (m_event_queue_capacity > 0) {
         while (m_events.size() >= m_event_queue_capacity) {
             m_events.pop_front(); // Drop oldest
@@ -450,6 +474,7 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
     if (m_width == width && m_height == height) return;
     m_width = width;
     m_height = height;
+    m_needs_repaint = true;
 
     if (m_render_target) {
         auto* wayland_target = static_cast<WaylandRenderTarget*>(m_render_target.get());

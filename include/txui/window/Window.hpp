@@ -60,6 +60,8 @@ private:
     Ref<Widget> m_root_widget{nullptr};
     bool m_frame_ready{true};
     bool m_configured{false};
+    bool m_needs_repaint{true};
+    std::string m_app_id;
 
     std::optional<wayland::WaylandConnection> m_connection;
     std::optional<wayland::WaylandEventLoop> m_event_loop;
@@ -94,7 +96,14 @@ public:
 
     // Creates a new production Wayland window. Returns Ref<Window> per intrusive Object ref-counting rule.
     [[nodiscard]] static Ref<Window> create(
-        uint32 width, uint32 height, std::string_view title = "Tinexus Application", bool layer_shell = false) noexcept;
+        uint32 width, uint32 height, std::string_view title = "Tinexus Application",
+        bool layer_shell = false, std::string_view app_id = "") noexcept;
+
+    void request_repaint() noexcept { m_needs_repaint = true; }
+    [[nodiscard]] bool needs_repaint() const noexcept { return m_needs_repaint; }
+
+    void set_app_id(std::string_view app_id) noexcept { m_app_id = app_id; }
+    [[nodiscard]] std::string_view app_id() const noexcept { return m_app_id; }
 
     void resize(uint32 width, uint32 height) noexcept;
 
