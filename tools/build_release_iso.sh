@@ -252,6 +252,28 @@ EOF
         done
     fi
 
+    # Stage Mesa DRI drivers, Gallium, and EGL ICD for Intel UHD 630 / Iris / AMD hardware rendering
+    info "Staging Mesa DRI drivers, Gallium runtime, and EGL ICD..."
+    mkdir -p "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri" "$ROOTFS_DIR/usr/share/glvnd/egl_vendor.d"
+    ln -sf x86_64-linux-gnu/dri "$ROOTFS_DIR/usr/lib/dri" 2>/dev/null || true
+    if [ -f "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]; then
+        cp -L "/usr/share/glvnd/egl_vendor.d/50_mesa.json" "$ROOTFS_DIR/usr/share/glvnd/egl_vendor.d/"
+    fi
+    if [ -d "/usr/lib/x86_64-linux-gnu/dri" ]; then
+        cp -a /usr/lib/x86_64-linux-gnu/dri/* "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri/" 2>/dev/null || true
+    fi
+    for mesa_lib in /usr/lib/x86_64-linux-gnu/libEGL_mesa.so* /usr/lib/x86_64-linux-gnu/libgallium-*.so*; do
+        if [ -e "$mesa_lib" ]; then
+            cp -a "$mesa_lib" "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/"
+            ldd "$mesa_lib" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+            ldd "$mesa_lib" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
+                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
+            done
+        fi
+    done
+
     info "Staging AppImage support (FUSE3 and tx-appimage)..."
     if [ -f "/usr/bin/fusermount3" ]; then
         mkdir -p "$ROOTFS_DIR/usr/bin"
@@ -532,6 +554,24 @@ EOF_DBUS_POL
         done
         success "Staged 70+ Chrome library dependencies."
     fi
+
+    # Stage Mesa DRI drivers (iris_dri.so, etc.) and Gallium runtime for Intel/hardware acceleration
+    info "Staging Mesa DRI graphics drivers and Gallium runtime..."
+    if [ -d "/usr/lib/x86_64-linux-gnu/dri" ]; then
+        mkdir -p "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri"
+        cp -a /usr/lib/x86_64-linux-gnu/dri/* "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri/" 2>/dev/null || true
+    fi
+    for gallium in /usr/lib/x86_64-linux-gnu/libgallium-*.so*; do
+        if [ -e "$gallium" ]; then
+            cp -a "$gallium" "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
+        fi
+    done
+    for egl_mesa in /usr/lib/x86_64-linux-gnu/libEGL_mesa.so*; do
+        if [ -e "$egl_mesa" ]; then
+            cp -a "$egl_mesa" "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
+        fi
+    done
+    success "Staged Mesa DRI drivers and Gallium runtime."
 
     # Locale — foot uses LC_ALL/LANG; stage minimal C.UTF-8
     info "Staging locale data (C.UTF-8)..."
