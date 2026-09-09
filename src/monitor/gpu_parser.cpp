@@ -54,12 +54,21 @@ GpuMetrics GpuParser::parse_gpu(const std::string& base_drm) {
                 gpu.device_name = "Intel Graphics";
                 // Real Intel GPU frequency from sysfs
                 fs::path cur_freq = entry.path() / "gt_act_freq_mhz";
+                fs::path min_freq = entry.path() / "gt_min_freq_mhz";
                 fs::path max_freq = entry.path() / "gt_max_freq_mhz";
                 if (fs::exists(cur_freq) && fs::exists(max_freq)) {
                     std::ifstream cf(cur_freq);
                     std::ifstream mf(max_freq);
-                    int cur = 0, max = 0;
-                    if ((cf >> cur) && (mf >> max) && max > 0) {
+                    int cur = 0, max = 0, min = 0;
+                    if (fs::exists(min_freq)) {
+                        std::ifstream min_f(min_freq);
+                        min_f >> min;
+                    }
+                    if ((cf >> cur) && (mf >> max) && max > min) {
+                        float load = (static_cast<float>(cur - min) / static_cast<float>(max - min)) * 100.0f;
+                        gpu.busy_percent = std::clamp(load, 0.0f, 100.0f);
+                        gpu.telemetry_status = "Clock: " + std::to_string(cur) + " MHz (Idle: " + std::to_string(min) + " MHz, Max: " + std::to_string(max) + " MHz)";
+                    } else if ((cf >> cur) && (mf >> max) && max > 0) {
                         gpu.busy_percent = (static_cast<float>(cur) / static_cast<float>(max)) * 100.0f;
                         gpu.telemetry_status = "Clock: " + std::to_string(cur) + " / " + std::to_string(max) + " MHz";
                     }

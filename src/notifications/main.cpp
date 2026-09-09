@@ -92,11 +92,15 @@ int main() {
         auto delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time);
         last_time = now;
 
-        stack_widget->update(delta_ms);
-        window->present();
-
-        // 60 FPS when animations/bubbles are active, 100ms idle poll when empty
-        window->wait_timeout(stack_widget->has_active_bubbles() ? 16 : 100);
+        if (stack_widget->has_active_bubbles()) {
+            stack_widget->update(delta_ms);
+            window->request_repaint();
+            window->present();
+            window->wait_timeout(16);
+        } else {
+            window->present();
+            window->wait_timeout(100);
+        }
     }
 
     log::info("[Notifications] Daemon shut down cleanly.");
