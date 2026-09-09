@@ -7,7 +7,7 @@ namespace tinexus::hardware {
 struct DisplayInfo {
     std::string connector_name{"eDP-1"};
     std::string resolution{"1920x1080"};
-    std::string refresh_rate{"60.00 Hz"};
+    std::string refresh_rate{"Vsync"};
     std::string formatted_line;
     bool connected{false};
 };

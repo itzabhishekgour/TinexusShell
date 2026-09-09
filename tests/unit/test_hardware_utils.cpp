@@ -2,6 +2,7 @@
 #include <common/BacklightUtils.hpp>
 #include <common/AudioUtils.hpp>
 #include <common/DisplayUtils.hpp>
+#include <common/RuntimePaths.hpp>
 #include <cassert>
 #include <iostream>
 #include <fstream>
@@ -162,6 +163,28 @@ void test_display_utils_mock() {
     std::cout << "  -> Compositor version string: " << comp_ver << std::endl;
 
     std::filesystem::remove_all(mock_drm);
+
+    // Test live compositor display state parsing (e.g. 1920x1080 @ 120.02 Hz on ASUS TUF)
+    std::string run_dir = tinexus::common::RuntimePaths::get_runtime_dir();
+    tinexus::common::RuntimePaths::ensure_runtime_dir();
+    std::string test_disp_file = run_dir + "/display";
+    {
+        std::ofstream df(test_disp_file);
+        df << "connector=eDP-1\n";
+        df << "width=1920\n";
+        df << "height=1080\n";
+        df << "refresh_mhz=120020\n";
+        df << "refresh_hz=120.02\n";
+    }
+    auto live_disp = DisplayUtils::get_primary_display();
+    assert(live_disp.connected);
+    assert(live_disp.connector_name == "eDP-1");
+    assert(live_disp.resolution == "1920x1080");
+    assert(live_disp.refresh_rate == "120.02 Hz");
+    assert(live_disp.formatted_line.find("1920 × 1080 @ 120.02 Hz") != std::string::npos);
+    std::cout << "  -> Live compositor display parsing test PASSED: " << live_disp.formatted_line << std::endl;
+    std::filesystem::remove(test_disp_file);
+
     std::cout << "  -> DisplayUtils mock test PASSED" << std::endl;
 }
 
