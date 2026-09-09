@@ -24,6 +24,8 @@ public:
     virtual void shutdown() = 0;
     virtual void close_active_window() noexcept = 0;
     virtual void focus_app(const std::string& app_id) noexcept {}
+    virtual bool has_app(const std::string& app_id) const noexcept { return false; }
+    virtual bool toggle_launcher() noexcept { return false; }
 
     virtual struct wl_display* display() = 0;
     [[nodiscard]] virtual BackendType type() const noexcept = 0;

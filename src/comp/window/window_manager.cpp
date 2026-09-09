@@ -66,6 +66,15 @@ void WindowManager::tick_animations(double dt) {
     }
 }
 
+bool WindowManager::has_active_animations() const noexcept {
+    for (const auto& [id, win] : m_windows) {
+        if (win->m_opacity_anim.is_running() || win->m_scale_anim.is_running()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 uint64_t WindowManager::register_window(uint64_t surface_id, const std::string& app_id, const std::string& title) {
     auto win = create_window(surface_id, app_id);
     win->toplevel.set_title(title);

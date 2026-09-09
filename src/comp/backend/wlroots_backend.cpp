@@ -1,8 +1,11 @@
 #include "comp/backend/backend.hpp"
 #include "common/logger.hpp"
+#include "common/RuntimePaths.hpp"
 #include "comp/output/output.hpp"
 #include <vector>
 #include <memory>
+#include <filesystem>
+#include <fstream>
 
 extern "C" {
 #include <wayland-server-core.h>
@@ -10,6 +13,8 @@ extern "C" {
 #include <wlr/util/log.h>
 #include <wlr/types/wlr_shm.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/render/gles2.h>
+#include <wlr/render/pixman.h>
 #include <wlr/render/allocator.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_subcompositor.h>
@@ -125,6 +130,34 @@ public:
             log::error("[Renderer] Failed to autocreate wlroots renderer.");
             return false;
         }
+
+        std::string active_renderer_str = "pixman";
+        if (wlr_renderer_is_gles2(m_wlr_renderer)) {
+            active_renderer_str = "gles2";
+            log::info("[Renderer] wlroots active renderer: OpenGL ES 2 (Hardware Accelerated)");
+        } else if (wlr_renderer_is_pixman(m_wlr_renderer)) {
+            active_renderer_str = "pixman";
+            log::warn("[Renderer] wlroots active renderer: Pixman (Software Rasterizer) — Hardware acceleration not available or failed");
+        } else {
+            active_renderer_str = "custom";
+            log::info("[Renderer] wlroots active renderer: Custom / Autocreated");
+        }
+
+        // Publish live active renderer state to runtime dir and /run/tinexus/renderer so UI profilers
+        // (About Tinexus, Settings, Monitor) can authoritatively read live compositor state
+        try {
+            tinexus::common::RuntimePaths::ensure_runtime_dir();
+            std::string run_path = tinexus::common::RuntimePaths::get_runtime_dir() + "/renderer";
+            std::ofstream rf(run_path);
+            if (rf.is_open()) {
+                rf << active_renderer_str << "\n";
+            }
+            std::filesystem::create_directories("/run/tinexus");
+            std::ofstream rf_legacy("/run/tinexus/renderer");
+            if (rf_legacy.is_open()) {
+                rf_legacy << active_renderer_str << "\n";
+            }
+        } catch (...) {}
 
         wlr_renderer_init_wl_display(m_wlr_renderer, m_display);
 
@@ -328,6 +361,13 @@ private:
     };
     std::vector<std::unique_ptr<KeyboardWrapper>> m_keyboards;
 
+    struct PointerWrapper {
+        struct wl_listener destroy;
+        struct wlr_input_device* device;
+        WlrootsBackend* backend;
+    };
+    std::vector<std::unique_ptr<PointerWrapper>> m_pointers;
+
     // Session lock state — when true, ALL global shortcuts are suppressed
     // and keyboard input goes exclusively to the lock client
     bool m_is_locked{false};
@@ -449,12 +489,14 @@ private:
 
         wrapper->commit.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, commit);
-            struct wlr_box full_area = {0, 0, 0, 0};
-            if (w->layer_surface->output) {
-                wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
+            if (w->layer_surface->initial_commit || w->layer_surface->current.committed != 0) {
+                struct wlr_box full_area = {0, 0, 0, 0};
+                if (w->layer_surface->output) {
+                    wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
+                }
+                struct wlr_box usable_area = full_area;
+                wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
             }
-            struct wlr_box usable_area = full_area;
-            wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
 
             log::debug("[LayerShell] commit.notify! namespace={}, actual_height={}",
                 w->layer_surface->wl_namespace ? w->layer_surface->wl_namespace : "null",
@@ -524,10 +566,7 @@ private:
                 return;
             }
         }
-        if (m_active_toplevel == wrapper) {
-            return;
-        }
-        if (m_active_toplevel != nullptr) {
+        if (m_active_toplevel != nullptr && m_active_toplevel != wrapper) {
             wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
         }
         m_active_toplevel = wrapper;
@@ -535,8 +574,9 @@ private:
             log::info("[Window] Focus window app_id='{}' title='{}'",
                       wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown",
                       wrapper->toplevel->title ? wrapper->toplevel->title : "untitled");
-            wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
             wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
             FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
         } else {
             FocusManager::instance().set_keyboard_focus(nullptr);
@@ -550,6 +590,26 @@ private:
                 break;
             }
         }
+    }
+
+    bool has_app(const std::string& app_id) const noexcept override {
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel->app_id && std::string(w->toplevel->app_id) == app_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool toggle_launcher() noexcept override {
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel->app_id && std::string(w->toplevel->app_id) == "tinexus-launcher") {
+                log::info("[Backend] Closing existing launcher instance via XDG close");
+                wlr_xdg_toplevel_send_close(w->toplevel);
+                return true;
+            }
+        }
+        return false;
     }
 
     void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
@@ -907,15 +967,15 @@ private:
                 break;
             case WLR_INPUT_DEVICE_POINTER:
                 log::info("[Input] Detected Pointer: {}", device->name);
-                wlr_cursor_attach_input_device(self->m_cursor, device);
+                self->setup_pointer(device);
                 break;
             case WLR_INPUT_DEVICE_TABLET:
                 log::info("[Input] Detected Tablet (Pointer): {}", device->name);
-                wlr_cursor_attach_input_device(self->m_cursor, device);
+                self->setup_pointer(device);
                 break;
             case WLR_INPUT_DEVICE_TOUCH:
                 log::info("[Input] Detected Touchscreen: {}", device->name);
-                wlr_cursor_attach_input_device(self->m_cursor, device);
+                self->setup_pointer(device);
                 break;
             case WLR_INPUT_DEVICE_TABLET_PAD:
                 log::info("[Input] Detected Tablet Pad: {}", device->name);
@@ -1009,12 +1069,50 @@ private:
             static_cast<uint32_t>(event->state));
     }
 
+    void setup_pointer(struct wlr_input_device* device) {
+        auto wrapper = std::make_unique<PointerWrapper>();
+        wrapper->device = device;
+        wrapper->backend = this;
+
+        wrapper->destroy.notify = handle_pointer_destroy;
+        wl_signal_add(&device->events.destroy, &wrapper->destroy);
+
+        wlr_cursor_attach_input_device(m_cursor, device);
+        m_pointers.push_back(std::move(wrapper));
+    }
+
+    static void handle_pointer_destroy(struct wl_listener* listener, void* data) {
+        PointerWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        WlrootsBackend* self = wrapper->backend;
+
+        log::info("[Input] Pointer device destroyed: '{}'", wrapper->device->name);
+        wlr_cursor_detach_input_device(self->m_cursor, wrapper->device);
+        wl_list_remove(&wrapper->destroy.link);
+
+        for (auto it = self->m_pointers.begin(); it != self->m_pointers.end(); ++it) {
+            if (it->get() == wrapper) {
+                self->m_pointers.erase(it);
+                break;
+            }
+        }
+    }
+
     static void handle_keyboard_destroy(struct wl_listener* listener, void* data) {
         KeyboardWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        WlrootsBackend* self = wrapper->backend;
+
         wl_list_remove(&wrapper->modifiers.link);
         wl_list_remove(&wrapper->key.link);
         wl_list_remove(&wrapper->destroy.link);
-        // Remove from m_keyboards logic (simplified for now)
+
+        if (self) {
+            for (auto it = self->m_keyboards.begin(); it != self->m_keyboards.end(); ++it) {
+                if (it->get() == wrapper) {
+                    self->m_keyboards.erase(it);
+                    break;
+                }
+            }
+        }
     }
 
     static void handle_cursor_motion(struct wl_listener* listener, void* data) {

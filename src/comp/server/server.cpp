@@ -7,6 +7,7 @@
 #include "comp/render/frame_scheduler.hpp"
 #include "comp/input/shortcut_engine.hpp"
 #include "common/logger.hpp"
+#include "common/RuntimePaths.hpp"
 #include "common/AudioUtils.hpp"
 #include "common/BacklightUtils.hpp"
 #include <thread>
@@ -109,15 +110,21 @@ bool TinexusServer::initialize() {
     }
 
     // Initialize FIFO command socket for simple IPC (e.g., focus requests)
+    tinexus::common::RuntimePaths::ensure_runtime_dir();
+    std::string fifo_path = tinexus::common::RuntimePaths::get_comp_fifo_path();
+    unlink(fifo_path.c_str());
+    mkfifo(fifo_path.c_str(), 0600);
+    int fifo_fd = open(fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+    if (fifo_fd >= 0) {
+        wl_event_loop_add_fd(m_wl_loop, fifo_fd, WL_EVENT_READABLE, handle_cmd_fifo, m_backend.get());
+    }
+
+    // Also support legacy /tinexus_comp_cmd in XDG_RUNTIME_DIR for backwards compatibility
     const char* xdg_runtime = getenv("XDG_RUNTIME_DIR");
     if (xdg_runtime) {
-        std::string fifo_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
-        unlink(fifo_path.c_str());
-        mkfifo(fifo_path.c_str(), 0600);
-        int fifo_fd = open(fifo_path.c_str(), O_RDWR | O_NONBLOCK);
-        if (fifo_fd >= 0) {
-            wl_event_loop_add_fd(m_wl_loop, fifo_fd, WL_EVENT_READABLE, handle_cmd_fifo, m_backend.get());
-        }
+        std::string legacy_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
+        unlink(legacy_path.c_str());
+        symlink(fifo_path.c_str(), legacy_path.c_str());
     }
 
     // 3. Add Wayland socket
@@ -135,18 +142,11 @@ bool TinexusServer::initialize() {
     // wl_shm is now initialized via wlr_shm_create_with_renderer() inside the backend
     log::info("TinexusServer: Successfully initialized wayland server on socket '{}'", m_display_socket);
 
-    // Setup primary display output (Mocked for now until Phase 2B)
-    OutputConfig primary_out{"HDMI-A-1", 1920, 1080, 60000, 1.0f, 0, 0, true};
-    OutputManager::instance().add_output(primary_out);
-
     // Setup cursor theme
     CursorManager::instance().set_theme("Adwaita", 24);
 
     // Setup workspace manager with 9 workspaces (Super+1–9)
     WorkspaceManager::instance().initialize_default_workspaces(9);
-
-    // Target frame rate
-    FrameScheduler::instance().set_target_refresh_rate(60);
 
     // ── Global shortcut handler ───────────────────────────────────────────────
     ShortcutEngine::instance().set_shortcut_callback(
@@ -156,6 +156,10 @@ bool TinexusServer::initialize() {
                 // SECURITY: never spawn launcher while screen is locked
                 if (m_backend->is_locked()) {
                     log::warn("[Server] Launcher blocked — screen is locked.");
+                    return;
+                }
+                if (m_backend->toggle_launcher()) {
+                    log::info("[Server] Ctrl+K: Closed active launcher");
                     return;
                 }
                 log::info("[Server] Ctrl+K: Spawning tinexus-launcher directly");

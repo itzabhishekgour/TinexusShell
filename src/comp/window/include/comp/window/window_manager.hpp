@@ -34,6 +34,7 @@ public:
     [[nodiscard]] size_t managed_windows_count() const noexcept { return m_windows.size(); }
 
     void tick_animations(double dt);
+    [[nodiscard]] bool has_active_animations() const noexcept;
 
     // Legacy unit test support
     uint64_t register_window(uint64_t surface_id, const std::string& app_id, const std::string& title);
