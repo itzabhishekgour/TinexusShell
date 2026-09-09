@@ -56,6 +56,9 @@ private:
     WindowState m_state{WindowState::Creating};
     bool m_should_close{false};
     bool m_is_maximized{false};
+    bool m_is_fullscreen{false};
+    bool m_is_activated{false};
+    bool m_is_tiled{false};
 
     Ref<Widget> m_root_widget{nullptr};
     bool m_frame_ready{true};
@@ -174,6 +177,10 @@ public:
 
     // Returns true if the window is currently in maximized state.
     [[nodiscard]] bool is_maximized() const noexcept { return m_is_maximized; }
+    [[nodiscard]] bool is_fullscreen() const noexcept { return m_is_fullscreen; }
+    [[nodiscard]] bool is_activated() const noexcept { return m_is_activated; }
+    [[nodiscard]] bool is_tiled() const noexcept { return m_is_tiled; }
+    void set_xdg_states(bool maximized, bool fullscreen, bool activated, bool tiled) noexcept;
 
     void close() noexcept;
 

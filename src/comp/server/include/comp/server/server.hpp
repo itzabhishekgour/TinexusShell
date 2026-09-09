@@ -32,6 +32,8 @@ public:
     void stop();
     
     void trigger_minimize(uint64_t surface_id);
+    void notify_window_minimized(const std::string& app_id);
+    void notify_window_restored(const std::string& app_id);
 
     [[nodiscard]] const std::string& wayland_display() const noexcept;
     [[nodiscard]] struct wl_display* display_handle() const noexcept { return m_wl_display; }

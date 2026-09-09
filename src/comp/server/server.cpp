@@ -526,4 +526,44 @@ void TinexusServer::trigger_minimize(uint64_t surface_id) {
     }
 }
 
+void TinexusServer::notify_window_minimized(const std::string& app_id) {
+    if (m_ipc_socket < 0) setup_ipc_connection();
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockNotifyPayload pld;
+        } __attribute__((packed)) msg;
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_MINIMIZED);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        msg.hdr.sequence_id = 0;
+        msg.hdr.flags = 0;
+        msg.hdr.checksum = 0;
+        strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
+        msg.pld.surface_id = 0;
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
+}
+
+void TinexusServer::notify_window_restored(const std::string& app_id) {
+    if (m_ipc_socket < 0) setup_ipc_connection();
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockNotifyPayload pld;
+        } __attribute__((packed)) msg;
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_RESTORED);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        msg.hdr.sequence_id = 0;
+        msg.hdr.flags = 0;
+        msg.hdr.checksum = 0;
+        strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
+        msg.pld.surface_id = 0;
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
+}
+
 } // namespace tinexus::comp

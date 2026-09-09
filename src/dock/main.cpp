@@ -21,7 +21,7 @@ int main() {
     window->set_layer_shell_config(
         txui::LayerType::Bottom, 
         txui::LayerAnchor::Bottom | txui::LayerAnchor::Left | txui::LayerAnchor::Right, 
-        72 // exclusive zone
+        96 // exclusive zone: 84px dock pill + 12px margin
     );
 
     auto dock = txui::make_ref<txui::DockWidget>();

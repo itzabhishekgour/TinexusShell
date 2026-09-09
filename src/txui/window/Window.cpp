@@ -2,6 +2,7 @@
 #include <txui/render/WaylandRenderTarget.hpp>
 #include <txui/render/CanvasRenderTarget.hpp>
 #include <txui/wayland/WaylandClipboard.hpp>
+#include <txui/widgets/ChromeWidget.hpp>
 #include <wayland-client.h>
 #include <xdg-shell-client-protocol.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -32,8 +33,32 @@ const struct xdg_surface_listener xdg_surface_listener = {
     .configure = handle_xdg_surface_configure
 };
 
-void handle_xdg_toplevel_configure(void* data, struct xdg_toplevel* /*toplevel*/, int32_t width, int32_t height, struct wl_array* /*states*/) {
+void handle_xdg_toplevel_configure(void* data, struct xdg_toplevel* /*toplevel*/, int32_t width, int32_t height, struct wl_array* states) {
     auto* win = static_cast<Window*>(data);
+    bool is_max = false;
+    bool is_fullscreen = false;
+    bool is_activated = false;
+    bool is_tiled = false;
+
+    if (states != nullptr && states->data != nullptr) {
+        uint32_t* state;
+        for (state = static_cast<uint32_t*>(states->data);
+             reinterpret_cast<const char*>(state) < (reinterpret_cast<const char*>(states->data) + states->size);
+             state++) {
+            if (*state == XDG_TOPLEVEL_STATE_MAXIMIZED) is_max = true;
+            else if (*state == XDG_TOPLEVEL_STATE_FULLSCREEN) is_fullscreen = true;
+            else if (*state == XDG_TOPLEVEL_STATE_ACTIVATED) is_activated = true;
+            else if (*state == XDG_TOPLEVEL_STATE_TILED_LEFT ||
+                     *state == XDG_TOPLEVEL_STATE_TILED_RIGHT ||
+                     *state == XDG_TOPLEVEL_STATE_TILED_TOP ||
+                     *state == XDG_TOPLEVEL_STATE_TILED_BOTTOM) {
+                is_tiled = true;
+            }
+        }
+    }
+
+    win->set_xdg_states(is_max, is_fullscreen, is_activated, is_tiled);
+
     if (width > 0 && height > 0) {
         win->on_configure(static_cast<uint32>(width), static_cast<uint32>(height));
     }
@@ -306,6 +331,30 @@ void Window::set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t e
             if ((anchors & LayerAnchor::Bottom) && !(anchors & LayerAnchor::Top)) {
                 zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, 0, 12, 0); 
             }
+        }
+
+        if (m_render_target) {
+            auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
+            if (wayland_target && wayland_target->surface().surface()) {
+                wl_surface_commit(wayland_target->surface().surface());
+            }
+        }
+        if (m_connection.has_value()) {
+            m_connection->flush();
+        }
+    }
+}
+
+void Window::set_xdg_states(bool maximized, bool fullscreen, bool activated, bool tiled) noexcept {
+    m_is_maximized = maximized;
+    m_is_fullscreen = fullscreen;
+    m_is_activated = activated;
+    m_is_tiled = tiled;
+
+    if (m_root_widget) {
+        auto* chrome = dynamic_cast<ChromeWidget*>(m_root_widget.get());
+        if (chrome) {
+            chrome->set_maximized(maximized || fullscreen || tiled);
         }
     }
 }

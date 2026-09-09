@@ -23,7 +23,8 @@ int main(int /*argc*/, char** /*argv*/) {
         [w = window.get()]() { w->on_close_request(); },
         [w = window.get()]() { w->minimize(); },
         [w = window.get()]() { w->set_maximized(!w->is_maximized()); },
-        [w = window.get()](uint32_t serial) { w->start_interactive_move(serial); }
+        [w = window.get()](uint32_t serial) { w->start_interactive_move(serial); },
+        [w = window.get()](uint32_t edges, uint32_t serial) { w->start_interactive_resize(edges, serial); }
     );
     window->set_root_widget(chrome);
 

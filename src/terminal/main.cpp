@@ -35,9 +35,10 @@ int main(int argc, char* argv[]) {
         "Tinexus Terminal",
         terminal_widget,
         [window = window.get()]() { window->close(); }, // on_close
-        []() {}, // on_minimize
-        []() {}, // on_maximize
-        [window = window.get()](uint32_t serial) { window->start_interactive_move(serial); } // on_move
+        [window = window.get()]() { window->minimize(); }, // on_minimize
+        [window = window.get()]() { window->set_maximized(!window->is_maximized()); }, // on_maximize
+        [window = window.get()](uint32_t serial) { window->start_interactive_move(serial); }, // on_move
+        [window = window.get()](uint32_t edges, uint32_t serial) { window->start_interactive_resize(edges, serial); } // on_resize
     );
     window->set_root_widget(chrome);
 

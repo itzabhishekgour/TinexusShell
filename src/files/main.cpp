@@ -68,6 +68,10 @@ int main(int argc, char* argv[]) {
         // ── Move: initiate interactive drag via xdg_toplevel.move ─────────────
         [w = window.get()](uint32_t serial) {
             w->start_interactive_move(serial);
+        },
+        // ── Resize: initiate interactive resize via xdg_toplevel.resize ───────
+        [w = window.get()](uint32_t edges, uint32_t serial) {
+            w->start_interactive_resize(edges, serial);
         }
     );
     files_window->set_on_execute([&](const std::filesystem::path& path) {

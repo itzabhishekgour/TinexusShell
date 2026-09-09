@@ -12,14 +12,24 @@ constexpr double WINDOW_RADIUS = 11.0;
 // at a small offset/spread to create depth against the wallpaper
 constexpr Color SHADOW_COLOR{0, 0, 0, 55};
 
+constexpr double BORDER_HIT_THICKNESS = 8.0;
+
+// Wayland resize edge constants (matching xdg_toplevel and wlr_edges)
+constexpr uint32_t EDGE_TOP    = 1;
+constexpr uint32_t EDGE_BOTTOM = 2;
+constexpr uint32_t EDGE_LEFT   = 4;
+constexpr uint32_t EDGE_RIGHT  = 8;
+
 ChromeWidget::ChromeWidget(
     std::string_view title,
     Ref<Widget> content,
     std::function<void()> on_close,
     std::function<void()> on_minimize,
     std::function<void()> on_maximize,
-    std::function<void(uint32_t)> on_move
-) noexcept {
+    std::function<void(uint32_t)> on_move,
+    ResizeCallback on_resize
+) noexcept
+    : m_on_resize(std::move(on_resize)) {
     m_title_bar = make_ref<TitleBarWidget>(
         title,
         std::move(on_close),
@@ -52,33 +62,64 @@ void ChromeWidget::layout_override(const Rect& frame) noexcept {
 void ChromeWidget::paint_override(Painter& painter) const noexcept {
     const Rect f = frame();
 
-    // ── Drop shadow (client-side, painted before the window background) ──────
-    // A larger, offset rounded rect with low opacity simulates a soft shadow.
-    // This composites against the wallpaper behind our xdg_toplevel buffer.
-    const double shadow_offset = 3.0;
-    const double shadow_spread = 6.0;
-    painter.fill_rounded_rect(
-        Rect(f.x() - shadow_spread * 0.5 + shadow_offset,
-             f.y() - shadow_spread * 0.5 + shadow_offset,
-             f.width()  + shadow_spread,
-             f.height() + shadow_spread),
-        WINDOW_RADIUS + 2.0,
-        SHADOW_COLOR
-    );
+    if (m_is_maximized) {
+        // ── Maximized / Tiled Mode ─────────────────────────────────────────────
+        // Square corners (radius = 0), zero drop shadow spread, filling 100%
+        // of the allocated work area without any unwanted gaps/margins.
+        painter.fill_rect(
+            Rect(0.0, 0.0, f.width(), f.height()),
+            Color(10, 10, 14, 255)
+        );
+    } else {
+        // ── Normal Floating Mode ───────────────────────────────────────────────
+        // Drop shadow (client-side, painted before the window background)
+        const double shadow_offset = 3.0;
+        const double shadow_spread = 6.0;
+        painter.fill_rounded_rect(
+            Rect(f.x() - shadow_spread * 0.5 + shadow_offset,
+                 f.y() - shadow_spread * 0.5 + shadow_offset,
+                 f.width()  + shadow_spread,
+                 f.height() + shadow_spread),
+            WINDOW_RADIUS + 2.0,
+            SHADOW_COLOR
+        );
 
-    // ── Window background with rounded corners ───────────────────────────────
-    // The rounded rect clips all content pixels to give macOS-style corners.
-    painter.fill_rounded_rect(
-        Rect(0.0, 0.0, f.width(), f.height()),
-        WINDOW_RADIUS,
-        Color(10, 10, 14, 255)
-    );
+        // Window background with rounded corners
+        painter.fill_rounded_rect(
+            Rect(0.0, 0.0, f.width(), f.height()),
+            WINDOW_RADIUS,
+            Color(10, 10, 14, 255)
+        );
+    }
 
     // Paint children (FlexLayout → TitleBar + content)
     paint_children(painter);
 }
 
 bool ChromeWidget::handle_event(const Event& event) noexcept {
+    if (m_is_maximized) {
+        // Maximized windows do not initiate edge resize
+        return Widget::handle_event(event);
+    }
+
+    if (event.type == EventType::PointerMove) {
+        double px = event.pointer.x;
+        double py = event.pointer.y;
+        double w = frame().width();
+        double h = frame().height();
+
+        m_hovered_edge = 0;
+        if (px <= BORDER_HIT_THICKNESS) m_hovered_edge |= EDGE_LEFT;
+        if (px >= w - BORDER_HIT_THICKNESS) m_hovered_edge |= EDGE_RIGHT;
+        if (py <= BORDER_HIT_THICKNESS) m_hovered_edge |= EDGE_TOP;
+        if (py >= h - BORDER_HIT_THICKNESS) m_hovered_edge |= EDGE_BOTTOM;
+    } else if (event.type == EventType::PointerButtonPress) {
+        if (m_hovered_edge != 0 && m_on_resize && event.pointer.button == MouseButton::Left) {
+            m_on_resize(m_hovered_edge, event.pointer.serial);
+            return true;
+        }
+    }
+
     return Widget::handle_event(event);
 }
 

@@ -25,7 +25,7 @@
 #
 # USAGE: bash build_release_iso.sh [--smoke-test]
 # ==============================================================================
-set -euo pipefail
+set -e -u -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(dirname "$SCRIPT_DIR")}"
@@ -156,10 +156,10 @@ EOF
                 done
             fi
         fi
-    done < <(find "$BUILD_DIR/bin" -maxdepth 1 \( -type f -o -type l \) \( -name 'tinexus-*' -o -name 'libtinexus*.so*' \) -print0 2>/dev/null)
+    done < <(find "$BUILD_DIR/bin/" -maxdepth 1 \( -type f -o -type l \) \( -name 'tinexus-*' -o -name 'libtinexus*.so*' \) -print0 2>/dev/null)
     
     # Force copy all shared libraries and their version symlinks to /usr/lib to fix broken RUNPATHs
-    find "$BUILD_DIR/lib" -maxdepth 1 \( -type f -o -type l \) -name "libtinexus*.so*" -exec cp -a {} "$ROOTFS_DIR/usr/lib/" \; 2>/dev/null || true
+    find "$BUILD_DIR/lib/" -maxdepth 1 \( -type f -o -type l \) -name "libtinexus*.so*" -exec cp -a {} "$ROOTFS_DIR/usr/lib/" \; 2>/dev/null || true
     
     success "Staged $staged Tinexus ELF binaries and dependencies."
 

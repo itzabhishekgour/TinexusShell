@@ -579,14 +579,15 @@ void MonitorWidget::paint_processes_tab(Painter& p, const Rect& area) const noex
     p.fill_rounded_rect(table_card, 8.0, colors::CARD_BG);
     p.fill_rounded_rect(Rect(table_card.x(), table_card.y(), table_card.width(), 1.0), 0.0, colors::CARD_BORDER);
 
-    // Column X positions (with ample room for long usernames like systemd-resolve)
+    // Column X positions (responsive to table width)
+    const double table_w    = table_card.width();
     const double col_name   = table_card.x() + 16.0;
-    const double col_pid    = table_card.x() + 216.0;
-    const double col_user   = table_card.x() + 280.0;
-    const double col_cpu    = table_card.x() + 416.0;
-    const double col_mem    = table_card.x() + 496.0;
-    const double col_io     = table_card.x() + 596.0;
-    const double col_state  = table_card.x() + 700.0;
+    const double col_pid    = table_card.x() + std::max(200.0, table_w * 0.28);
+    const double col_user   = table_card.x() + std::max(270.0, table_w * 0.38);
+    const double col_cpu    = table_card.x() + std::max(390.0, table_w * 0.52);
+    const double col_mem    = table_card.x() + std::max(470.0, table_w * 0.64);
+    const double col_io     = table_card.x() + std::max(560.0, table_w * 0.77);
+    const double col_state  = table_card.x() + std::max(660.0, table_w * 0.89);
 
     // Header strip
     Rect th_rect(table_card.x() + 1.0, table_card.y() + 1.0, table_card.width() - 2.0, 32.0);
