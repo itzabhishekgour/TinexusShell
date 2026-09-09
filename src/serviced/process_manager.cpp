@@ -97,7 +97,7 @@ bool ProcessManager::start_service(const std::string& service_id) {
             setenv("WLR_LIBSEAT_BACKEND", "builtin", 1);
             setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
             unsetenv("WLR_BACKENDS");
-            setenv("WLR_RENDERER", "pixman", 1);
+            // Note: WLR_RENDERER and WLR_DRM_DEVICES are set authoritatively by serviced prior to launch
         } else {
             setenv("WAYLAND_DISPLAY", "wayland-0", 1);
         }

@@ -1,3 +1,8 @@
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
+pkg_check_modules(GBM REQUIRED IMPORTED_TARGET gbm)
+pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
+
 add_library(tinexus_common SHARED
     logger.cpp
     string_interner.cpp
@@ -10,6 +15,7 @@ add_library(tinexus_common SHARED
     AudioUtils.cpp
     DisplayUtils.cpp
     PlatformServices.cpp
+    GraphicsProbe.cpp
 )
 
 target_include_directories(tinexus_common PUBLIC
@@ -20,7 +26,12 @@ target_link_libraries(tinexus_common PRIVATE
     tinexus_warnings
     tinexus_sanitizers
 )
-target_link_libraries(tinexus_common PUBLIC systemd)
+target_link_libraries(tinexus_common PUBLIC
+    systemd
+    PkgConfig::DRM
+    PkgConfig::GBM
+    PkgConfig::EGL
+)
 
 set_target_properties(tinexus_common PROPERTIES
     VERSION ${PROJECT_VERSION}

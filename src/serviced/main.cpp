@@ -10,6 +10,7 @@
 #include "common/HardwareConfig.hpp"
 #include "common/AudioUtils.hpp"
 #include "common/BacklightUtils.hpp"
+#include "common/GraphicsProbe.hpp"
 #include <iostream>
 #include <fstream>
 #include <csignal>
@@ -317,13 +318,43 @@ int main(int argc, char** argv) {
     setenv("LANG",   "C.UTF-8", 1);
     setenv("LC_ALL", "C.UTF-8", 1);
 
+    // Generic Mesa / GLVND / GBM driver search paths for rootfs
+    setenv("LIBGL_DRIVERS_PATH", "/usr/lib/x86_64-linux-gnu/dri:/usr/lib/dri", 1);
+    setenv("GBM_BACKENDS_PATH", "/usr/lib/x86_64-linux-gnu/gbm", 1);
+    setenv("__EGL_VENDOR_LIBRARY_DIRS", "/usr/share/glvnd/egl_vendor.d", 1);
+
+    // Early Universal Hardware Discovery:
+    // Start udevd and trigger coldplug BEFORE evaluating graphics capabilities so that
+    // kernel drivers (xe, i915, amdgpu, etc.) and DRM device nodes (/dev/dri/card*) are populated.
+    run_udev_setup();
+
     // Wlroots compositor environment
     // WLR_DRM_NO_ATOMIC: Disable DRM atomic commits — virtio-gpu (QEMU) does not
     // support non-blocking atomic commits reliably, causing "Device or resource busy" errors.
     // Legacy commit path (setcrtc/setplane) is stable in QEMU.
     setenv("WLR_DRM_NO_ATOMIC", "1", 1);
     setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
-    setenv("WLR_RENDERER", "pixman", 1);
+
+    // Dynamic runtime graphics capability evaluation:
+    // Pre-flight check: probe candidate GPU hardware stack on primary KMS card node.
+    // If fully proven usable: set WLR_RENDERER=gles2 and WLR_DRM_DEVICES to the verified card node.
+    // If probe is uncertain / non-Intel: leave WLR_RENDERER and WLR_DRM_DEVICES UNSET so wlroots
+    // performs its native KMS auto-discovery and attempts GLES2 before any software fallback.
+    auto probe_result = tinexus::hardware::GraphicsProbe::evaluate();
+    if (probe_result.hardware_available) {
+        setenv("WLR_RENDERER", "gles2", 1);
+        if (!probe_result.selected_card_node.empty()) {
+            setenv("WLR_DRM_DEVICES", probe_result.selected_card_node.c_str(), 1);
+            tinexus::log::info("[graphics] Bound WLR_DRM_DEVICES to verified primary card: {}", probe_result.selected_card_node);
+        }
+        tinexus::log::info("[graphics] Hardware renderer capability probe succeeded (EGL {})", probe_result.egl_version);
+        tinexus::log::info("[graphics] Using hardware renderer (gles2)");
+    } else {
+        unsetenv("WLR_RENDERER");
+        unsetenv("WLR_DRM_DEVICES");
+        tinexus::log::warn("[graphics] Authoritative pre-flight probe did not lock hardware: {}", probe_result.reason);
+        tinexus::log::info("[graphics] Leaving WLR_RENDERER and WLR_DRM_DEVICES unset for wlroots native autocreate");
+    }
     // Use 'builtin' standalone libseat backend for root compositors (opens physical DRM & input devices)
     setenv("LIBSEAT_BACKEND", "builtin", 1);
     setenv("WLR_LOG_LEVEL", "DEBUG", 1);
@@ -520,7 +551,6 @@ int main(int argc, char** argv) {
     }
 
     tinexus::log::info("Platform Runtime Manager ready. Auto-spawning supervision tree...");
-    run_udev_setup();
     restore_hardware_state();
     
     // First, explicitly start dbus-daemon so we can poll for its socket

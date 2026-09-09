@@ -1587,3 +1587,14 @@ target_include_directories(unit_test_store_render PRIVATE
 target_link_libraries(unit_test_store_render PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_store_render COMMAND unit_test_store_render)
 
+add_executable(unit_test_graphics_probe
+    unit/test_graphics_probe.cpp
+)
+
+target_link_libraries(unit_test_graphics_probe PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME unit_test_graphics_probe COMMAND unit_test_graphics_probe)
