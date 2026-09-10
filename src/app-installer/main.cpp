@@ -4,10 +4,17 @@
 #include <txui/window/Window.hpp>
 #include <txui/widgets/ChromeWidget.hpp>
 #include <txui/input/Event.hpp>
+#include <txui/core/SingleInstance.hpp>
 
 int main(int /*argc*/, char** /*argv*/) {
     tinexus::log::set_component_name("tinexus-store");
     tinexus::log::info("Starting Tinexus App Store v{}", tinexus::VERSION_STRING);
+
+    txui::SingleInstance single_instance("tinexus-store");
+    if (!single_instance.is_primary()) {
+        single_instance.request_focus_primary();
+        return 0;
+    }
 
     auto window = txui::Window::create(960, 640, "App Store");
     if (!window || !window->is_wayland_connected()) {
