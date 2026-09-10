@@ -15,15 +15,15 @@
 
 namespace txui {
 
-// ── Design tokens ────────────────────────────────────────────────────────────
-static constexpr double BASE_SIZE       = 40.0;
-static constexpr double GAP             = 8.0;
-static constexpr double DOCK_PAD        = 8.0;
-static constexpr double DOCK_BOT_MARGIN = 6.0;
-static constexpr double PILL_RADIUS     = 18.0;
-static constexpr double ICON_RADIUS     = 10.0;
-static constexpr double MAX_SCALE       = 1.68;
-static constexpr double INFLUENCE_R     = 3.5 * BASE_SIZE;
+// ── Design tokens (derived from DockWidget definitions) ────────────────────────
+static constexpr double BASE_SIZE       = DockWidget::BASE_SIZE;
+static constexpr double GAP             = DockWidget::GAP;
+static constexpr double DOCK_PAD        = DockWidget::DOCK_PAD;
+static constexpr double DOCK_BOT_MARGIN = DockWidget::DOCK_BOT_MARGIN;
+static constexpr double PILL_RADIUS     = DockWidget::PILL_RADIUS;
+static constexpr double ICON_RADIUS     = DockWidget::ICON_RADIUS;
+static constexpr double MAX_SCALE       = DockWidget::MAX_SCALE;
+static constexpr double INFLUENCE_R     = DockWidget::INFLUENCE_R;
 
 DockWidget::DockWidget() {
     m_icons = {
@@ -81,13 +81,8 @@ void DockWidget::send_ipc(uint16_t msg_type, const std::string& app_id) {
 
 void DockWidget::spawn_app(const std::string& exec_cmd) {
     // Check single-instance applications before blind fork
-    std::string canonical_app_id;
-    if (exec_cmd.find("settings") != std::string::npos) canonical_app_id = "tinexus-settings";
-    else if (exec_cmd.find("about") != std::string::npos) canonical_app_id = "tinexus-about";
-    else if (exec_cmd.find("monitor") != std::string::npos) canonical_app_id = "tinexus-monitor";
-    else if (exec_cmd.find("store") != std::string::npos) canonical_app_id = "tinexus-store";
-
-    if (!canonical_app_id.empty() && txui::SingleInstance::is_app_running(canonical_app_id)) {
+    std::string canonical_app_id = txui::get_canonical_app_id(exec_cmd);
+    if (txui::is_single_instance_app(canonical_app_id) && txui::SingleInstance::is_app_running(canonical_app_id)) {
         txui::SingleInstance::focus_app(canonical_app_id);
         return;
     }

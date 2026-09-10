@@ -30,6 +30,29 @@ struct DockIconState {
 
 class DockWidget : public Widget {
 public:
+    // ── Design tokens ────────────────────────────────────────────────────────
+    static constexpr double BASE_SIZE          = 40.0;
+    static constexpr double GAP                = 8.0;
+    static constexpr double DOCK_PAD           = 8.0;
+    static constexpr double DOCK_BOT_MARGIN    = 8.0;
+    static constexpr double PILL_RADIUS        = 18.0;
+    static constexpr double ICON_RADIUS        = 10.0;
+    static constexpr double MAX_SCALE          = 1.68;
+    static constexpr double INFLUENCE_R        = 3.5 * BASE_SIZE;
+    static constexpr double INTENTIONAL_SPACING= 8.0;
+
+    [[nodiscard]] static constexpr int32_t pill_height() noexcept {
+        return static_cast<int32_t>(BASE_SIZE + DOCK_PAD * 2.0);
+    }
+
+    [[nodiscard]] static constexpr int32_t desired_exclusive_zone() noexcept {
+        return static_cast<int32_t>(DOCK_BOT_MARGIN + pill_height() + INTENTIONAL_SPACING);
+    }
+
+    [[nodiscard]] static constexpr int32_t window_height() noexcept {
+        return 120;
+    }
+
     DockWidget();
     ~DockWidget() override;
 

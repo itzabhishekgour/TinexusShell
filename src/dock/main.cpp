@@ -16,12 +16,12 @@ int main() {
     tinexus::log::set_component_name("dock");
     tinexus::log::info("tinexus-dock starting...");
 
-    auto window = txui::Window::create(1920, 120, "dock", true); // true = layer shell
+    auto window = txui::Window::create(800, txui::DockWidget::window_height(), "dock", true); // true = layer shell
     
     window->set_layer_shell_config(
         txui::LayerType::Bottom, 
         txui::LayerAnchor::Bottom | txui::LayerAnchor::Left | txui::LayerAnchor::Right, 
-        96 // exclusive zone: 84px dock pill + 12px margin
+        txui::DockWidget::desired_exclusive_zone()
     );
 
     auto dock = txui::make_ref<txui::DockWidget>();
@@ -41,7 +41,9 @@ int main() {
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_MINIMIZED),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_RESTORED),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED),
-                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION)
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_STARTED),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_CLOSED)
             };
             
             for (uint16_t t : sub_types) {
@@ -114,6 +116,14 @@ int main() {
                         } else {
                             dock_ptr->update_icon_state(p->app_id, txui::DockIconAppState::RunningBg);
                         }
+                        state_changed = true;
+                    } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_APP_STARTED)) {
+                        auto* p = static_cast<const DockNotifyPayload*>(payload);
+                        dock_ptr->update_icon_state(p->app_id, txui::DockIconAppState::RunningFocused);
+                        state_changed = true;
+                    } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_APP_CLOSED)) {
+                        auto* p = static_cast<const DockNotifyPayload*>(payload);
+                        dock_ptr->update_icon_state(p->app_id, txui::DockIconAppState::NotRunning);
                         state_changed = true;
                     } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_QUERY_ICON_POSITION)) {
                         auto* p = static_cast<const DockQueryIconPositionPayload*>(payload);
