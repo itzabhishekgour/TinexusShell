@@ -190,20 +190,16 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
                         ZWLR_LAYER_SHELL_V1_LAYER_TOP,
                         ns
                     );
+                    win->m_anchors = LayerAnchor::Top | LayerAnchor::Left | LayerAnchor::Right;
                     zwlr_layer_surface_v1_add_listener(win->m_layer_surface, &layer_surface_listener, win.get());
-                    zwlr_layer_surface_v1_set_size(win->m_layer_surface, width, height);
-                    // Anchor TOP+LEFT+RIGHT: compositor stretches the exclusive zone bar across
-                    // the full width. We then set left/right margins to center the pill.
-                    // margin = (output_width - pill_width) / 2; we use 1920 as default output
-                    // until the configure event arrives with the real output dimensions.
-                    // Use stored config or default to TOP + exclusive zone
+                    uint32_t init_w = ((win->m_anchors & LayerAnchor::Left) && (win->m_anchors & LayerAnchor::Right)) ? 0 : width;
+                    uint32_t init_h = ((win->m_anchors & LayerAnchor::Top) && (win->m_anchors & LayerAnchor::Bottom)) ? 0 : height;
+                    zwlr_layer_surface_v1_set_size(win->m_layer_surface, init_w, init_h);
                     zwlr_layer_surface_v1_set_anchor(win->m_layer_surface,
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
                         ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
-                    const int32_t side_margin = static_cast<int32_t>((1920 - static_cast<int32_t>(width)) / 2);
-                    const int32_t top_margin = (win->m_title == "Aura" || win->m_title == "TopBar" || win->m_title == "shell" || win->m_title == "tinexus-shell") ? 0 : 12;
-                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, top_margin, side_margin > 0 ? side_margin : 0, 0, side_margin > 0 ? side_margin : 0);
+                    zwlr_layer_surface_v1_set_margin(win->m_layer_surface, 0, 0, 0, 0);
                     zwlr_layer_surface_v1_set_keyboard_interactivity(win->m_layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
                     zwlr_layer_surface_v1_set_exclusive_zone(win->m_layer_surface, -1);
                 }
@@ -317,6 +313,7 @@ void Window::set_keyboard_interactivity(bool enable) noexcept {
 }
 
 void Window::set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t exclusive_zone) noexcept {
+    m_anchors = anchors;
     if (m_layer_surface) {
         uint32_t wl_anchors = 0;
         if (anchors & LayerAnchor::Top) wl_anchors |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
@@ -326,11 +323,14 @@ void Window::set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t e
         
         zwlr_layer_surface_v1_set_anchor(m_layer_surface, wl_anchors);
         zwlr_layer_surface_v1_set_exclusive_zone(m_layer_surface, exclusive_zone);
+
+        // Crucial Layer Shell rule: zero dimension tells compositor to stretch between opposite anchors
+        uint32_t req_w = ((anchors & LayerAnchor::Left) && (anchors & LayerAnchor::Right)) ? 0 : m_width;
+        uint32_t req_h = ((anchors & LayerAnchor::Top) && (anchors & LayerAnchor::Bottom)) ? 0 : m_height;
+        zwlr_layer_surface_v1_set_size(m_layer_surface, req_w, req_h);
         
         if (!m_has_custom_margins) {
-            if ((anchors & LayerAnchor::Bottom) && !(anchors & LayerAnchor::Top)) {
-                zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, 0, 12, 0); 
-            }
+            zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, 0, 0, 0);
         }
 
         if (m_render_target) {
@@ -368,6 +368,56 @@ void Window::set_layer_margins(int32_t top, int32_t right, int32_t bottom, int32
     if (m_layer_surface) {
         zwlr_layer_surface_v1_set_margin(m_layer_surface, top, right, bottom, left);
     }
+}
+
+void Window::set_input_region(const std::vector<Rect>& rects) noexcept {
+    m_has_custom_input_region = true;
+    m_input_region_rects = rects;
+
+    if (!m_connection.has_value() || !m_connection->is_valid() || !m_render_target) {
+        return;
+    }
+    auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
+    if (!wayland_target || !wayland_target->surface().surface()) {
+        return;
+    }
+    wl_compositor* compositor = m_connection->compositor();
+    if (!compositor) {
+        return;
+    }
+    struct wl_region* region = wl_compositor_create_region(compositor);
+    if (!region) {
+        return;
+    }
+    for (const auto& r : rects) {
+        int32_t rx = static_cast<int32_t>(r.x());
+        int32_t ry = static_cast<int32_t>(r.y());
+        int32_t rw = static_cast<int32_t>(r.width());
+        int32_t rh = static_cast<int32_t>(r.height());
+        if (rw > 0 && rh > 0) {
+            wl_region_add(region, rx, ry, rw, rh);
+        }
+    }
+    wl_surface_set_input_region(wayland_target->surface().surface(), region);
+    wl_region_destroy(region);
+    wl_surface_commit(wayland_target->surface().surface());
+    m_connection->flush();
+}
+
+void Window::clear_input_region() noexcept {
+    m_has_custom_input_region = false;
+    m_input_region_rects.clear();
+
+    if (!m_connection.has_value() || !m_connection->is_valid() || !m_render_target) {
+        return;
+    }
+    auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
+    if (!wayland_target || !wayland_target->surface().surface()) {
+        return;
+    }
+    wl_surface_set_input_region(wayland_target->surface().surface(), nullptr);
+    wl_surface_commit(wayland_target->surface().surface());
+    m_connection->flush();
 }
 
 void Window::set_tick_callback(std::function<void()> cb) noexcept {
@@ -419,9 +469,38 @@ void Window::present(const Rect& damage) noexcept {
                     wl_callback_add_listener(m_frame_callback, &frame_listener, this);
                 }
             }
+
+            // Atomic input-region synchronization: ensure custom or default full-bounds
+            // input region is sent alongside the buffer attachment in the same double-buffered transaction.
+            if (surf != nullptr) {
+                if (m_has_custom_input_region) {
+                    wl_compositor* compositor = m_connection->compositor();
+                    if (compositor != nullptr) {
+                        struct wl_region* region = wl_compositor_create_region(compositor);
+                        if (region != nullptr) {
+                            for (const auto& r : m_input_region_rects) {
+                                int32_t rx = static_cast<int32_t>(r.x());
+                                int32_t ry = static_cast<int32_t>(r.y());
+                                int32_t rw = static_cast<int32_t>(r.width());
+                                int32_t rh = static_cast<int32_t>(r.height());
+                                if (rw > 0 && rh > 0) {
+                                    wl_region_add(region, rx, ry, rw, rh);
+                                }
+                            }
+                            wl_surface_set_input_region(surf, region);
+                            wl_region_destroy(region);
+                        }
+                    }
+                } else {
+                    wl_surface_set_input_region(surf, nullptr);
+                }
+            }
+
             wayland_target->present(damage);
         }
         m_connection->flush();
+    } else {
+        m_frame_ready = true;
     }
 }
 
@@ -438,21 +517,6 @@ void Window::on_configure(uint32 width, uint32 height) noexcept {
         return;
     }
 
-    // For layer surfaces anchored TOP|LEFT|RIGHT, the compositor sends the
-    // full output width as the configure width — use it to keep Aura centered.
-    if (m_layer_surface && width > m_width) {
-        if (m_output_width != static_cast<int32_t>(width)) {
-            m_output_width = static_cast<int32_t>(width);
-            const int32_t side_margin = (m_output_width - static_cast<int32_t>(m_width)) / 2;
-            const int32_t clamped = side_margin > 0 ? side_margin : 0;
-            zwlr_layer_surface_v1_set_margin(m_layer_surface, 12, clamped, 0, clamped);
-            m_needs_repaint = true;
-        } else if (!was_configured) {
-            m_needs_repaint = true;
-        }
-        // Don't update m_width — our actual content width stays at m_width (pill size).
-        return;
-    }
 
     if (!was_configured || width != m_width || height != m_height) {
         m_width = width;
@@ -529,24 +593,12 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
         auto* wayland_target = static_cast<WaylandRenderTarget*>(m_render_target.get());
         if (wayland_target->resize(width, height)) {
             if (m_layer_surface) {
-                zwlr_layer_surface_v1_set_size(m_layer_surface, width, height);
-                // Recompute centering margin after resize so Aura stays top-center.
-                // m_output_width defaults to 1920 until configure event updates it.
-                const int32_t side_margin = static_cast<int32_t>((m_output_width - static_cast<int32_t>(width)) / 2);
-                const int32_t clamped = side_margin > 0 ? side_margin : 0;
-                const int32_t top_margin = (m_title == "Aura" || m_title == "TopBar" || m_title == "shell" || m_title == "tinexus-shell") ? 0 : 12;
+                uint32_t req_w = ((m_anchors & LayerAnchor::Left) && (m_anchors & LayerAnchor::Right)) ? 0 : width;
+                uint32_t req_h = ((m_anchors & LayerAnchor::Top) && (m_anchors & LayerAnchor::Bottom)) ? 0 : height;
+                zwlr_layer_surface_v1_set_size(m_layer_surface, req_w, req_h);
                 if (m_has_custom_margins) {
                     zwlr_layer_surface_v1_set_margin(m_layer_surface, m_margin_top, m_margin_right, m_margin_bottom, m_margin_left);
-                } else if (m_title == "dock") {
-                    zwlr_layer_surface_v1_set_margin(m_layer_surface, 0, clamped, 12, clamped);
-                } else {
-                    zwlr_layer_surface_v1_set_margin(m_layer_surface, top_margin, clamped, 0, clamped);
                 }
-                // NOTE: Do NOT commit here. The size/margin changes are Wayland
-                // pending state that will be atomically applied with the next pixel
-                // buffer commit in Window::present(). Committing here causes a
-                // duplicate commit per animation frame (double commit.notify in logs)
-                // and wastes compositor work on an empty/old buffer.
             }
             // xdg_toplevel resize is driven by compositor configure events, not client commits.
         }

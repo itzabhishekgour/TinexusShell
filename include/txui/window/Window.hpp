@@ -19,6 +19,7 @@
 #include <memory>
 #include <functional>
 #include <optional>
+#include <vector>
 
 struct xdg_wm_base;
 struct xdg_surface;
@@ -77,12 +78,14 @@ private:
     xdg_toplevel* m_xdg_toplevel{nullptr};
     zwlr_layer_surface_v1* m_layer_surface{nullptr};
     wl_callback* m_frame_callback{nullptr};
-    int32_t m_output_width{1920}; ///< Compositor output width for centering (updated on configure)
+    uint32_t m_anchors{0};
     bool m_has_custom_margins{false};
     int32_t m_margin_top{0};
     int32_t m_margin_right{0};
     int32_t m_margin_bottom{0};
     int32_t m_margin_left{0};
+    std::vector<Rect> m_input_region_rects;
+    bool m_has_custom_input_region{false};
 
     CommandBuffer m_command_buffer;
     std::unique_ptr<Painter> m_painter;
@@ -139,6 +142,14 @@ public:
     // Actually, can be called on a created window.
     void set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t exclusive_zone) noexcept;
     void set_layer_margins(int32_t top, int32_t right, int32_t bottom, int32_t left) noexcept;
+    [[nodiscard]] uint32_t layer_anchors() const noexcept { return m_anchors; }
+
+    // Input region configuration (Wayland wl_surface_set_input_region)
+    // When configured, pointer events outside these rectangles pass through to surfaces beneath.
+    void set_input_region(const std::vector<Rect>& rects) noexcept;
+    void clear_input_region() noexcept;
+    [[nodiscard]] const std::vector<Rect>& input_region() const noexcept { return m_input_region_rects; }
+    [[nodiscard]] bool has_custom_input_region() const noexcept { return m_has_custom_input_region; }
     
     // Set tick callback to run in the event loop every frame
     void set_tick_callback(std::function<void()> cb) noexcept;
