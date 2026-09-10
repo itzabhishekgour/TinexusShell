@@ -70,10 +70,76 @@ verify_env() {
     [ -d "$GRUB_EFI_MODS" ] || fatal "GRUB EFI module directory missing: $GRUB_EFI_MODS"
     [ -d "$GRUB_BIOS_MODS" ] || fatal "GRUB BIOS module directory missing: $GRUB_BIOS_MODS"
 
+    # Deterministically resolve ONE kernel version from installed kernels in build environment/chroot
+    export KVER
+    if [ -z "${KVER:-}" ]; then
+        # Check installed modules under /lib/modules and match with /boot/vmlinuz-*
+        local resolved_kver=""
+        if [ -d "/lib/modules" ]; then
+            for mod_dir in $(ls -d /lib/modules/* 2>/dev/null | sort -V -r); do
+                local cand
+                cand="$(basename "$mod_dir")"
+                if [ -f "/boot/vmlinuz-$cand" ]; then
+                    resolved_kver="$cand"
+                    break
+                fi
+            done
+        fi
+        if [ -n "$resolved_kver" ]; then
+            KVER="$resolved_kver"
+            info "Deterministically resolved installed kernel version: $KVER"
+            mkdir -p "$KERNEL_DIR"
+            cp -L "/boot/vmlinuz-$KVER" "$KERNEL_DIR/vmlinuz"
+        elif [ -f "$KERNEL_DIR/vmlinuz" ]; then
+            KVER="$(file -b "$KERNEL_DIR/vmlinuz" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
+        else
+            KVER="$(uname -r 2>/dev/null || echo '')"
+            if [ -f "/boot/vmlinuz-$KVER" ]; then
+                mkdir -p "$KERNEL_DIR"
+                cp -L "/boot/vmlinuz-$KVER" "$KERNEL_DIR/vmlinuz"
+            fi
+        fi
+    fi
+
     export VMLINUZ="$KERNEL_DIR/vmlinuz"
     [ -f "$VMLINUZ" ] || fatal "Tinexus kernel not found at: $VMLINUZ"
     if file -b "$VMLINUZ" | grep -qi "ASCII\|text"; then
         fatal "$VMLINUZ appears to be a text file, not a real kernel."
+    fi
+
+    # Verify that VMLINUZ's actual version matches KVER exactly
+    local vmlinuz_ver
+    vmlinuz_ver="$(file -b "$VMLINUZ" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
+    [ -n "$vmlinuz_ver" ] || fatal "Could not detect kernel version from $VMLINUZ"
+    if [ -n "$KVER" ] && [ "$KVER" != "$vmlinuz_ver" ]; then
+        if [ -f "/boot/vmlinuz-$KVER" ]; then
+            info "Syncing vmlinuz to match KVER ($KVER)..."
+            cp -L "/boot/vmlinuz-$KVER" "$VMLINUZ"
+            vmlinuz_ver="$KVER"
+        else
+            warn "KVER ($KVER) differed from $VMLINUZ ($vmlinuz_ver); synchronizing KVER to $vmlinuz_ver"
+            KVER="$vmlinuz_ver"
+        fi
+    fi
+
+    [ -d "/lib/modules/$KVER" ] || fatal "Host module directory missing for kernel: /lib/modules/$KVER"
+    info "Target kernel release synchronized: $KVER"
+
+    # Verify vermagic of host modules against detected KVER
+    local test_mod
+    test_mod="$(find "/lib/modules/$KVER" -name "isofs.ko*" | head -n 1)"
+    if [ -n "$test_mod" ]; then
+        local vmag
+        vmag="$(modinfo -F vermagic "$test_mod" 2>/dev/null | awk '{print $1}')"
+        if [ -n "$vmag" ] && [ "$vmag" != "$KVER" ]; then
+            fatal "Kernel vermagic mismatch: $test_mod has '$vmag' but expected '$KVER'"
+        fi
+        info "Verified module vermagic matches kernel: $vmag"
+    fi
+
+    # Check for SOF audio firmware package
+    if [ ! -d "/lib/firmware/intel/sof-tplg" ] && [ ! -d "/usr/lib/firmware/intel/sof-tplg" ]; then
+        warn "SOF audio firmware topology directory (/lib/firmware/intel/sof-tplg) not found on host.\nInstall: sudo apt install firmware-sof-signed"
     fi
 
     success "Toolchain & Environment OK."
@@ -239,11 +305,19 @@ EOF
         done
     fi
 
-    # Stage kmod and its dependencies so we can load kernel modules manually
+    # Stage kmod and its dependencies so the kernel and userspace can load kernel modules dynamically
     info "Staging kmod for kernel module loading..."
     if [ -f "/usr/bin/kmod" ]; then
         cp -L "/usr/bin/kmod" "$ROOTFS_DIR/usr/bin/"
+        mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin" "$ROOTFS_DIR/usr/sbin" "$ROOTFS_DIR/usr/bin"
+        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/sbin/modprobe"
+        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/bin/modprobe"
+        ln -sf kmod "$ROOTFS_DIR/usr/sbin/modprobe"
         ln -sf kmod "$ROOTFS_DIR/usr/bin/modprobe"
+        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/sbin/depmod"
+        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/bin/depmod"
+        ln -sf kmod "$ROOTFS_DIR/usr/sbin/depmod"
+        ln -sf kmod "$ROOTFS_DIR/usr/bin/depmod"
         ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
             [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
         done
@@ -251,6 +325,21 @@ EOF
             [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
         done
     fi
+
+    # Stage modprobe priority configuration for audio drivers (SOF vs legacy snd_hda_intel)
+    info "Staging audio driver priority configuration (/etc/modprobe.d/sof-priority.conf)..."
+    mkdir -p "$ROOTFS_DIR/etc/modprobe.d"
+    cat << 'EOF' > "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf"
+# Force Sound Open Firmware (SOF) on DSP-capable Intel hardware platforms
+# dsp_driver: Force the DSP driver for Intel DSP (0=auto, 1=legacy, 2=SST, 3=SOF, 4=AVS)
+options snd-intel-dspcfg dsp_driver=3
+
+# Ensure SOF drivers are loaded and preferred before snd_hda_intel on Intel DSP platforms
+softdep snd_hda_intel pre: snd_sof_pci_intel_cnl snd_sof_pci_intel_icl snd_sof_pci_intel_tgl snd_sof_pci_intel_mtl snd_sof_intel_hda_generic
+
+# Ensure generic ASoC HDA bridge and DSP machine driver are available with SOF
+softdep snd_sof_intel_hda_generic pre: snd_soc_hdac_hda snd_soc_skl_hda_dsp
+EOF
 
     # Stage Mesa DRI drivers, Gallium, and EGL ICD for Intel UHD 630 / Iris / AMD hardware rendering
     info "Staging Mesa DRI drivers, Gallium runtime, and EGL ICD..."
@@ -678,15 +767,39 @@ EOF_DHCP
     # ── Stage Complete Distro Firmware Tree (/lib/firmware) into RootFS ───────
     info "Staging complete firmware tree (/lib/firmware) into rootfs for universal hardware support..."
     mkdir -p "$ROOTFS_DIR/lib/firmware"
-    if [ -d "/lib/firmware" ]; then
-        cp -a /lib/firmware/* "$ROOTFS_DIR/lib/firmware/" 2>/dev/null || true
-        # Decompress any .zst and .xz compressed firmware (e.g. MediaTek MT7921, Intel, Realtek)
-        find "$ROOTFS_DIR/lib/firmware" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
-        find "$ROOTFS_DIR/lib/firmware" -type f -name "*.xz" -exec unxz {} + 2>/dev/null || true
-        success "Staged complete firmware tree into rootfs ($(du -sh "$ROOTFS_DIR/lib/firmware" | cut -f1))."
-    else
-        warn "/lib/firmware not found on host."
+    for fw_source in /lib/firmware /usr/lib/firmware; do
+        if [ -d "$fw_source" ]; then
+            cp -a "$fw_source"/* "$ROOTFS_DIR/lib/firmware/" 2>/dev/null || true
+        fi
+    done
+
+    # Explicitly stage upstream SOF (Sound Open Firmware) and topology files into rootfs
+    info "Staging SOF audio firmware and topology files (/lib/firmware/intel/sof and sof-tplg)..."
+    mkdir -p "$ROOTFS_DIR/lib/firmware/intel/sof-tplg"
+    for sof_source in /lib/firmware/intel /usr/lib/firmware/intel; do
+        if [ -d "$sof_source/sof" ]; then
+            mkdir -p "$ROOTFS_DIR/lib/firmware/intel/sof"
+            cp -a "$sof_source/sof/"* "$ROOTFS_DIR/lib/firmware/intel/sof/" 2>/dev/null || true
+        fi
+        if [ -d "$sof_source/sof-tplg" ]; then
+            cp -a "$sof_source/sof-tplg/"* "$ROOTFS_DIR/lib/firmware/intel/sof-tplg/" 2>/dev/null || true
+        fi
+        if [ -d "$sof_source/sof-ace-tplg" ]; then
+            mkdir -p "$ROOTFS_DIR/lib/firmware/intel/sof-ace-tplg"
+            cp -a "$sof_source/sof-ace-tplg/"* "$ROOTFS_DIR/lib/firmware/intel/sof-ace-tplg/" 2>/dev/null || true
+        fi
+    done
+
+    # Ensure /usr/lib/firmware exists and mirrors /lib/firmware for usrmerge compatibility
+    mkdir -p "$ROOTFS_DIR/usr/lib"
+    if [ ! -e "$ROOTFS_DIR/usr/lib/firmware" ]; then
+        ln -s /lib/firmware "$ROOTFS_DIR/usr/lib/firmware" 2>/dev/null || true
     fi
+
+    # Decompress any .zst and .xz compressed firmware (e.g. MediaTek MT7921, Intel SOF/DSP, Realtek)
+    find "$ROOTFS_DIR/lib/firmware" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
+    find "$ROOTFS_DIR/lib/firmware" -type f -name "*.xz" -exec unxz {} + 2>/dev/null || true
+    success "Staged complete firmware tree into rootfs ($(du -sh "$ROOTFS_DIR/lib/firmware" | cut -f1))."
 
     # ── Stage Wireless Utilities (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill) ──
     info "Staging wireless tools (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill)..."
@@ -891,22 +1004,31 @@ EOF_ALSA_RULES
     cp -L "$ROOTFS_DIR/etc/udev/rules.d/90-alsa.rules" "$ROOTFS_DIR/lib/udev/rules.d/" 2>/dev/null || true
 
     # ── Stage Complete Kernel Modules Tree into RootFS (SquashFS) ────────────
-    info "Staging complete kernel module tree (/lib/modules/7.0.0-28-generic) into rootfs..."
+    info "Staging complete kernel module tree (/lib/modules/$KVER) into rootfs..."
     mkdir -p "$ROOTFS_DIR/lib/modules"
-    if [ -d "/lib/modules/7.0.0-28-generic" ]; then
-        cp -a "/lib/modules/7.0.0-28-generic" "$ROOTFS_DIR/lib/modules/"
+    if [ -d "/lib/modules/$KVER" ]; then
+        cp -a "/lib/modules/$KVER" "$ROOTFS_DIR/lib/modules/"
         # Decompress any .zst module files so all modprobe and depmod operations work flawlessly
-        find "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
+        find "$ROOTFS_DIR/lib/modules/$KVER" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
         
         # Run depmod to rebuild modules.dep, modules.alias, modules.symbols accurately for the rootfs
         if [ -f "/usr/sbin/depmod" ]; then
-            info "Running depmod -a to generate modules.dep and modules.alias for rootfs..."
-            /usr/sbin/depmod -a -b "$ROOTFS_DIR" 7.0.0-28-generic 2>/dev/null || true
+            info "Running depmod -a to generate modules.dep and modules.alias for rootfs ($KVER)..."
+            /usr/sbin/depmod -a -b "$ROOTFS_DIR" "$KVER" 2>/dev/null || true
         fi
-        success "Staged complete kernel modules tree ($(du -sh "$ROOTFS_DIR/lib/modules/7.0.0-28-generic" | cut -f1))."
+        success "Staged complete kernel modules tree ($(du -sh "$ROOTFS_DIR/lib/modules/$KVER" | cut -f1))."
     else
-        warn "/lib/modules/7.0.0-28-generic not found on host!"
+        fatal "/lib/modules/$KVER not found on host!"
     fi
+
+    # ── BUILD-TIME ASSERTION: Verify rootfs kernel module synchronization ──────
+    local vmlinuz_actual_ver
+    vmlinuz_actual_ver="$(file -b "$VMLINUZ" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
+    [ -n "$vmlinuz_actual_ver" ] || fatal "Could not determine actual kernel version from $VMLINUZ"
+    if [ ! -d "$ROOTFS_DIR/lib/modules/$vmlinuz_actual_ver" ]; then
+        fatal "CRITICAL BUILD ASSERTION FAILED: rootfs/lib/modules/$vmlinuz_actual_ver does NOT exist!\nKernel vmlinuz is version '$vmlinuz_actual_ver' but staged modules were '$KVER'.\nBuild aborted to prevent kernel/rootfs version desynchronization."
+    fi
+    success "Build-time assertion passed: rootfs contains /lib/modules/$vmlinuz_actual_ver matching vmlinuz."
 
     if [ -f "$ROOTFS_DIR/usr/bin/tinexus-serviced" ]; then
         ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
@@ -995,7 +1117,10 @@ build_initramfs() {
     # Stage kmod/modprobe for automatic module dependency resolution
     if [ -f "/usr/bin/kmod" ]; then
         cp -L "/usr/bin/kmod" "$init_staging/bin/"
+        mkdir -p "$init_staging/sbin" "$init_staging/bin"
+        ln -sf ../bin/kmod "$init_staging/sbin/modprobe"
         ln -sf kmod "$init_staging/bin/modprobe"
+        ln -sf ../bin/kmod "$init_staging/sbin/depmod"
         ln -sf kmod "$init_staging/bin/depmod"
         ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
             [ -f "$lib" ] && { mkdir -p "$init_staging$(dirname "$lib")"; cp -L "$lib" "$init_staging$lib" 2>/dev/null || true; }
@@ -1004,6 +1129,21 @@ build_initramfs() {
             [ -f "$ld_loader" ] && { mkdir -p "$init_staging$(dirname "$ld_loader")"; cp -L "$ld_loader" "$init_staging$ld_loader" 2>/dev/null || true; }
         done
     fi
+
+    # Stage modprobe priority configuration in initramfs (prevents snd_hda_intel winning race during coldplug)
+    info "Staging audio driver priority configuration into initramfs (/etc/modprobe.d/sof-priority.conf)..."
+    mkdir -p "$init_staging/etc/modprobe.d"
+    cat << 'EOF' > "$init_staging/etc/modprobe.d/sof-priority.conf"
+# Force Sound Open Firmware (SOF) on DSP-capable Intel hardware platforms
+# dsp_driver: Force the DSP driver for Intel DSP (0=auto, 1=legacy, 2=SST, 3=SOF, 4=AVS)
+options snd-intel-dspcfg dsp_driver=3
+
+# Ensure SOF drivers are loaded and preferred before snd_hda_intel on Intel DSP platforms
+softdep snd_hda_intel pre: snd_sof_pci_intel_cnl snd_sof_pci_intel_icl snd_sof_pci_intel_tgl snd_sof_pci_intel_mtl snd_sof_intel_hda_generic
+
+# Ensure generic ASoC HDA bridge and DSP machine driver are available with SOF
+softdep snd_sof_intel_hda_generic pre: snd_soc_hdac_hda snd_soc_skl_hda_dsp
+EOF
 
     # Stage Intel iGPU firmware into initramfs (Comet Lake-H GuC/HuC/DMC)
     mkdir -p "$init_staging/lib/firmware/i915"
@@ -1018,11 +1158,12 @@ build_initramfs() {
         success "Staged $(ls "$init_staging/lib/firmware/i915" | wc -l) Intel i915 firmware files into initramfs."
     fi
 
-    mkdir -p "$init_staging/lib/modules/7.0.0-28-generic" "$init_staging/lib/modules"
-    local kver="7.0.0-28-generic"
-    if [ -d "/lib/modules/$kver" ]; then
-        find "/lib/modules/$kver" -type f \( \
-            -name "isofs.ko*" -o -name "ahci.ko*" -o -name "libahci.ko*" \
+    mkdir -p "$init_staging/lib/modules/$KVER" "$init_staging/lib/modules"
+    if [ -d "/lib/modules/$KVER" ]; then
+        find "/lib/modules/$KVER" -type f \( \
+            -name "isofs.ko*" -o -name "udf.ko*" \
+            -o -name "nls_utf8.ko*" -o -name "nls_iso8859-1.ko*" -o -name "nls_cp437.ko*" -o -name "nls_ascii.ko*" \
+            -o -name "ahci.ko*" -o -name "libahci.ko*" \
             -o -name "nvme.ko*" -o -name "nvme-core.ko*" -o -name "nvme-auth.ko*" -o -name "nvme-keyring.ko*" -o -name "hkdf.ko*" \
             -o -name "uas.ko*" -o -name "usb-storage.ko*" \
             -o -name "xhci-pci.ko*" -o -name "xhci-hcd.ko*" -o -name "ehci-pci.ko*" -o -name "ehci-hcd.ko*" \
@@ -1035,22 +1176,23 @@ build_initramfs() {
             -o -name "virtio_input.ko*" \
             -o -name "evdev.ko*" \
             -o -name "hid.ko*" -o -name "hid-generic.ko*" -o -name "usbhid.ko*" \
-            -o -name "pinctrl-cannonlake.ko*" -o -name "pinctrl-amd.ko*" \
+            -o -name "pinctrl-*.ko*" \
             -o -name "intel-lpss.ko*" -o -name "intel-lpss-pci.ko*" \
-            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" \
+            -o -name "i2c-core.ko*" -o -name "i2c-algo-bit.ko*" \
+            -o -name "i2c-designware-core.ko*" -o -name "i2c-designware-pci.ko*" -o -name "i2c-designware-platform.ko*" \
             -o -name "i2c-hid.ko*" -o -name "i2c-hid-acpi.ko*" \
             -o -name "hid-multitouch.ko*" -o -name "psmouse.ko*" \
         \) | while read -r mod; do
-            cp -L "$mod" "$init_staging/lib/modules/7.0.0-28-generic/"
+            cp -L "$mod" "$init_staging/lib/modules/$KVER/"
             cp -L "$mod" "$init_staging/lib/modules/"
         done
-        for compressed in "$init_staging/lib/modules/7.0.0-28-generic"/*.zst "$init_staging/lib/modules"/*.zst; do
+        for compressed in "$init_staging/lib/modules/$KVER"/*.zst "$init_staging/lib/modules"/*.zst; do
             [ -f "$compressed" ] && zstd -d --rm "$compressed" 2>/dev/null || true
         done
-        cp /lib/modules/7.0.0-28-generic/modules.order "$init_staging/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
-        cp /lib/modules/7.0.0-28-generic/modules.builtin* "$init_staging/lib/modules/7.0.0-28-generic/" 2>/dev/null || true
+        cp /lib/modules/"$KVER"/modules.order "$init_staging/lib/modules/$KVER/" 2>/dev/null || true
+        cp /lib/modules/"$KVER"/modules.builtin* "$init_staging/lib/modules/$KVER/" 2>/dev/null || true
         if [ -f "/usr/sbin/depmod" ]; then
-            /usr/sbin/depmod -b "$init_staging" 7.0.0-28-generic 2>/dev/null || true
+            /usr/sbin/depmod -b "$init_staging" "$KVER" 2>/dev/null || true
         fi
     fi
 
@@ -1078,6 +1220,7 @@ log_step "STEP 1: Initramfs mounted /proc, /sys, /dev successfully."
 
 # Check if debug mode was requested on the kernel command line
 IS_DEBUG=0
+CMDLINE=""
 if [ -f /proc/cmdline ]; then
     CMDLINE=$(cat /proc/cmdline)
     case "$CMDLINE" in
@@ -1093,6 +1236,8 @@ fi
 
 log_step "STEP 2: Loading hardware drivers in strict dependency order..."
 
+KVER="$(uname -r 2>/dev/null || echo '')"
+
 load_mod() {
     local m="$1"
     # Try modprobe first
@@ -1101,7 +1246,7 @@ load_mod() {
         return 0
     fi
     # Direct insmod fallback
-    for p in /lib/modules/7.0.0-28-generic /lib/modules; do
+    for p in "/lib/modules/$KVER" /lib/modules; do
         if [ -f "$p/$m.ko" ]; then
             insmod "$p/$m.ko" 2>/dev/null && return 0
         fi
@@ -1109,24 +1254,36 @@ load_mod() {
     return 1
 }
 
-# 1. Storage & bus controllers (with sub-dependencies)
-# 1. Storage & bus controllers (Universal: NVMe, SATA AHCI, USB 3.x/2.0, VirtIO Disk/SCSI)
-for m in virtio virtio_ring virtio_pci virtio_pci_modern_dev virtio_blk virtio_scsi xhci-hcd xhci-pci ehci-hcd ehci-pci libahci ahci isofs hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas overlay; do
+# 1. Storage & bus controllers (with sub-dependencies and NLS charsets)
+# Universal: USB xHCI/EHCI, SCSI, SATA AHCI, NVMe, VirtIO, NLS charsets, ISOFS, UDF, OverlayFS
+for m in virtio virtio_ring virtio_pci virtio_pci_modern_dev virtio_blk virtio_scsi \
+         xhci-hcd xhci-pci ehci-hcd ehci-pci libahci ahci \
+         nls_cp437 nls_iso8859-1 nls_utf8 nls_ascii isofs udf \
+         hkdf nvme-keyring nvme-auth nvme-core nvme usb-storage uas overlay; do
     load_mod "$m" || true
 done
 
-# 2. Console input devices (Touchpad, keyboard, mouse, multitouch)
-for m in pinctrl-cannonlake pinctrl-amd intel-lpss intel-lpss-pci i2c-designware-core i2c-designware-pci i2c-hid i2c-hid-acpi hid-multitouch psmouse hid hid-generic usbhid evdev virtio_input; do
+# 2. Universal input & platform device coldplug via sysfs MODALIAS autoloading
+log_step "Autoloading input and platform bus drivers via sysfs MODALIAS..."
+find /sys/devices -name modalias 2>/dev/null | while read -r mfile; do
+    [ -f "$mfile" ] || continue
+    alias="$(cat "$mfile" 2>/dev/null)"
+    [ -n "$alias" ] && modprobe -b -q "$alias" 2>/dev/null || true
+done
+
+# Fallback direct load for standard input & HID drivers
+for m in psmouse hid hid-generic usbhid evdev i2c-hid i2c-hid-acpi hid-multitouch virtio_input; do
     load_mod "$m" || true
 done
 
 # 3. Graphics display drivers (Early display / splash fallback)
-# Note: Full vendor GPU drivers (amdgpu, i915, nouveau, xe), Touchpad, Wi-Fi, and Sound
-# are dynamically loaded in RootFS by serviced via udev coldplug discovery.
-for m in rc-core cec drm_display_helper wmi video ttm drm_buddy i2c-algo-bit i915 virtio_dma_buf virtio-gpu bochs; do
+for m in rc-core cec drm_display_helper wmi video ttm drm_buddy \
+         i2c-algo-bit i915 virtio_dma_buf virtio-gpu bochs; do
     load_mod "$m" || true
 done
 
+# Allow USB bus and storage controllers settling time
+sleep 2
 /bin/mdev -s 2>/dev/null
 
 log_step "STEP 3: Hardware drivers loaded. Verifying DRI / DRM subsystem..."
@@ -1164,73 +1321,192 @@ if [ "$IS_DEBUG" != "1" ] && [ -x /bin/tinexus-splash ]; then
     echo 20 > /tmp/splash_progress 2>/dev/null
 fi
 
+# Parse kernel command line parameters for hints
+TARGET_LABEL="TINEXUS_LIVE"
+TARGET_UUID=""
+SQUASH_PATH="live/rootfs.squashfs"
+
+if [ -n "$CMDLINE" ]; then
+    for param in $CMDLINE; do
+        case "$param" in
+            root=live:CDLABEL=*)
+                TARGET_LABEL="${param#root=live:CDLABEL=}"
+                ;;
+            root=live:LABEL=*)
+                TARGET_LABEL="${param#root=live:LABEL=}"
+                ;;
+            root=live:UUID=*)
+                TARGET_UUID="${param#root=live:UUID=}"
+                ;;
+            root=LABEL=*)
+                TARGET_LABEL="${param#root=LABEL=}"
+                ;;
+            root=UUID=*)
+                TARGET_UUID="${param#root=UUID=}"
+                ;;
+            rd.live.dir=*)
+                LIVE_DIR="${param#rd.live.dir=}"
+                LIVE_DIR="${LIVE_DIR#/}"
+                ;;
+            rd.live.squashimg=*)
+                SQUASH_IMG="${param#rd.live.squashimg=}"
+                ;;
+        esac
+    done
+    if [ -n "$LIVE_DIR" ] && [ -n "$SQUASH_IMG" ]; then
+        SQUASH_PATH="$LIVE_DIR/$SQUASH_IMG"
+    fi
+fi
+
+mkdir -p /dev/disk/by-label /dev/disk/by-uuid /mnt
+
 ROOT_DEV=""
-for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+
+# Function to mount a candidate block device smartly based on detected filesystem type
+try_mount_candidate() {
+    local cand="$1"
+    local fstype="$2"
+    [ -b "$cand" ] || return 1
+
+    # Determine filesystem mount options based on detected fstype
+    local opts_list=""
+    case "$fstype" in
+        iso9660) opts_list="-t iso9660 -o ro;-o ro" ;;
+        vfat|fat|msdos) opts_list="-t vfat -o ro;-o ro" ;;
+        udf) opts_list="-t udf -o ro;-o ro" ;;
+        ext*|btrfs|xfs) opts_list="-o ro" ;;
+        *) opts_list="-t iso9660 -o ro;-o ro;-t vfat -o ro" ;;
+    esac
+
+    local old_ifs="$IFS"
+    IFS=";"
+    for mopts in $opts_list; do
+        IFS="$old_ifs"
+        if /bin/mount $mopts "$cand" /mnt 2>/dev/null; then
+            # Verify authoritative squashfs path or fallback path
+            if [ -f "/mnt/$SQUASH_PATH" ] && [ -s "/mnt/$SQUASH_PATH" ]; then
+                log_step "SUCCESS: Found $SQUASH_PATH on $cand (mount $mopts)"
+                ROOT_DEV="$cand"
+                IFS="$old_ifs"
+                return 0
+            elif [ -f "/mnt/rootfs.squashfs" ] && [ -s "/mnt/rootfs.squashfs" ]; then
+                log_step "SUCCESS: Found rootfs.squashfs on $cand (mount $mopts)"
+                SQUASH_PATH="rootfs.squashfs"
+                ROOT_DEV="$cand"
+                IFS="$old_ifs"
+                return 0
+            fi
+            /bin/umount /mnt 2>/dev/null || true
+        fi
+        IFS=";"
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
+# Exhaustive retry loop (up to 20 attempts, 1s interval)
+for attempt in $(seq 1 20); do
     echo $((20 + attempt * 3)) > /tmp/splash_progress 2>/dev/null
     /bin/mdev -s 2>/dev/null
 
-    # 1. Search by filesystem label TINEXUS_LIVE via blkid
-    if [ -x /bin/blkid ]; then
-        BY_LABEL=$(/bin/blkid -L TINEXUS_LIVE 2>/dev/null || true)
-        if [ -n "$BY_LABEL" ] && [ -b "$BY_LABEL" ]; then
-            /bin/mount -o ro "$BY_LABEL" /mnt 2>/dev/null
-            if [ -f /mnt/live/rootfs.squashfs ]; then
-                log_step "Found rootfs via label on $BY_LABEL (attempt $attempt)"
-                ROOT_DEV="$BY_LABEL"
-                break
-            fi
-            /bin/umount /mnt 2>/dev/null
-        fi
-    fi
+    # Collect all candidate block devices from /sys/block/
+    PRIORITY_CANDIDATES=""
+    OTHER_CANDIDATES=""
 
-    # 2. Check /dev/disk/by-label/TINEXUS_LIVE
-    if [ -b /dev/disk/by-label/TINEXUS_LIVE ]; then
-        /bin/mount -o ro /dev/disk/by-label/TINEXUS_LIVE /mnt 2>/dev/null
-        if [ -f /mnt/live/rootfs.squashfs ]; then
-            log_step "Found rootfs on /dev/disk/by-label/TINEXUS_LIVE"
-            ROOT_DEV="/dev/disk/by-label/TINEXUS_LIVE"
-            break
-        fi
-        /bin/umount /mnt 2>/dev/null
-    fi
-
-    # 3. Fully dynamic scan across all block devices in /sys/block/
     for b in /sys/block/*; do
         [ -e "$b" ] || continue
         devname=$(basename "$b")
         case "$devname" in
             loop*|ram*|zram*) continue ;;
         esac
-        for candidate in "/dev/$devname" "/dev/${devname}"p* "/dev/${devname}"[0-9]*; do
-            [ -b "$candidate" ] || continue
-            /bin/mount -o ro "$candidate" /mnt 2>/dev/null
-            if [ -f /mnt/live/rootfs.squashfs ]; then
-                log_step "Found rootfs via dynamic scan on $candidate (attempt $attempt)"
-                ROOT_DEV="$candidate"
-                break 3
+
+        # Check whole device first, then any numbered/partition sub-devices
+        for cand in "/dev/$devname" "/dev/${devname}"p* "/dev/${devname}"[0-9]*; do
+            [ -b "$cand" ] || continue
+
+            # Probe block device details with blkid
+            CAND_TYPE=""
+            CAND_LABEL=""
+            CAND_UUID=""
+            if [ -x /bin/blkid ]; then
+                BLK_OUT=$(/bin/blkid "$cand" 2>/dev/null || true)
+                if [ -n "$BLK_OUT" ]; then
+                    CAND_TYPE=$(echo "$BLK_OUT" | sed -n 's/.*TYPE="\([^"]*\)".*/\1/p')
+                    CAND_LABEL=$(echo "$BLK_OUT" | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p')
+                    CAND_UUID=$(echo "$BLK_OUT" | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')
+
+                    # Create dynamic by-label and by-uuid symlinks
+                    [ -n "$CAND_LABEL" ] && ln -sf "$cand" "/dev/disk/by-label/$CAND_LABEL" 2>/dev/null || true
+                    [ -n "$CAND_UUID" ] && ln -sf "$cand" "/dev/disk/by-uuid/$CAND_UUID" 2>/dev/null || true
+                fi
             fi
-            /bin/umount /mnt 2>/dev/null
+
+            # Check if this candidate matches target label or target UUID
+            is_priority=0
+            if [ -n "$TARGET_LABEL" ] && [ "$CAND_LABEL" = "$TARGET_LABEL" ]; then
+                is_priority=1
+            elif [ -n "$TARGET_UUID" ] && [ "$CAND_UUID" = "$TARGET_UUID" ]; then
+                is_priority=1
+            fi
+
+            if [ "$is_priority" = "1" ]; then
+                PRIORITY_CANDIDATES="$PRIORITY_CANDIDATES $cand|$CAND_TYPE"
+            else
+                OTHER_CANDIDATES="$OTHER_CANDIDATES $cand|$CAND_TYPE"
+            fi
         done
+    done
+
+    # Test priority candidates first (label / UUID match)
+    for entry in $PRIORITY_CANDIDATES; do
+        cand="${entry%%|*}"
+        fstype="${entry#*|}"
+        if try_mount_candidate "$cand" "$fstype"; then
+            break 2
+        fi
+    done
+
+    # Then test all other block device candidates
+    for entry in $OTHER_CANDIDATES; do
+        cand="${entry%%|*}"
+        fstype="${entry#*|}"
+        if try_mount_candidate "$cand" "$fstype"; then
+            break 2
+        fi
     done
 
     sleep 1
 done
 
-if [ -z "$ROOT_DEV" ] || [ ! -f /mnt/live/rootfs.squashfs ]; then
-    log_step "FATAL: rootfs.squashfs not found on any storage device after 15s!"
-    log_step "Dropping to emergency recovery shell..."
+if [ -z "$ROOT_DEV" ] || [ ! -f "/mnt/$SQUASH_PATH" ]; then
+    log_step "================================================================"
+    log_step "FATAL: $SQUASH_PATH not found on any storage device after 20s!"
+    log_step "================================================================"
+    log_step "--- DIAGNOSTIC SUMMARY FOR BOOT FAILURE TRIAGE ---"
+    log_step "Kernel release (uname -r): $(uname -r 2>/dev/null)"
+    log_step "Kernel cmdline: $CMDLINE"
+    log_step "1. Detected block devices in /proc/partitions:"
+    cat /proc/partitions > /dev/console 2>&1 || true
+    log_step "2. Detected USB devices in /sys/bus/usb/devices/:"
+    ls -la /sys/bus/usb/devices/ > /dev/console 2>&1 || true
+    log_step "3. blkid output across all block nodes:"
+    /bin/blkid /dev/sd* /dev/sr* /dev/nvme* /dev/vd* 2>/dev/null > /dev/console 2>&1 || true
+    log_step "4. Loaded kernel modules:"
+    cat /proc/modules > /dev/console 2>&1 || true
+    log_step "================================================================"
+    log_step "Dropping to emergency recovery shell on /dev/console..."
     exec /bin/sh </dev/console >/dev/console 2>&1
 fi
 
-log_step "STEP 5: Storage media located on $ROOT_DEV."
+log_step "STEP 5: Storage media located on $ROOT_DEV (mount path: /mnt/$SQUASH_PATH)."
 mkdir -p /newroot
 
 log_step "STEP 6: Setting up writable OverlayFS (RAM tmpfs + SquashFS lowerdir)..."
 mkdir -p /rofs /cow /newroot
-/bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /rofs
+/bin/mount -t squashfs -o ro "/mnt/$SQUASH_PATH" /rofs
 MNT_STATUS=$?
 if [ $MNT_STATUS -ne 0 ]; then
-    log_step "FATAL: mount -t squashfs failed with exit code $MNT_STATUS!"
+    log_step "FATAL: mount -t squashfs /mnt/$SQUASH_PATH failed with exit code $MNT_STATUS!"
     exec /bin/sh </dev/console >/dev/console 2>&1
 fi
 
@@ -1243,7 +1519,7 @@ mkdir -p /cow/upper /cow/work
 OVERLAY_STATUS=$?
 if [ $OVERLAY_STATUS -ne 0 ]; then
     log_step "WARNING: OverlayFS mount failed ($OVERLAY_STATUS)! Falling back to direct SquashFS read-only mount..."
-    /bin/mount -t squashfs -o ro /mnt/live/rootfs.squashfs /newroot
+    /bin/mount -t squashfs -o ro "/mnt/$SQUASH_PATH" /newroot
 else
     log_step "STEP 7: Writable OverlayFS mounted successfully on /newroot."
     df -h /newroot > /dev/console 2>&1 || true
@@ -1503,9 +1779,47 @@ validate_iso() {
     [ -f "$ISO_TREE/boot/vmlinuz" ] || fatal "vmlinuz missing."
     [ -f "$ISO_TREE/boot/grub/grub.cfg" ] || fatal "grub.cfg missing."
 
+    # Validate ISO vmlinuz version synchronization with rootfs modules
+    local actual_iso_kver
+    actual_iso_kver="$(file -b "$ISO_TREE/boot/vmlinuz" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
+    [ -n "$actual_iso_kver" ] || fatal "Could not extract kernel version from $ISO_TREE/boot/vmlinuz"
+    [ "$actual_iso_kver" = "$KVER" ] || fatal "CRITICAL ERROR: Staged ISO vmlinuz version ($actual_iso_kver) does not match build KVER ($KVER)!"
+    [ -d "$ROOTFS_DIR/lib/modules/$actual_iso_kver" ] || fatal "CRITICAL ERROR: rootfs/lib/modules/$actual_iso_kver does NOT exist for kernel $actual_iso_kver!"
+    info "Verified ISO vmlinuz version ($actual_iso_kver) matches rootfs modules."
+
+    # Verify ISO volume label
+    local vol_id
+    vol_id="$(blkid -s LABEL -o value "$OUTPUT_ISO" 2>/dev/null || true)"
+    if [ -z "$vol_id" ]; then
+        vol_id=$(xorriso -indev "$OUTPUT_ISO" -pvd_info 2>&1 | grep -i "Volume Id" | head -n 1 | awk -F"'" '{print $2}' || true)
+    fi
+    info "Detected ISO Volume Label: '$vol_id'"
+    [ "$vol_id" = "TINEXUS_LIVE" ] || warn "Volume label is '$vol_id' (expected TINEXUS_LIVE)"
+
+    # Verify kernel module vermagic inside the generated initramfs
+    info "Verifying initramfs kernel module vermagic against kernel ($KVER)..."
+    local test_vmag_dir="$WORK_DIR/vmag_check"
+    mkdir -p "$test_vmag_dir"
+    (cd "$test_vmag_dir" && gzip -dc "$ISO_TREE/boot/initramfs.img" | cpio -idmv "lib/modules/*" >/dev/null 2>&1) || true
+    local sample_mod
+    sample_mod="$(find "$test_vmag_dir" -name "isofs.ko*" | head -n 1)"
+    if [ -n "$sample_mod" ]; then
+        local ivmag
+        ivmag="$(modinfo -F vermagic "$sample_mod" 2>/dev/null | awk '{print $1}')"
+        info "Initramfs isofs module vermagic: $ivmag"
+        [ "$ivmag" = "$KVER" ] || fatal "CRITICAL ERROR: Initramfs module vermagic ($ivmag) does not match kernel ($KVER)!"
+    else
+        warn "isofs.ko not found in initramfs for verification."
+    fi
+    # Verify audio driver modprobe priority configuration
+    info "Verifying audio driver modprobe.d priority configuration in rootfs..."
+    [ -f "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf" ] || fatal "CRITICAL ERROR: $ROOTFS_DIR/etc/modprobe.d/sof-priority.conf is missing!"
+    grep -q "dsp_driver=3" "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf" || fatal "CRITICAL ERROR: dsp_driver=3 missing in rootfs sof-priority.conf!"
+    success "Verified /etc/modprobe.d/sof-priority.conf is correctly staged with dsp_driver=3."
+
     (cd "$BUILD_DIR" && sha256sum "$(basename "$OUTPUT_ISO")" > "$(basename "$OUTPUT_ISO").sha256")
     
-    success "All checks passed! The ISO is a true BIOS+UEFI Hybrid."
+    success "All checks passed! The ISO is a true BIOS+UEFI Hybrid with matching kernel/module vermagic."
     info "SHA256: $(cat "$BUILD_DIR/$(basename "$OUTPUT_ISO").sha256")"
 }
 
