@@ -44,6 +44,8 @@ extern "C" {
 #include "comp/focus/focus_manager.hpp"
 #include "comp/server/server.hpp"
 #include "comp/window/window_state.hpp"
+#include "comp/animation/animation_manager.hpp"
+#include "common/AppId.hpp"
 #include <unistd.h>
 #include <cstdlib>
 #include <cstdarg>
@@ -52,6 +54,9 @@ extern "C" {
 #include <sys/wait.h>
 
 namespace tinexus::comp {
+
+using tinexus::common::get_canonical_app_id;
+using tinexus::common::is_single_instance_app;
 
 namespace {
 void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, va_list args) {
@@ -263,6 +268,13 @@ public:
 
     bool start() override {
         log::info("[Backend] Starting wlroots backend...");
+        AnimationManager::instance().set_frame_scheduler([this]() {
+            for (auto& out : m_outputs) {
+                if (out && out->get_wlr_output()) {
+                    wlr_output_schedule_frame(out->get_wlr_output());
+                }
+            }
+        });
         if (!wlr_backend_start(m_wlr_backend)) {
             log::error("[Backend] Failed to start wlroots backend.");
             return false;
@@ -497,6 +509,15 @@ private:
         wrapper->commit.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, commit);
             if (w->layer_surface->initial_commit || w->layer_surface->current.committed != 0) {
+                if (!w->layer_surface->output) {
+                    struct wlr_output* out = wlr_output_layout_output_at(w->backend->m_output_layout, 0, 0);
+                    if (!out && !w->backend->m_outputs.empty()) {
+                        out = w->backend->m_outputs.front()->get_wlr_output();
+                    }
+                    if (out) {
+                        w->layer_surface->output = out;
+                    }
+                }
                 struct wlr_box full_area = {0, 0, 0, 0};
                 if (w->layer_surface->output) {
                     wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
@@ -592,34 +613,24 @@ private:
             wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
             wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
             FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
+
+            std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
+            if (!app_id_str.empty() && TinexusServer::instance()) {
+                TinexusServer::instance()->notify_app_focus_changed(app_id_str, 1);
+            }
         } else {
             FocusManager::instance().set_keyboard_focus(nullptr);
         }
     }
 
     void focus_app(const std::string& app_id) noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
         for (const auto& w : m_toplevels) {
-            if (w->toplevel->app_id && std::string(w->toplevel->app_id) == app_id) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
                 if (w->state_machine.state() == WindowState::Minimized) {
-                    w->state_machine.request_restore();
-                    wlr_scene_node_set_enabled(&w->scene_tree->node, true);
-                    log::info("[Window] Restored toplevel app_id='{}' — scene node enabled", app_id);
-                    if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id);
-                    focus_toplevel(w.get());
-                } else if (m_active_toplevel == w.get()) {
-                    w->state_machine.request_minimize();
-                    wlr_scene_node_set_enabled(&w->scene_tree->node, false);
-                    log::info("[Window] Minimized toplevel app_id='{}' — scene node disabled", app_id);
-                    if (TinexusServer::instance()) TinexusServer::instance()->notify_window_minimized(app_id);
-                    m_active_toplevel = nullptr;
-                    ToplevelWrapper* next_focus = nullptr;
-                    for (auto it = m_toplevels.rbegin(); it != m_toplevels.rend(); ++it) {
-                        if (it->get() != w.get() && it->get()->state_machine.state() != WindowState::Minimized) {
-                            next_focus = it->get();
-                            break;
-                        }
-                    }
-                    focus_toplevel(next_focus);
+                    toplevel_set_minimized(w.get(), false);
                 } else {
                     focus_toplevel(w.get());
                 }
@@ -629,12 +640,69 @@ private:
     }
 
     bool has_app(const std::string& app_id) const noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
         for (const auto& w : m_toplevels) {
-            if (w->toplevel->app_id && std::string(w->toplevel->app_id) == app_id) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
                 return true;
             }
         }
         return false;
+    }
+
+    bool restore_window_by_app_id(const std::string& app_id) noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
+                if (w->state_machine.state() == WindowState::Minimized) {
+                    toplevel_set_minimized(w.get(), false);
+                } else {
+                    focus_toplevel(w.get());
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool minimize_window_by_app_id(const std::string& app_id) noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
+                if (w->state_machine.state() != WindowState::Minimized) {
+                    toplevel_set_minimized(w.get(), true);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void snap_active_window(SnapMode mode) noexcept override {
+        if (m_active_toplevel) {
+            toplevel_set_snap(m_active_toplevel, mode);
+        }
+    }
+
+    void maximize_active_window() noexcept override {
+        if (m_active_toplevel) {
+            toplevel_set_maximized(m_active_toplevel, true);
+        }
+    }
+
+    void restore_active_window() noexcept override {
+        if (m_active_toplevel) {
+            if (m_active_toplevel->state_machine.state() == WindowState::Maximized) {
+                toplevel_set_maximized(m_active_toplevel, false);
+            } else if (m_active_toplevel->state_machine.snap_mode() != SnapMode::None) {
+                toplevel_restore_snap(m_active_toplevel);
+            }
+        }
     }
 
     bool toggle_launcher() noexcept override {
@@ -673,17 +741,29 @@ private:
         return out;
     }
 
-    WorkArea get_output_work_area(struct wlr_output* out) const {
-        WorkArea area{};
-        if (!out || !m_output_layout) return area;
+    OutputGeometry get_output_geometry(struct wlr_output* out) const {
+        OutputGeometry geom{};
+        if (!out || !m_output_layout) return geom;
+
+        geom.output = out;
+        if (out->name) {
+            geom.connector = out->name;
+        }
 
         struct wlr_box out_box{0, 0, 0, 0};
         wlr_output_layout_get_box(m_output_layout, out, &out_box);
+        geom.global_x = out_box.x;
+        geom.global_y = out_box.y;
 
         int32_t eff_w = 0, eff_h = 0;
         wlr_output_effective_resolution(out, &eff_w, &eff_h);
         if (eff_w <= 0) eff_w = out_box.width;
         if (eff_h <= 0) eff_h = out_box.height;
+
+        geom.logical_width = eff_w;
+        geom.logical_height = eff_h;
+        geom.scale = out->scale > 0.0 ? out->scale : 1.0;
+        geom.refresh_mhz = out->refresh > 0 ? static_cast<uint32_t>(out->refresh) : 60000;
 
         int32_t top_margin = 0;
         int32_t bottom_margin = 0;
@@ -692,72 +772,62 @@ private:
 
         for (const auto* layer : m_layer_surfaces) {
             if (!layer || !layer->layer_surface) continue;
-            if ((layer->layer_surface->output == out || layer->layer_surface->output == nullptr) &&
-                layer->layer_surface->surface && layer->layer_surface->surface->mapped) {
-                int32_t zone = layer->layer_surface->current.exclusive_zone;
-                uint32_t anchor = layer->layer_surface->current.anchor;
-                if (zone > 0) {
-                    bool has_top = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) != 0;
-                    bool has_bottom = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) != 0;
-                    bool has_left = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) != 0;
-                    bool has_right = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
 
-                    // Layer-shell exclusive zones only subtract from an edge if it anchors to that edge
-                    // and NOT to both opposite edges unless specifically dedicated to that edge.
-                    // For example, a bottom dock has BOTTOM | LEFT | RIGHT. It must only reserve bottom_margin!
-                    if (has_top && !has_bottom) {
-                        top_margin = std::max(top_margin, zone);
-                    } else if (has_bottom && !has_top) {
-                        bottom_margin = std::max(bottom_margin, zone);
-                    } else if (has_left && !has_right) {
-                        left_margin = std::max(left_margin, zone);
-                    } else if (has_right && !has_left) {
-                        right_margin = std::max(right_margin, zone);
-                    }
-                }
+            // STRICT Multi-monitor isolation:
+            // A layer surface exclusively belongs to its assigned output.
+            struct wlr_output* layer_out = layer->layer_surface->output;
+            if (layer_out == nullptr) {
+                layer_out = !m_outputs.empty() ? m_outputs.front()->get_wlr_output() : nullptr;
+            }
+            if (layer_out != out) {
+                continue; // Do not apply reservations across displays!
+            }
+
+            if (!layer->layer_surface->surface || !layer->layer_surface->surface->mapped) {
+                continue;
+            }
+
+            int32_t zone = layer->layer_surface->current.exclusive_zone;
+            if (zone <= 0) {
+                continue; // Non-exclusive surface
+            }
+
+            uint32_t anchor = layer->layer_surface->current.anchor;
+            const auto& margins = layer->layer_surface->current.margin;
+
+            const bool has_top = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) != 0;
+            const bool has_bottom = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) != 0;
+            const bool has_left = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) != 0;
+            const bool has_right = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
+
+            // Fullscreen layer surfaces spanning all 4 edges do not reserve edge margins
+            if (has_top && has_bottom && has_left && has_right) {
+                continue;
+            }
+
+            // Proper geometry-aware edge exclusive reservations
+            if (has_top && !has_bottom) {
+                top_margin = std::max(top_margin, zone + margins.top);
+            } else if (has_bottom && !has_top) {
+                bottom_margin = std::max(bottom_margin, zone + margins.bottom);
+            } else if (has_left && !has_right) {
+                left_margin = std::max(left_margin, zone + margins.left);
+            } else if (has_right && !has_left) {
+                right_margin = std::max(right_margin, zone + margins.right);
             }
         }
 
-        // Fallback for top bar if exclusive_zone was not explicitly populated
-        if (top_margin == 0) {
-            for (const auto* layer : m_layer_surfaces) {
-                if (!layer || !layer->layer_surface) continue;
-                if ((layer->layer_surface->output == out || layer->layer_surface->output == nullptr) &&
-                    layer->layer_surface->surface && layer->layer_surface->surface->mapped) {
-                    uint32_t anchor = layer->layer_surface->current.anchor;
-                    if ((anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) && !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) {
-                        int32_t h = layer->layer_surface->surface->current.height;
-                        if (h > 0 && h < 100) {
-                            top_margin = std::max(top_margin, h);
-                        }
-                    }
-                }
-            }
-        }
+        geom.work_x = geom.global_x + left_margin;
+        geom.work_y = geom.global_y + top_margin;
+        geom.work_width = std::max(0, geom.logical_width - left_margin - right_margin);
+        geom.work_height = std::max(0, geom.logical_height - top_margin - bottom_margin);
+        geom.sync_compat();
 
-        // Fallback for bottom dock if exclusive_zone was not explicitly populated
-        if (bottom_margin == 0) {
-            for (const auto* layer : m_layer_surfaces) {
-                if (!layer || !layer->layer_surface) continue;
-                if ((layer->layer_surface->output == out || layer->layer_surface->output == nullptr) &&
-                    layer->layer_surface->surface && layer->layer_surface->surface->mapped) {
-                    uint32_t anchor = layer->layer_surface->current.anchor;
-                    if ((anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) && !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP)) {
-                        int32_t h = layer->layer_surface->surface->current.height;
-                        if (h > 0 && h < 200) {
-                            bottom_margin = std::max(bottom_margin, h);
-                        }
-                    }
-                }
-            }
-        }
+        return geom;
+    }
 
-        area.x = out_box.x + left_margin;
-        area.y = out_box.y + top_margin;
-        area.width = std::max(0, eff_w - left_margin - right_margin);
-        area.height = std::max(0, eff_h - top_margin - bottom_margin);
-
-        return area;
+    WorkArea get_output_work_area(struct wlr_output* out) const {
+        return get_output_geometry(out).work_area();
     }
 
     void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
@@ -796,6 +866,12 @@ private:
                 );
             }
 
+            WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                                wrapper->toplevel->base->current.geometry.width,
+                                wrapper->toplevel->base->current.geometry.height};
+            if (start_box.width <= 0) start_box.width = 800;
+            if (start_box.height <= 0) start_box.height = 600;
+
             wrapper->state_machine.set_assigned_output(out);
             wrapper->state_machine.request_maximize(work_area);
             wrapper->is_maximized = true;
@@ -809,15 +885,46 @@ private:
             log::info("[Window] Maximize window to {}x{} at ({}, {}) on output '{}'",
                       work_area.width, work_area.height, work_area.x, work_area.y, out->name ? out->name : "unknown");
 
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, work_area.x, work_area.y);
             wlr_xdg_toplevel_set_tiled(wrapper->toplevel, WLR_EDGE_NONE);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, true);
             wlr_xdg_toplevel_set_size(wrapper->toplevel, work_area.width, work_area.height);
+
+            WindowBox target_box{work_area.x, work_area.y, work_area.width, work_area.height};
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Maximize,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.160,
+                .start_geom = start_box,
+                .target_geom = target_box,
+                .start_opacity = 1.0,
+                .target_opacity = 1.0,
+                .start_scale = 1.0,
+                .target_scale = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                    }
+                },
+                .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                    }
+                }
+            });
         } else {
             if (wrapper->state_machine.state() != WindowState::Maximized) {
                 wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
                 return;
             }
+
+            WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                                wrapper->toplevel->base->current.geometry.width,
+                                wrapper->toplevel->base->current.geometry.height};
+            if (start_box.width <= 0) start_box.width = 800;
+            if (start_box.height <= 0) start_box.height = 600;
 
             wrapper->state_machine.request_restore();
             wrapper->is_maximized = false;
@@ -826,10 +933,35 @@ private:
             log::info("[Window] Restore maximized window to {}x{} at ({}, {})",
                       norm.width, norm.height, norm.x, norm.y);
 
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, norm.x, norm.y);
             wlr_xdg_toplevel_set_tiled(wrapper->toplevel, WLR_EDGE_NONE);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, false);
             wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
+
+            WindowBox target_box = norm;
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Unmaximize,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.160,
+                .start_geom = start_box,
+                .target_geom = target_box,
+                .start_opacity = 1.0,
+                .target_opacity = 1.0,
+                .start_scale = 1.0,
+                .target_scale = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                    }
+                },
+                .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                    }
+                }
+            });
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
@@ -864,6 +996,12 @@ private:
             );
         }
 
+        WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                            wrapper->toplevel->base->current.geometry.width,
+                            wrapper->toplevel->base->current.geometry.height};
+        if (start_box.width <= 0) start_box.width = 800;
+        if (start_box.height <= 0) start_box.height = 600;
+
         wrapper->state_machine.set_assigned_output(out);
         wrapper->state_machine.request_snap(mode, work_area);
 
@@ -871,8 +1009,6 @@ private:
         log::info("[Window] Snap window (mode={}) to {}x{} at ({}, {}) on output '{}'",
                   static_cast<int>(mode), snap_box.width, snap_box.height, snap_box.x, snap_box.y,
                   out->name ? out->name : "unknown");
-
-        wlr_scene_node_set_position(&wrapper->scene_tree->node, snap_box.x, snap_box.y);
 
         uint32_t tiled_edges = WLR_EDGE_NONE;
         switch (mode) {
@@ -901,6 +1037,33 @@ private:
         wlr_xdg_toplevel_set_maximized(wrapper->toplevel, false);
         wlr_xdg_toplevel_set_tiled(wrapper->toplevel, tiled_edges);
         wlr_xdg_toplevel_set_size(wrapper->toplevel, snap_box.width, snap_box.height);
+
+        WindowBox target_box = snap_box;
+        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+        AnimationManager::instance().start_animation({
+            .window_id = anim_id,
+            .target_handle = wrapper,
+            .type = WindowAnimationType::Snap,
+            .curve = AnimationCurve::EaseDecelerate,
+            .duration_sec = 0.150,
+            .start_geom = start_box,
+            .target_geom = target_box,
+            .start_opacity = 1.0,
+            .target_opacity = 1.0,
+            .start_scale = 1.0,
+            .target_scale = 1.0,
+            .on_step = [wrapper](const WindowAnimation& a) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                }
+            },
+            .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                }
+            }
+        });
+
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
@@ -908,14 +1071,46 @@ private:
         if (!wrapper || !wrapper->toplevel || !wrapper->scene_tree) return;
         if (wrapper->state_machine.snap_mode() == SnapMode::None) return;
 
+        WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                            wrapper->toplevel->base->current.geometry.width,
+                            wrapper->toplevel->base->current.geometry.height};
+        if (start_box.width <= 0) start_box.width = 800;
+        if (start_box.height <= 0) start_box.height = 600;
+
         wrapper->state_machine.request_restore();
         const auto& norm = wrapper->state_machine.geometry().normal_geom;
         log::info("[Window] Restore snapped window to {}x{} at ({}, {})",
                   norm.width, norm.height, norm.x, norm.y);
 
-        wlr_scene_node_set_position(&wrapper->scene_tree->node, norm.x, norm.y);
         wlr_xdg_toplevel_set_tiled(wrapper->toplevel, WLR_EDGE_NONE);
         wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
+
+        WindowBox target_box = norm;
+        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+        AnimationManager::instance().start_animation({
+            .window_id = anim_id,
+            .target_handle = wrapper,
+            .type = WindowAnimationType::Snap,
+            .curve = AnimationCurve::EaseDecelerate,
+            .duration_sec = 0.150,
+            .start_geom = start_box,
+            .target_geom = target_box,
+            .start_opacity = 1.0,
+            .target_opacity = 1.0,
+            .start_scale = 1.0,
+            .target_scale = 1.0,
+            .on_step = [wrapper](const WindowAnimation& a) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                }
+            },
+            .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                }
+            }
+        });
+
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
@@ -940,11 +1135,37 @@ private:
             }
 
             wrapper->state_machine.request_minimize();
-            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
-            log::info("[Window] Minimized toplevel — scene node disabled");
+            log::info("[Window] Minimized toplevel — animating minimize");
 
-            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ? wrapper->toplevel->app_id : "";
+            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ?
+                                     get_canonical_app_id(wrapper->toplevel->app_id) : "";
             if (TinexusServer::instance()) TinexusServer::instance()->notify_window_minimized(app_id_str);
+
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Minimize,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.140,
+                .start_opacity = 1.0,
+                .target_opacity = 0.0,
+                .start_scale = 1.0,
+                .target_scale = 0.85,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+                        wrapper->opacity = 1.0;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            });
 
             if (m_active_toplevel == wrapper) {
                 m_active_toplevel = nullptr;
@@ -962,10 +1183,39 @@ private:
 
             wrapper->state_machine.request_restore();
             wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
-            log::info("[Window] Restored toplevel — scene node enabled");
+            log::info("[Window] Restored toplevel — animating restore");
 
-            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ? wrapper->toplevel->app_id : "";
+            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ?
+                                     get_canonical_app_id(wrapper->toplevel->app_id) : "";
             if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id_str);
+
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            wrapper->opacity = 0.0;
+            wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Restore,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.140,
+                .start_opacity = 0.0,
+                .target_opacity = 1.0,
+                .start_scale = 0.85,
+                .target_scale = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = 1.0;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            });
 
             focus_toplevel(wrapper);
         }
@@ -976,77 +1226,65 @@ private:
         wlr_scene_buffer_set_opacity(buffer, static_cast<float>(opacity));
     }
 
-    static int handle_fade_out(void* data) {
-        auto* wrapper = static_cast<ToplevelWrapper*>(data);
-        if (!wrapper || !wrapper->is_closing || !wrapper->scene_tree || !wrapper->toplevel) return 0;
-
-        auto now = std::chrono::steady_clock::now();
-        double elapsed_ms = std::chrono::duration<double, std::milli>(now - wrapper->fade_start_time).count();
-        const double duration_ms = 120.0;
-        double progress = std::clamp(elapsed_ms / duration_ms, 0.0, 1.0);
-        wrapper->opacity = 1.0 - progress;
-
-        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
-
-        if (progress >= 1.0) {
-            wrapper->opacity = 0.0;
-            wlr_xdg_toplevel_send_close(wrapper->toplevel);
-
-            if (wrapper->fade_timer) {
-                wl_event_source_remove(wrapper->fade_timer);
-                wrapper->fade_timer = nullptr;
-            }
-            return 0;
-        }
-
-        wl_event_source_timer_update(wrapper->fade_timer, 8);
-        return 0;
-    }
-
     void close_active_window() noexcept override {
         if (!m_active_toplevel || m_active_toplevel->is_closing) {
             return;
         }
-        m_active_toplevel->is_closing = true;
-        m_active_toplevel->state_machine.mark_closing();
-        m_active_toplevel->fade_start_time = std::chrono::steady_clock::now();
-        m_active_toplevel->opacity = 1.0;
-        m_active_toplevel->fade_timer = wl_event_loop_add_timer(
-            wl_display_get_event_loop(m_display),
-            handle_fade_out,
-            m_active_toplevel
-        );
-        wl_event_source_timer_update(m_active_toplevel->fade_timer, 8);
-        log::info("[Window] Initiating time-delta fade-out for window close");
+        auto* wrapper = m_active_toplevel;
+        wrapper->is_closing = true;
+        wrapper->state_machine.mark_closing();
+        wrapper->opacity = 1.0;
+        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+
+        log::info("[Window] Initiating AnimationManager fade-out for window close");
+        AnimationManager::instance().start_animation({
+            .window_id = anim_id,
+            .target_handle = wrapper,
+            .type = WindowAnimationType::Close,
+            .curve = AnimationCurve::EaseDecelerate,
+            .duration_sec = 0.120,
+            .start_opacity = 1.0,
+            .target_opacity = 0.0,
+            .on_step = [wrapper](const WindowAnimation& a) {
+                if (wrapper && wrapper->scene_tree) {
+                    wrapper->opacity = a.current_opacity;
+                    wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                }
+            },
+            .on_complete = [wrapper](const WindowAnimation&) {
+                if (wrapper && wrapper->toplevel) {
+                    wlr_xdg_toplevel_send_close(wrapper->toplevel);
+                }
+            }
+        });
     }
 
     SnapMode detect_snap_zone(double cx, double cy, struct wlr_output* out) const {
-        if (!out || !m_output_layout) return SnapMode::None;
-        struct wlr_box out_box{0, 0, 0, 0};
-        wlr_output_layout_get_box(m_output_layout, out, &out_box);
-        if (out_box.width <= 0 || out_box.height <= 0) return SnapMode::None;
+        if (!out) return SnapMode::None;
+        OutputGeometry out_geom = get_output_geometry(out);
+        if (out_geom.logical_width <= 0 || out_geom.logical_height <= 0) return SnapMode::None;
 
         const int edge_thresh = 16;
         const int corner_thresh = 64;
 
-        if (cy <= out_box.y + edge_thresh) {
-            if (cx <= out_box.x + corner_thresh) return SnapMode::TopLeft;
-            if (cx >= out_box.x + out_box.width - corner_thresh) return SnapMode::TopRight;
+        if (cy <= out_geom.global_y + edge_thresh) {
+            if (cx <= out_geom.global_x + corner_thresh) return SnapMode::TopLeft;
+            if (cx >= out_geom.global_x + out_geom.logical_width - corner_thresh) return SnapMode::TopRight;
             return SnapMode::Top;
         }
-        if (cy >= out_box.y + out_box.height - edge_thresh) {
-            if (cx <= out_box.x + corner_thresh) return SnapMode::BottomLeft;
-            if (cx >= out_box.x + out_box.width - corner_thresh) return SnapMode::BottomRight;
+        if (cy >= out_geom.global_y + out_geom.logical_height - edge_thresh) {
+            if (cx <= out_geom.global_x + corner_thresh) return SnapMode::BottomLeft;
+            if (cx >= out_geom.global_x + out_geom.logical_width - corner_thresh) return SnapMode::BottomRight;
             return SnapMode::None;
         }
-        if (cx <= out_box.x + edge_thresh) {
-            if (cy <= out_box.y + corner_thresh) return SnapMode::TopLeft;
-            if (cy >= out_box.y + out_box.height - corner_thresh) return SnapMode::BottomLeft;
+        if (cx <= out_geom.global_x + edge_thresh) {
+            if (cy <= out_geom.global_y + corner_thresh) return SnapMode::TopLeft;
+            if (cy >= out_geom.global_y + out_geom.logical_height - corner_thresh) return SnapMode::BottomLeft;
             return SnapMode::Left;
         }
-        if (cx >= out_box.x + out_box.width - edge_thresh) {
-            if (cy <= out_box.y + corner_thresh) return SnapMode::TopRight;
-            if (cy >= out_box.y + out_box.height - corner_thresh) return SnapMode::BottomRight;
+        if (cx >= out_geom.global_x + out_geom.logical_width - edge_thresh) {
+            if (cy <= out_geom.global_y + corner_thresh) return SnapMode::TopRight;
+            if (cy >= out_geom.global_y + out_geom.logical_height - corner_thresh) return SnapMode::BottomRight;
             return SnapMode::Right;
         }
 
@@ -1057,11 +1295,8 @@ private:
         if (wrapper->is_fullscreen == fullscreen) {
             if (fullscreen && wrapper->scene_tree) {
                 struct wlr_output* out = get_output_for_toplevel(wrapper);
-                struct wlr_box out_box{0, 0, 0, 0};
-                if (out && m_output_layout) {
-                    wlr_output_layout_get_box(m_output_layout, out, &out_box);
-                }
-                wlr_scene_node_set_position(&wrapper->scene_tree->node, out_box.x, out_box.y);
+                OutputGeometry out_geom = get_output_geometry(out);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, out_geom.global_x, out_geom.global_y);
             }
             wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
             return;
@@ -1078,12 +1313,9 @@ private:
                 wrapper->state_machine.update_floating_geometry(wrapper->saved_x, wrapper->saved_y, wrapper->saved_width, wrapper->saved_height);
             }
             struct wlr_output* out = get_output_for_toplevel(wrapper);
-            struct wlr_box output_box = {0, 0, 0, 0};
-            if (out && m_output_layout) {
-                wlr_output_layout_get_box(m_output_layout, out, &output_box);
-                wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
-            }
-            wrapper->state_machine.request_fullscreen(WindowBox{output_box.x, output_box.y, output_box.width, output_box.height});
+            OutputGeometry out_geom = get_output_geometry(out);
+            WindowBox output_box = out_geom.full_box();
+            wrapper->state_machine.request_fullscreen(output_box);
             log::info("[Window] Fullscreen window to {}x{} at ({}, {})", output_box.width, output_box.height, output_box.x, output_box.y);
             wlr_scene_node_set_position(&wrapper->scene_tree->node, output_box.x, output_box.y);
             wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, true);
@@ -1227,6 +1459,11 @@ private:
             wrapper->state_machine.set_assigned_output(out);
         }
 
+        std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
+        if (!app_id_str.empty() && TinexusServer::instance()) {
+            TinexusServer::instance()->notify_app_started(app_id_str);
+        }
+
         // If the lock screen just connected, track surface pointer and mark session locked
         if (std::string(app_id) == "lock" || std::string(app_id) == "tinexus-lock") {
             log::info("[XDGShell] Lock screen mapped — m_lock_surface={} session LOCKED", static_cast<void*>(surface));
@@ -1239,6 +1476,32 @@ private:
             wrapper->backend->toplevel_set_fullscreen(wrapper, true);
         } else if (wrapper->is_fullscreen) {
             wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+        } else if (wrapper->toplevel && wrapper->scene_tree && !wrapper->backend->m_is_locked) {
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            wrapper->opacity = 0.0;
+            wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Open,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.120,
+                .start_opacity = 0.0,
+                .target_opacity = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = 1.0;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            });
         }
 
         wrapper->backend->focus_toplevel(wrapper);
@@ -1282,6 +1545,9 @@ private:
         struct wlr_surface* surface = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->surface : nullptr;
 
         log::info("[XDGShell] handle_toplevel_destroy for wrapper={}", static_cast<void*>(wrapper));
+
+        // 0. Cancel active animations immediately to prevent any callback or dereference
+        AnimationManager::instance().cancel_animation(reinterpret_cast<uint64_t>(wrapper));
 
         // 1. Cancel/disarm timers (F-03 safety)
         if (wrapper->fade_timer != nullptr) {
@@ -1334,10 +1600,27 @@ private:
         if (wrapper->request_resize.link.next != nullptr) { wl_list_remove(&wrapper->request_resize.link); wrapper->request_resize.link.next = nullptr; }
 
         // 5. Remove from list (destroys wrapper and its scene resources via unique_ptr)
+        std::string dead_app_id = (wrapper->toplevel && wrapper->toplevel->app_id) ?
+                                  get_canonical_app_id(wrapper->toplevel->app_id) : "";
         for (auto it = backend->m_toplevels.begin(); it != backend->m_toplevels.end(); ++it) {
             if (it->get() == wrapper) {
                 backend->m_toplevels.erase(it);
                 break;
+            }
+        }
+
+        if (!dead_app_id.empty()) {
+            bool has_remaining = false;
+            for (const auto& other : backend->m_toplevels) {
+                if (other->toplevel && other->toplevel->app_id) {
+                    if (get_canonical_app_id(other->toplevel->app_id) == dead_app_id) {
+                        has_remaining = true;
+                        break;
+                    }
+                }
+            }
+            if (!has_remaining && TinexusServer::instance()) {
+                TinexusServer::instance()->notify_app_closed(dead_app_id);
             }
         }
 
@@ -1377,6 +1660,18 @@ private:
             wlr_scene_node_set_position(&bg_rect->node, 0, 0);
 
             self->m_outputs.push_back(std::move(output));
+
+            // Reconfigure any layer surfaces with authoritative output geometry
+            for (auto* layer_w : self->m_layer_surfaces) {
+                if (!layer_w || !layer_w->layer_surface) continue;
+                if (!layer_w->layer_surface->output) {
+                    layer_w->layer_surface->output = wlr_out;
+                }
+                struct wlr_box full_area = {0, 0, 0, 0};
+                wlr_output_effective_resolution(layer_w->layer_surface->output, &full_area.width, &full_area.height);
+                struct wlr_box usable_area = full_area;
+                wlr_scene_layer_surface_v1_configure(layer_w->scene_layer, &full_area, &usable_area);
+            }
         } else {
             log::error("[Backend] Failed to initialize TinexusOutput for '{}'", wlr_out->name);
         }
@@ -1667,7 +1962,15 @@ private:
             if (node) {
                 ToplevelWrapper* clicked_wrapper = self->find_toplevel_from_node(node);
                 if (clicked_wrapper != nullptr) {
+                    const char* app_name = (clicked_wrapper->toplevel && clicked_wrapper->toplevel->app_id)
+                        ? clicked_wrapper->toplevel->app_id : "unknown";
+                    log::info("[Window] Click at ({:.1f}, {:.1f}) focused toplevel '{}' ({})",
+                              self->m_cursor->x, self->m_cursor->y,
+                              app_name, static_cast<void*>(clicked_wrapper));
                     self->focus_toplevel(clicked_wrapper);
+                } else if (self->m_cursor->y <= 60.0) {
+                    log::debug("[Window] Click at ({:.1f}, {:.1f}) hit non-toplevel node {}",
+                               self->m_cursor->x, self->m_cursor->y, static_cast<void*>(node));
                 }
             }
         } else if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
