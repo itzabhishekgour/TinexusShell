@@ -36,8 +36,8 @@ public:
     [[nodiscard]] std::vector<uint32_t>& pixels() noexcept { return m_pixels; }
 
 private:
-    uint32_t m_width{1920};
-    uint32_t m_height{1080};
+    uint32_t m_width{0};
+    uint32_t m_height{0};
     std::vector<uint32_t> m_pixels;
 };
 
@@ -53,8 +53,8 @@ public:
     [[nodiscard]] uint32_t image_count() const noexcept { return m_swapchain_count; }
 
 private:
-    uint32_t m_width{1920};
-    uint32_t m_height{1080};
+    uint32_t m_width{0};
+    uint32_t m_height{0};
     uint32_t m_swapchain_count{3};
 };
 
@@ -69,8 +69,8 @@ public:
     [[nodiscard]] bool is_valid() const noexcept override { return m_valid; }
 
 private:
-    uint32_t m_width{1920};
-    uint32_t m_height{1080};
+    uint32_t m_width{0};
+    uint32_t m_height{0};
     bool m_valid{true};
 };
 

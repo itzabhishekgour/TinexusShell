@@ -1,7 +1,21 @@
 #include "comp/renderer/opengl_renderer.hpp"
+#include "common/DisplayUtils.hpp"
 #include "common/logger.hpp"
+#include <cstdio>
 
 namespace tinexus::comp {
+
+bool OpenGLRenderer::initialize() {
+    auto disp = tinexus::hardware::DisplayUtils::get_primary_display();
+    uint32_t w = 0, h = 0;
+    if (disp.connected && !disp.resolution.empty()) {
+        sscanf(disp.resolution.c_str(), "%ux%u", &w, &h);
+    }
+    if (w == 0 || h == 0) {
+        w = 1280; h = 720;
+    }
+    return initialize(w, h);
+}
 
 bool OpenGLRenderer::initialize(uint32_t width, uint32_t height) {
     log::info("OpenGLRenderer: Creating EGL Context (eglCreateContext) & Compiling GL Shaders ({}x{})...", width, height);

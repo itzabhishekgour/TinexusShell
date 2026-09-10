@@ -14,7 +14,7 @@ public:
     ~OpenGLRenderer() override = default;
 
     bool initialize(uint32_t width, uint32_t height) override;
-    bool initialize() { return initialize(1920, 1080); }
+    bool initialize();
     void begin_frame() override;
     void compose_surface(RenderSurface& surface) override;
     void damage_region(const DamageRegion& region) override;

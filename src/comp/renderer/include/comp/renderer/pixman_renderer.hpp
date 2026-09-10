@@ -26,8 +26,8 @@ public:
     [[nodiscard]] uint32_t height() const noexcept { return m_height; }
 
 private:
-    uint32_t m_width{1920};
-    uint32_t m_height{1080};
+    uint32_t m_width{0};
+    uint32_t m_height{0};
     std::vector<uint32_t> m_canvas; // ARGB8888 canvas buffer
     DamageRegion m_active_damage;
     bool m_in_frame{false};
