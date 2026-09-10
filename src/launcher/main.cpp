@@ -58,13 +58,8 @@ static pid_t spawn_app(const AppItem& item) {
     if (clean_exec.empty()) return -1;
 
     // Check single-instance applications before blind fork
-    std::string canonical_app_id;
-    if (clean_exec.find("settings") != std::string::npos) canonical_app_id = "tinexus-settings";
-    else if (clean_exec.find("about") != std::string::npos) canonical_app_id = "tinexus-about";
-    else if (clean_exec.find("monitor") != std::string::npos) canonical_app_id = "tinexus-monitor";
-    else if (clean_exec.find("store") != std::string::npos) canonical_app_id = "tinexus-store";
-
-    if (!canonical_app_id.empty() && txui::SingleInstance::is_app_running(canonical_app_id)) {
+    std::string canonical_app_id = txui::get_canonical_app_id(clean_exec);
+    if (txui::is_single_instance_app(canonical_app_id) && txui::SingleInstance::is_app_running(canonical_app_id)) {
         log::info("[Launcher] App '{}' is already running; raising existing window", canonical_app_id);
         txui::SingleInstance::focus_app(canonical_app_id);
         return 0;
