@@ -3,6 +3,7 @@
 #include "lock/LockWidget.hpp"
 #include <txui/window/Window.hpp>
 #include <txui/input/Event.hpp>
+#include <txui/core/SingleInstance.hpp>
 #include <ctime>
 #include <cstring>
 #include <unistd.h>
@@ -86,7 +87,13 @@ int main(int /*argc*/, char** /*argv*/) {
     tinexus::log::info("Starting tinexus-lock graphical UI v{} (PAM={})",
                        tinexus::VERSION_STRING, TINEXUS_LOCK_HAS_PAM);
 
-    auto window = txui::Window::create(1920, 1080, "Tinexus Lock");
+    txui::SingleInstance single_instance("tinexus-lock");
+    if (!single_instance.is_primary()) {
+        tinexus::log::warn("[lock] tinexus-lock is already active; exiting secondary instance.");
+        return 0;
+    }
+
+    auto window = txui::Window::create(800, 600, "Tinexus Lock");
     if (!window || !window->is_wayland_connected()) {
         tinexus::log::error("[lock] Failed to connect to Wayland display!");
         return 1;
