@@ -220,21 +220,25 @@ bool TinexusServer::initialize() {
                 return;
             }
 
-            // ── Window snapping (wired to focused window in future) ───────────
+            // ── Window snapping & maximize/restore ───────────────────────────
             if (shortcut_name == "snap_left") {
-                log::info("[Server] snap_left — window snapping (Phase B)");
+                log::info("[Server] snap_left — snapping focused window to left half");
+                m_backend->snap_active_window(SnapMode::Left);
                 return;
             }
             if (shortcut_name == "snap_right") {
-                log::info("[Server] snap_right — window snapping (Phase B)");
+                log::info("[Server] snap_right — snapping focused window to right half");
+                m_backend->snap_active_window(SnapMode::Right);
                 return;
             }
             if (shortcut_name == "maximize") {
-                log::info("[Server] maximize — window maximize (Phase B)");
+                log::info("[Server] maximize — maximizing focused window");
+                m_backend->maximize_active_window();
                 return;
             }
             if (shortcut_name == "restore") {
-                log::info("[Server] restore — window restore (Phase B)");
+                log::info("[Server] restore — restoring focused window");
+                m_backend->restore_active_window();
                 return;
             }
             if (shortcut_name == "close_window") {
@@ -324,7 +328,7 @@ const std::string& TinexusServer::wayland_display() const noexcept {
     return m_display_socket;
 }
 
-static int s_icon_query_timeout_handler(void* data) {
+[[maybe_unused]] static int s_icon_query_timeout_handler(void* data) {
     auto* srv = static_cast<TinexusServer*>(data);
     srv->check_icon_query_timeout();
     return 0;
@@ -336,7 +340,8 @@ void TinexusServer::setup_ipc_connection() {
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
-        snprintf(addr.sun_path, sizeof(addr.sun_path), "/run/user/%d/tinexus/ipc.sock", getuid());
+        std::string sock_path = tinexus::common::RuntimePaths::get_ipc_socket_path();
+        strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
         if (connect(m_ipc_socket, (struct sockaddr*)&addr, sizeof(addr)) == 0 || errno == EINPROGRESS) {
             wl_event_loop_add_fd(m_wl_loop, m_ipc_socket, WL_EVENT_READABLE, handle_ipc_fd, this);
             log::info("[Server] Connected to ipcd at {}", addr.sun_path);
@@ -421,6 +426,9 @@ void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, 
     }
     else if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RESTORE_REQUEST) && payload_len >= sizeof(DockNotifyPayload)) {
         const auto* p = static_cast<const DockNotifyPayload*>(payload);
+        if (m_backend) {
+            m_backend->restore_window_by_app_id(p->app_id);
+        }
         auto win = WindowManager::instance().find_window(p->surface_id);
         if (win) {
             float start_opacity = 0.0f;
@@ -477,9 +485,11 @@ void TinexusServer::check_icon_query_timeout() {
     m_pending_icon_query.active = false;
     auto win = WindowManager::instance().find_window(m_pending_icon_query.surface_id);
     if (win && win->animation_phase == AnimationPhase::None) {
-        // fallback: bottom-center of screen
-        win->dock_icon_x = 1920 / 2; // Hardcode width for now, or get from output
-        win->dock_icon_y = 1080 - 36;
+        // fallback: bottom-center of window geometry
+        int32_t fallback_x = win->saved_x + static_cast<int32_t>(win->width > 0 ? win->width / 2 : 400);
+        int32_t fallback_y = win->saved_y + static_cast<int32_t>(win->height > 0 ? win->height : 600);
+        win->dock_icon_x = fallback_x;
+        win->dock_icon_y = fallback_y;
         win->animation_phase = AnimationPhase::Minimizing;
         win->active_dock_anim = std::make_unique<MinimizeAnimation>(win, 1.0f, 1.0f, win->saved_x, win->saved_y);
         win->active_dock_anim->start();
@@ -562,6 +572,66 @@ void TinexusServer::notify_window_restored(const std::string& app_id) {
         msg.hdr.checksum = 0;
         strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
         msg.pld.surface_id = 0;
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
+}
+
+void TinexusServer::notify_app_started(const std::string& app_id) {
+    if (m_ipc_socket < 0) setup_ipc_connection();
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockNotifyPayload pld;
+        } __attribute__((packed)) msg;
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_STARTED);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        msg.hdr.sequence_id = 0;
+        msg.hdr.flags = 0;
+        msg.hdr.checksum = 0;
+        strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
+        msg.pld.surface_id = 0;
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
+}
+
+void TinexusServer::notify_app_closed(const std::string& app_id) {
+    if (m_ipc_socket < 0) setup_ipc_connection();
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockNotifyPayload pld;
+        } __attribute__((packed)) msg;
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_CLOSED);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        msg.hdr.sequence_id = 0;
+        msg.hdr.flags = 0;
+        msg.hdr.checksum = 0;
+        strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
+        msg.pld.surface_id = 0;
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
+}
+
+void TinexusServer::notify_app_focus_changed(const std::string& app_id, uint8_t is_focused) {
+    if (m_ipc_socket < 0) setup_ipc_connection();
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockFocusChangedPayload pld;
+        } __attribute__((packed)) msg;
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        msg.hdr.sequence_id = 0;
+        msg.hdr.flags = 0;
+        msg.hdr.checksum = 0;
+        strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
+        msg.pld.is_focused = is_focused;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
 }
