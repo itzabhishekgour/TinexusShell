@@ -122,20 +122,80 @@ void run_udev_setup() {
         if (p > 0) waitpid(p, nullptr, 0);
     }
 
-    // ── Conditional VM-Only Module Probing ──
-    // virtio_snd is only probed if running inside a virtual machine (/sys/bus/virtio exists).
-    // On physical hardware, this is silently skipped to avoid kernel error noise.
-    if (std::filesystem::exists("/sys/bus/virtio")) {
-        tinexus::log::info("Virtual machine detected (/sys/bus/virtio present); loading virtio_snd...");
-        pid_t vp = fork();
-        if (vp == 0) {
-            execl("/sbin/modprobe", "modprobe", "-q", "virtio_snd", nullptr);
-            execl("/bin/modprobe", "modprobe", "-q", "virtio_snd", nullptr);
-            execl("/usr/bin/modprobe", "modprobe", "-q", "virtio_snd", nullptr);
-            _exit(0);
+    // ── Universal Multimedia Audio Driver Auto-Probing (Bare Metal & VM) ──
+    // Enumerate PCI devices with class 0403 (Multimedia Audio Controller).
+    // Dynamically query each controller's kernel MODALIAS and invoke modprobe.
+    // This provides unified driver loading for both bare metal (snd-hda-intel, SOF)
+    // and virtual environments (virtio_snd) without environment-specific branching.
+    if (std::filesystem::exists("/sys/bus/pci/devices")) {
+        tinexus::log::info("Probing PCI multimedia audio controllers (class 0403)...");
+        for (const auto& dev_entry : std::filesystem::directory_iterator("/sys/bus/pci/devices")) {
+            auto class_file = dev_entry.path() / "class";
+            if (!std::filesystem::exists(class_file)) continue;
+
+            std::ifstream c_ifs(class_file);
+            std::string class_val;
+            if (c_ifs >> class_val) {
+                // PCI audio controllers have base class 0x04, sub-class 0x03 (e.g. 0x040300)
+                if (class_val.rfind("0x0403", 0) == 0 || class_val.find("0403") != std::string::npos) {
+                    auto modalias_file = dev_entry.path() / "modalias";
+                    if (std::filesystem::exists(modalias_file)) {
+                        std::ifstream m_ifs(modalias_file);
+                        std::string modalias;
+                        if (m_ifs >> modalias && !modalias.empty()) {
+                            tinexus::log::info("Loading audio driver for PCI device {} (class={}, modalias={})...",
+                                                dev_entry.path().filename().string(), class_val, modalias);
+                            pid_t mp = fork();
+                            if (mp == 0) {
+                                execl("/sbin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                                execl("/usr/sbin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                                execl("/bin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                                execl("/usr/bin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                                execlp("modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                                _exit(0);
+                            }
+                            if (mp > 0) waitpid(mp, nullptr, 0);
+                        }
+                    }
+                }
+            }
         }
-        if (vp > 0) waitpid(vp, nullptr, 0);
     }
+
+    // ── Universal Child Audio Codec & Platform Driver Auto-Probing ──
+    // Once the audio controllers are probed, dynamically query any discovered
+    // codecs on the HDA bus (/sys/bus/hdaudio/devices) and audio machine platform
+    // devices (/sys/bus/platform/devices). This discovers and binds the exact
+    // hardware codecs (Realtek, Conexant, Cirrus, HDMI, etc.) across different
+    // laptop, desktop, and VM systems without hardcoding any vendor or card IDs.
+    auto probe_devices_in_bus = [](const std::string& bus_path, const std::string& bus_label) {
+        if (!std::filesystem::exists(bus_path)) return;
+        tinexus::log::info("Probing dynamic {} devices in {}...", bus_label, bus_path);
+        for (const auto& entry : std::filesystem::directory_iterator(bus_path)) {
+            auto modalias_file = entry.path() / "modalias";
+            if (std::filesystem::exists(modalias_file)) {
+                std::ifstream m_ifs(modalias_file);
+                std::string modalias;
+                if (m_ifs >> modalias && !modalias.empty()) {
+                    tinexus::log::info("Loading driver for {} device {} (modalias={})...",
+                                       bus_label, entry.path().filename().string(), modalias);
+                    pid_t mp = fork();
+                    if (mp == 0) {
+                        execl("/sbin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                        execl("/usr/sbin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                        execl("/bin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                        execl("/usr/bin/modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                        execlp("modprobe", "modprobe", "-q", modalias.c_str(), nullptr);
+                        _exit(0);
+                    }
+                    if (mp > 0) waitpid(mp, nullptr, 0);
+                }
+            }
+        }
+    };
+
+    probe_devices_in_bus("/sys/bus/hdaudio/devices", "HDA codec");
+    probe_devices_in_bus("/sys/bus/platform/devices", "platform audio");
 
     tinexus::log::info("--- CHECKING /dev/input NODES ---");
     if (std::filesystem::exists("/dev/input")) {
@@ -190,10 +250,22 @@ void run_udev_setup() {
 }
 
 void setup_default_audio_routing() {
+    // Dynamically wait up to 3 seconds for asynchronous sound card creation to settle
+    auto cards = tinexus::hardware::AudioUtils::get_sound_cards();
+    for (int retry = 0; retry < 15 && cards.empty(); ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        cards = tinexus::hardware::AudioUtils::get_sound_cards();
+    }
+
+    if (cards.empty()) {
+        tinexus::log::info("No sound cards detected on this system — skipping ALSA routing.");
+        return;
+    }
+
     int card_id = tinexus::hardware::AudioUtils::detect_primary_card_id();
     tinexus::log::info("Configuring default ALSA sound routing to Card {}", card_id);
 
-    // Generate /etc/asound.conf so all applications default to the analog audio card
+    // Generate /etc/asound.conf so all applications default to the detected primary analog audio card
     std::ofstream ofs("/etc/asound.conf");
     if (ofs.is_open()) {
         ofs << "defaults.pcm.card " << card_id << "\n";
@@ -236,31 +308,34 @@ void restore_hardware_state() {
     tinexus::hardware::BacklightUtils::set_brightness_percent(b_pct, /*persist=*/false, /*throttle=*/false);
     tinexus::log::info("Applied display brightness: {}%", b_pct);
 
-    // 2. Audio Volume & Unmute
-    int v_pct = cfg.volume;
-    bool is_muted = cfg.muted;
-    int card_id = tinexus::hardware::AudioUtils::detect_primary_card_id();
-    std::string card_str = std::to_string(card_id);
-    std::string ctrl = tinexus::hardware::AudioUtils::detect_primary_control();
-    tinexus::log::info("Detected primary ALSA control on card {}: {}", card_id, ctrl);
-    tinexus::hardware::AudioUtils::set_volume_percent(v_pct, /*persist=*/false, /*throttle=*/false);
+    // 2. Audio Volume & Unmute (if audio hardware is present)
+    auto cards = tinexus::hardware::AudioUtils::get_sound_cards();
+    if (!cards.empty()) {
+        int v_pct = cfg.volume;
+        bool is_muted = cfg.muted;
+        int card_id = tinexus::hardware::AudioUtils::detect_primary_card_id();
+        std::string card_str = std::to_string(card_id);
+        std::string ctrl = tinexus::hardware::AudioUtils::detect_primary_control();
+        tinexus::log::info("Detected primary ALSA control on card {}: {}", card_id, ctrl);
+        tinexus::hardware::AudioUtils::set_volume_percent(v_pct, /*persist=*/false, /*throttle=*/false);
 
-    if (is_muted) {
-        pid_t p = fork();
-        if (p == 0) {
-            execl("/usr/bin/amixer", "amixer", "-c", card_str.c_str(), "sset", ctrl.c_str(), "mute", "-q", nullptr);
-            _exit(0);
+        if (is_muted) {
+            pid_t p = fork();
+            if (p == 0) {
+                execl("/usr/bin/amixer", "amixer", "-c", card_str.c_str(), "sset", ctrl.c_str(), "mute", "-q", nullptr);
+                _exit(0);
+            }
+            if (p > 0) waitpid(p, nullptr, 0);
+        } else {
+            pid_t p = fork();
+            if (p == 0) {
+                execl("/usr/bin/amixer", "amixer", "-c", card_str.c_str(), "sset", ctrl.c_str(), "unmute", "-q", nullptr);
+                _exit(0);
+            }
+            if (p > 0) waitpid(p, nullptr, 0);
         }
-        if (p > 0) waitpid(p, nullptr, 0);
-    } else {
-        pid_t p = fork();
-        if (p == 0) {
-            execl("/usr/bin/amixer", "amixer", "-c", card_str.c_str(), "sset", ctrl.c_str(), "unmute", "-q", nullptr);
-            _exit(0);
-        }
-        if (p > 0) waitpid(p, nullptr, 0);
+        tinexus::log::info("Applied audio volume: {}% on card {} (muted={})", v_pct, card_id, is_muted);
     }
-    tinexus::log::info("Applied audio volume: {}% on card {} (muted={})", v_pct, card_id, is_muted);
 }
 
 void signal_handler(int signal) {
