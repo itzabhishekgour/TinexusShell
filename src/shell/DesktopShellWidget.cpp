@@ -97,13 +97,8 @@ pid_t spawn_app(const AppItem& item) {
         }
     }
     // Check single-instance applications before blind fork
-    std::string canonical_app_id;
-    if (item.exec.find("settings") != std::string::npos) canonical_app_id = "tinexus-settings";
-    else if (item.exec.find("about") != std::string::npos) canonical_app_id = "tinexus-about";
-    else if (item.exec.find("monitor") != std::string::npos) canonical_app_id = "tinexus-monitor";
-    else if (item.exec.find("store") != std::string::npos) canonical_app_id = "tinexus-store";
-
-    if (!canonical_app_id.empty() && txui::SingleInstance::is_app_running(canonical_app_id)) {
+    std::string canonical_app_id = txui::get_canonical_app_id(item.exec);
+    if (txui::is_single_instance_app(canonical_app_id) && txui::SingleInstance::is_app_running(canonical_app_id)) {
         log::info("[Shell] App '{}' is already running; raising existing window", canonical_app_id);
         txui::SingleInstance::focus_app(canonical_app_id);
         return 0;
@@ -255,7 +250,7 @@ DesktopShellWidget::DesktopShellWidget() {
         calendar_open = !was_open;
         m_notch->set_calendar_open(calendar_open);
         if (on_resize_requested) {
-            on_resize_requested(calendar_open ? 350.0 : 46.0);
+            on_resize_requested(calendar_open ? 350.0 : TOTAL_BAR_HEIGHT);
         }
         mark_needs_paint();
     };
@@ -294,6 +289,23 @@ DesktopShellWidget::DesktopShellWidget() {
     // Notification flyout clear
     m_notification_flyout->on_clear_all = [this]() {
         notifications.clear();
+        if (notifications_open && on_resize_requested) {
+            double nh = m_notification_flyout ? m_notification_flyout->calculate_height() + 50.0 : 350.0;
+            on_resize_requested(nh);
+        }
+        mark_needs_paint();
+    };
+
+    m_notification_flyout->on_notification_click = [this](uint32_t id) {
+        notifications.erase(
+            std::remove_if(notifications.begin(), notifications.end(),
+                           [id](const ShellNotificationItem& item) { return item.id == id; }),
+            notifications.end()
+        );
+        if (notifications_open && on_resize_requested) {
+            double nh = m_notification_flyout ? m_notification_flyout->calculate_height() + 50.0 : 350.0;
+            on_resize_requested(nh);
+        }
         mark_needs_paint();
     };
 
@@ -326,7 +338,7 @@ void DesktopShellWidget::close_all_flyouts() {
     if (m_notch) m_notch->set_calendar_open(false);
 
     if (changed && on_resize_requested) {
-        on_resize_requested(46.0);
+        on_resize_requested(TOTAL_BAR_HEIGHT);
     }
     mark_needs_paint();
 }
@@ -340,7 +352,7 @@ void DesktopShellWidget::layout_override(const txui::Rect& f) noexcept {
     const double cx = f.x() + W * 0.5;
 
     if (m_notch) {
-        m_notch->layout(txui::Rect(cx - 150.0, f.y(), 300.0, 46.0));
+        m_notch->layout(txui::Rect(cx - 150.0, f.y(), 300.0, NOTCH_HEIGHT));
     }
     if (m_logo_menu) {
         m_logo_menu->layout(txui::Rect(f.x() + 8.0, f.y() + 38.0, 236.0, 260.0));
@@ -369,12 +381,12 @@ void DesktopShellWidget::paint_override(txui::Painter& painter) const noexcept {
     // Clear Wayland SHM surface to transparent
     painter.clear(txui::Color(0, 0, 0, 0));
 
-    // ── 1. Full-Width Top Bar (32px high) ──────────────────────────────────
-    constexpr double BAR_H = 32.0;
+    // ── 1. Full-Width Top Bar (BAR_HEIGHT high) ───────────────────────────
+    constexpr double BAR_H = BAR_HEIGHT;
     painter.fill_rect(txui::Rect(f.x(), f.y(), W, BAR_H), BAR_BG);
 
     // Hairline border along bottom of 32px bar, meeting notch slopes
-    constexpr double NOTCH_H = 46.0;
+    constexpr double NOTCH_H = NOTCH_HEIGHT;
     constexpr double NOTCH_TOP_HALF = 136.0;
     constexpr double NOTCH_BOT_HALF = 98.0;
     constexpr double NOTCH_SLOPE = NOTCH_TOP_HALF - NOTCH_BOT_HALF;
@@ -574,14 +586,14 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
     if (event.type == txui::EventType::PointerMove) {
         double mx = event.pointer.x, my = event.pointer.y;
 
-        bool h_logo = (mx >= f.x() + 6.0 && mx <= f.x() + 36.0 && my >= f.y() && my <= f.y() + 32.0);
+        bool h_logo = (mx >= f.x() + 6.0 && mx <= f.x() + 36.0 && my >= f.y() && my <= f.y() + BAR_HEIGHT);
         double app_label_w = txui::FontMetrics::measure(active_app_name, 13.0).width + 28.0;
-        bool h_app  = (mx >= f.x() + 42.0 && mx <= f.x() + 42.0 + app_label_w && my >= f.y() && my <= f.y() + 32.0);
-        bool h_sun  = (mx >= f.x() + W - 230.0 && mx <= f.x() + W - 200.0 && my >= f.y() && my <= f.y() + 32.0);
-        bool h_vol  = (mx >= f.x() + W - 195.0 && mx <= f.x() + W - 165.0 && my >= f.y() && my <= f.y() + 32.0);
-        bool h_bat  = (mx >= f.x() + W - 155.0 && mx <= f.x() + W - 90.0 && my >= f.y() && my <= f.y() + 32.0);
-        bool h_wifi = (mx >= f.x() + W - 88.0 && mx <= f.x() + W - 50.0 && my >= f.y() && my <= f.y() + 32.0);
-        bool h_bell = (mx >= f.x() + W - 46.0 && mx <= f.x() + W - 10.0 && my >= f.y() && my <= f.y() + 32.0);
+        bool h_app  = (mx >= f.x() + 42.0 && mx <= f.x() + 42.0 + app_label_w && my >= f.y() && my <= f.y() + BAR_HEIGHT);
+        bool h_sun  = (mx >= f.x() + W - 230.0 && mx <= f.x() + W - 200.0 && my >= f.y() && my <= f.y() + BAR_HEIGHT);
+        bool h_vol  = (mx >= f.x() + W - 195.0 && mx <= f.x() + W - 165.0 && my >= f.y() && my <= f.y() + BAR_HEIGHT);
+        bool h_bat  = (mx >= f.x() + W - 155.0 && mx <= f.x() + W - 90.0 && my >= f.y() && my <= f.y() + BAR_HEIGHT);
+        bool h_wifi = (mx >= f.x() + W - 88.0 && mx <= f.x() + W - 50.0 && my >= f.y() && my <= f.y() + BAR_HEIGHT);
+        bool h_bell = (mx >= f.x() + W - 46.0 && mx <= f.x() + W - 10.0 && my >= f.y() && my <= f.y() + BAR_HEIGHT);
 
         if (hover_logo != h_logo || hover_app_title != h_app || hover_sun != h_sun ||
             hover_vol != h_vol || hover_bat != h_bat || hover_wifi != h_wifi || hover_bell != h_bell) {
@@ -598,7 +610,7 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
         if (app_menu_open) {
             int new_h = -1;
             if (mx >= f.x() + 44.0 && mx <= f.x() + 294.0 && my >= f.y() + 38.0) {
-                double rel_y = my - (f.y() + 46.0);
+                double rel_y = my - (f.y() + TOTAL_BAR_HEIGHT);
                 if (rel_y >= 0.0) new_h = static_cast<int>(rel_y / 28.0);
             }
             if (app_menu_hover != new_h) {
@@ -630,12 +642,12 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
         if (event.pointer.button == txui::MouseButton::Left) {
             double mx = event.pointer.x, my = event.pointer.y;
 
-            if (my <= f.y() + 46.0) {
+            if (my <= f.y() + BAR_HEIGHT) {
                 if (hover_logo) {
                     bool was_open = logo_menu_open;
                     close_all_flyouts();
                     logo_menu_open = !was_open;
-                    if (on_resize_requested) on_resize_requested(logo_menu_open ? 300.0 : 46.0);
+                    if (on_resize_requested) on_resize_requested(logo_menu_open ? 300.0 : TOTAL_BAR_HEIGHT);
                     mark_needs_paint();
                     return true;
                 }
@@ -643,7 +655,7 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                     bool was_open = app_menu_open;
                     close_all_flyouts();
                     app_menu_open = !was_open;
-                    if (on_resize_requested) on_resize_requested(app_menu_open ? 380.0 : 46.0);
+                    if (on_resize_requested) on_resize_requested(app_menu_open ? 380.0 : TOTAL_BAR_HEIGHT);
                     mark_needs_paint();
                     return true;
                 }
@@ -654,7 +666,7 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                     if (brightness_flyout_open && m_brightness_flyout) {
                         m_brightness_flyout->refresh_state();
                     }
-                    if (on_resize_requested) on_resize_requested(brightness_flyout_open ? 180.0 : 46.0);
+                    if (on_resize_requested) on_resize_requested(brightness_flyout_open ? 180.0 : TOTAL_BAR_HEIGHT);
                     mark_needs_paint();
                     return true;
                 }
@@ -665,7 +677,7 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                     if (volume_flyout_open && m_volume_flyout) {
                         m_volume_flyout->refresh_state();
                     }
-                    if (on_resize_requested) on_resize_requested(volume_flyout_open ? 190.0 : 46.0);
+                    if (on_resize_requested) on_resize_requested(volume_flyout_open ? 190.0 : TOTAL_BAR_HEIGHT);
                     mark_needs_paint();
                     return true;
                 }
@@ -686,7 +698,7 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                     notifications_open = !was_open;
                     if (on_resize_requested) {
                         double nh = m_notification_flyout ? m_notification_flyout->calculate_height() + 50.0 : 350.0;
-                        on_resize_requested(notifications_open ? nh : 46.0);
+                        on_resize_requested(notifications_open ? nh : TOTAL_BAR_HEIGHT);
                     }
                     mark_needs_paint();
                     return true;
@@ -703,14 +715,44 @@ bool DesktopShellWidget::handle_event(const txui::Event& event) noexcept {
                 }
             }
 
-            if (my > f.y() + 46.0) {
-                close_all_flyouts();
-                return true;
+            if (my > f.y() + BAR_HEIGHT) {
+                txui::Point pt(mx, my);
+                bool inside_open_flyout =
+                    (notifications_open && m_notification_flyout && m_notification_flyout->frame().contains(pt)) ||
+                    (calendar_open && m_calendar_flyout && m_calendar_flyout->frame().contains(pt)) ||
+                    (volume_flyout_open && m_volume_flyout && m_volume_flyout->frame().contains(pt)) ||
+                    (brightness_flyout_open && m_brightness_flyout && m_brightness_flyout->frame().contains(pt)) ||
+                    (logo_menu_open && m_logo_menu && m_logo_menu->frame().contains(pt)) ||
+                    (app_menu_open && mx >= f.x() + 44.0 && mx <= f.x() + 294.0 && my >= f.y() + 38.0 && my <= f.y() + 380.0);
+
+                if (!inside_open_flyout) {
+                    close_all_flyouts();
+                    return true;
+                }
             }
         }
     }
 
     return false;
+}
+
+std::vector<txui::Rect> DesktopShellWidget::compute_input_region(double width, double height) const noexcept {
+    if (width <= 0.0) {
+        return {};
+    }
+    if (height <= TOTAL_BAR_HEIGHT) {
+        // Multi-rect dynamic input region:
+        // 1. Full-width flat topbar (0 to BAR_HEIGHT = 32px)
+        // 2. Center notch trapezoid protrusion (BAR_HEIGHT to NOTCH_HEIGHT = 32px to 46px)
+        double cx = width * 0.5;
+        constexpr double NOTCH_TOP_HALF = 136.0;
+        return {
+            txui::Rect(0.0, 0.0, width, BAR_HEIGHT),
+            txui::Rect(cx - NOTCH_TOP_HALF, BAR_HEIGHT, NOTCH_TOP_HALF * 2.0, NOTCH_HEIGHT - BAR_HEIGHT)
+        };
+    }
+    // Flyout expanded: input region covers entire window bounds
+    return { txui::Rect(0.0, 0.0, width, height) };
 }
 
 } // namespace tinexus::shell

@@ -97,7 +97,8 @@ int main(int argc, char** argv) {
     log::info("[Shell] Tinexus Unified Desktop Shell starting...");
     signal(SIGCHLD, SIG_IGN);
 
-    auto window = txui::Window::create(1920, 46, "Aura", /*layer_shell=*/true);
+    const auto initial_bar_h = static_cast<uint32_t>(DesktopShellWidget::desired_bar_height());
+    auto window = txui::Window::create(800, initial_bar_h, "Aura", /*layer_shell=*/true);
     std::thread(ipc_listener_thread).detach();
 
     if (!window || !window->is_wayland_connected()) {
@@ -106,15 +107,28 @@ int main(int argc, char** argv) {
     }
 
     window->set_layer_shell_config(txui::LayerType::Top,
-        txui::LayerAnchor::Top | txui::LayerAnchor::Left | txui::LayerAnchor::Right, 32);
+        txui::LayerAnchor::Top | txui::LayerAnchor::Left | txui::LayerAnchor::Right,
+        DesktopShellWidget::desired_exclusive_zone());
 
     auto shell_widget = txui::make_ref<DesktopShellWidget>();
+
+    auto update_input_region = [&](double w, double h) {
+        if (w <= 0.0) {
+            return;
+        }
+        if (h <= DesktopShellWidget::TOTAL_BAR_HEIGHT) {
+            window->set_input_region(shell_widget->compute_input_region(w, h));
+        } else {
+            window->clear_input_region();
+        }
+    };
 
     bool needs_redraw = false;
 
     shell_widget->on_resize_requested = [&](double new_h) {
-        window->resize(1920, static_cast<uint32_t>(new_h));
-        window->set_keyboard_interactivity(new_h > 46.0);
+        window->resize(window->width(), static_cast<uint32_t>(new_h));
+        window->set_keyboard_interactivity(new_h > DesktopShellWidget::TOTAL_BAR_HEIGHT);
+        update_input_region(static_cast<double>(window->width()), new_h);
         needs_redraw = true;
     };
 
@@ -139,6 +153,10 @@ int main(int argc, char** argv) {
         while (window->poll_event(event)) {
             if (event.type == txui::EventType::WindowClose) {
                 running = false;
+            } else if (event.type == txui::EventType::WindowResize) {
+                update_input_region(static_cast<double>(event.resize.width),
+                                    static_cast<double>(event.resize.height));
+                needs_redraw = true;
             } else if (event.type == txui::EventType::PointerMove ||
                        event.type == txui::EventType::PointerButtonPress ||
                        event.type == txui::EventType::PointerButtonRelease) {

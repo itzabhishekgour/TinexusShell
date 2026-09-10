@@ -41,6 +41,18 @@ void read_network_status(int& out_bars, bool& out_connected);
 
 class DesktopShellWidget : public txui::Widget {
 public:
+    static constexpr double BAR_HEIGHT = 32.0;
+    static constexpr double NOTCH_HEIGHT = 46.0;
+    static constexpr double TOTAL_BAR_HEIGHT = NOTCH_HEIGHT;
+    [[nodiscard]] static constexpr double desired_bar_height() noexcept {
+        return TOTAL_BAR_HEIGHT;
+    }
+    [[nodiscard]] static constexpr int32_t desired_exclusive_zone() noexcept {
+        return static_cast<int32_t>(BAR_HEIGHT);
+    }
+
+    [[nodiscard]] std::vector<txui::Rect> compute_input_region(double width, double height) const noexcept;
+
     std::function<void(double new_h)> on_resize_requested;
     std::function<void(const AppItem& item)> on_app_launch;
     std::function<void()> on_pulse_toggle_requested;
