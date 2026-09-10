@@ -121,11 +121,35 @@ bool NotificationFlyoutWidget::handle_event(const txui::Event& event) noexcept {
     if (event.type == txui::EventType::PointerButtonPress) {
         if (event.pointer.button == txui::MouseButton::Left) {
             double mx = event.pointer.x, my = event.pointer.y;
+
+            // 1. Clear All pill button
             if (mx >= nx + nw - 86.0 && mx <= nx + nw - 14.0 && my >= ny + 10.0 && my <= ny + 34.0) {
                 clear_notifications();
                 if (on_clear_all) on_clear_all();
                 return true;
             }
+
+            // 2. Click on individual notification card
+            if (mx >= nx + 8.0 && mx <= nx + nw - 8.0 && my >= ny + 44.0) {
+                int n_idx = static_cast<int>((my - (ny + 44.0)) / 74.0);
+                if (n_idx >= 0 && n_idx < static_cast<int>(m_notifications.size())) {
+                    uint32_t notif_id = m_notifications[static_cast<size_t>(n_idx)].id;
+                    remove_notification(static_cast<size_t>(n_idx));
+                    if (on_notification_click) on_notification_click(notif_id);
+                    return true;
+                }
+            }
+
+            // 3. Any other click within the flyout body or header: consume so it doesn't fall through to dismiss
+            if (f.contains(txui::Point(mx, my))) {
+                return true;
+            }
+        }
+    }
+
+    if (event.type == txui::EventType::PointerButtonRelease) {
+        if (f.contains(txui::Point(event.pointer.x, event.pointer.y))) {
+            return true;
         }
     }
 

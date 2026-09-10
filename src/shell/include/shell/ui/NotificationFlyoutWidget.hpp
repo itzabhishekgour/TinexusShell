@@ -22,6 +22,7 @@ struct ShellNotificationItem {
 class NotificationFlyoutWidget : public txui::Widget {
 public:
     std::function<void()> on_clear_all;
+    std::function<void(uint32_t id)> on_notification_click;
 
     NotificationFlyoutWidget();
 
@@ -35,6 +36,14 @@ public:
         m_notifications.clear();
         mark_needs_layout();
         mark_needs_paint();
+    }
+
+    void remove_notification(size_t index) {
+        if (index < m_notifications.size()) {
+            m_notifications.erase(m_notifications.begin() + static_cast<std::ptrdiff_t>(index));
+            mark_needs_layout();
+            mark_needs_paint();
+        }
     }
 
     [[nodiscard]] const std::vector<ShellNotificationItem>& notifications() const noexcept {
