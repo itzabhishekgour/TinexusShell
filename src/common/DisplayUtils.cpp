@@ -76,9 +76,9 @@ std::string DisplayUtils::get_compositor_version_string() {
 
 DisplayInfo DisplayUtils::get_primary_display(const std::string& base_drm) {
     DisplayInfo info;
-    info.connector_name = "eDP-1";
-    info.resolution = "1920x1080";
-    info.refresh_rate = "Vsync";
+    info.connector_name = "unknown";
+    info.resolution = "unknown";
+    info.refresh_rate = "unknown";
     info.connected = false;
 
     // 1. Primary Authoritative Source: Live active compositor output state
