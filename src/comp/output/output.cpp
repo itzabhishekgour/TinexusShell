@@ -1,3 +1,4 @@
+#include "comp/animation/animation_manager.hpp"
 #include "comp/output/output.hpp"
 #include "comp/output/output_manager.hpp"
 #include "comp/render/frame_scheduler.hpp"
@@ -106,7 +107,7 @@ bool TinexusOutput::initialize() {
         std::string run_path = tinexus::common::RuntimePaths::get_runtime_dir() + "/display";
         std::ofstream df(run_path);
         if (df.is_open()) {
-            df << "connector=" << (m_output->name ? m_output->name : "eDP-1") << "\n";
+            df << "connector=" << (m_output->name ? m_output->name : "unknown") << "\n";
             df << "width=" << mode_w << "\n";
             df << "height=" << mode_h << "\n";
             df << "refresh_mhz=" << refresh_mhz << "\n";
@@ -119,7 +120,7 @@ bool TinexusOutput::initialize() {
         std::filesystem::create_directories("/run/tinexus");
         std::ofstream df_legacy("/run/tinexus/display");
         if (df_legacy.is_open()) {
-            df_legacy << "connector=" << (m_output->name ? m_output->name : "eDP-1") << "\n";
+            df_legacy << "connector=" << (m_output->name ? m_output->name : "unknown") << "\n";
             df_legacy << "width=" << mode_w << "\n";
             df_legacy << "height=" << mode_h << "\n";
             df_legacy << "refresh_mhz=" << refresh_mhz << "\n";
@@ -158,7 +159,8 @@ void TinexusOutput::frame() {
         return;
     }
 
-    bool has_anims = WindowManager::instance().has_active_animations();
+    bool has_anims = AnimationManager::instance().has_active_animations() ||
+                     WindowManager::instance().has_active_animations();
     if (!has_anims && !wlr_scene_output_needs_frame(scene_output)) {
         return;
     }
@@ -169,8 +171,13 @@ void TinexusOutput::frame() {
     if (m_last_frame_time.tv_sec != 0) {
         double dt = (now.tv_sec - m_last_frame_time.tv_sec) + 
                     (now.tv_nsec - m_last_frame_time.tv_nsec) / 1e9;
-        if (dt > 0.0 && has_anims) {
-            WindowManager::instance().tick_animations(dt);
+        if (dt > 0.0) {
+            if (AnimationManager::instance().has_active_animations()) {
+                AnimationManager::instance().tick(dt);
+            }
+            if (WindowManager::instance().has_active_animations()) {
+                WindowManager::instance().tick_animations(dt);
+            }
         }
     }
     m_last_frame_time = now;
@@ -187,7 +194,8 @@ void TinexusOutput::frame() {
 
     wlr_scene_output_send_frame_done(scene_output, &now);
 
-    if (has_anims && WindowManager::instance().has_active_animations()) {
+    if (AnimationManager::instance().has_active_animations() ||
+        WindowManager::instance().has_active_animations()) {
         wlr_output_schedule_frame(m_output);
     }
 }

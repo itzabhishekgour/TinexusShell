@@ -9,9 +9,9 @@ namespace tinexus::comp {
 
 struct OutputConfig {
     std::string name;
-    int width{1920};
-    int height{1080};
-    int refresh_rate_mhz{60000};
+    int width{0};
+    int height{0};
+    int refresh_rate_mhz{0};
     float scale{1.0f};
     int x{0};
     int y{0};
