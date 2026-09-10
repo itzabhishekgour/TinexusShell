@@ -10,24 +10,13 @@
 #include <cstring>
 #include <common/logger.hpp>
 #include <common/RuntimePaths.hpp>
+#include <common/AppId.hpp>
 
 namespace txui {
 
-/**
- * @brief Tier-2 process-level Single-Instance RAII Guard.
- *
- * Uses kernel POSIX advisory flock(LOCK_EX | LOCK_NB) on a per-app lockfile
- * in the user's runtime directory ($XDG_RUNTIME_DIR/tinexus/<app_id>.lock).
- *
- * Guaranteed Properties:
- * 1. Race-safe against simultaneous launches (kernel serializes lock acquisition).
- * 2. Crash-resilient: When a process exits or crashes, the kernel automatically
- *    releases all file locks associated with its file descriptor table.
- * 3. No unlink race: Lock files are NOT deleted on exit, avoiding race conditions
- *    where a releasing instance unlinks a newly acquired lock file.
- * 4. Multi-instance applications (e.g. tinexus-terminal, tinexus-files) simply
- *    do not instantiate SingleInstance.
- */
+using tinexus::common::get_canonical_app_id;
+using tinexus::common::is_single_instance_app;
+
 class SingleInstance {
 public:
     explicit SingleInstance(std::string_view app_id) noexcept
