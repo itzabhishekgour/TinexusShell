@@ -34,8 +34,8 @@ public:
 
 private:
     std::string m_path;
-    uint32_t m_src_width{1920};
-    uint32_t m_src_height{1080};
+    uint32_t m_src_width{0};
+    uint32_t m_src_height{0};
     std::vector<uint32_t> m_src_pixels;
 };
 

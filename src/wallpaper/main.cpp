@@ -32,10 +32,16 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 static bool g_configured = false;
+static uint32_t g_configured_w = 0;
+static uint32_t g_configured_h = 0;
 
 static void layer_surface_configure(void* data, struct zwlr_layer_surface_v1* surface, uint32_t serial, uint32_t width, uint32_t height) {
     zwlr_layer_surface_v1_ack_configure(surface, serial);
     g_configured = true;
+    if (width > 0 && height > 0) {
+        g_configured_w = width;
+        g_configured_h = height;
+    }
     log::info("tinexus-wallpaper: Configured surface size {}x{}", width, height);
 }
 
@@ -76,8 +82,8 @@ int main() {
         return 1;
     }
 
-    uint32_t w = 1920;
-    uint32_t h = 1080;
+    uint32_t w = 800;
+    uint32_t h = 600;
 
     auto target_opt = txui::WaylandRenderTarget::create(connection, w, h);
     if (!target_opt) {
@@ -93,7 +99,7 @@ int main() {
         ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, "tinexus-wallpaper");
 
     zwlr_layer_surface_v1_add_listener(layer_surface, &layer_surface_listener, nullptr);
-    zwlr_layer_surface_v1_set_size(layer_surface, w, h);
+    zwlr_layer_surface_v1_set_size(layer_surface, 0, 0);
     zwlr_layer_surface_v1_set_anchor(layer_surface,
         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
         ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
@@ -114,6 +120,12 @@ int main() {
 
     if (!g_running) {
         return 0;
+    }
+
+    if (g_configured_w > 0 && g_configured_h > 0 && (g_configured_w != w || g_configured_h != h)) {
+        render_target->resize(g_configured_w, g_configured_h);
+        w = g_configured_w;
+        h = g_configured_h;
     }
 
     // Try loading candidate wallpaper image paths
