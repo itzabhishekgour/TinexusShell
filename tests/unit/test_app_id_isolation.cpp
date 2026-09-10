@@ -112,6 +112,7 @@ void test_dirty_repaint_suppression() {
     win->request_repaint();
     assert(win->needs_repaint() == true);
 
+    win->on_frame_ready(); // Simulate compositor frame_done event in test
     win->present();
     assert(win->needs_repaint() == false);
 

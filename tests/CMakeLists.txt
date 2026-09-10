@@ -1623,3 +1623,37 @@ target_include_directories(test_memory_safety_during_anim PRIVATE
 )
 target_link_libraries(test_memory_safety_during_anim PRIVATE tinexus_common tinexus_warnings)
 add_test(NAME test_memory_safety_during_anim COMMAND test_memory_safety_during_anim)
+
+add_executable(unit_test_topbar_geometry unit/test_topbar_geometry.cpp)
+target_link_libraries(unit_test_topbar_geometry PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_topbar_geometry COMMAND unit_test_topbar_geometry)
+
+add_executable(unit_test_input_region unit/test_input_region.cpp)
+target_link_libraries(unit_test_input_region PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_input_region COMMAND unit_test_input_region)
+
+add_executable(unit_test_animation_manager
+    unit/test_animation_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
+)
+target_include_directories(unit_test_animation_manager PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+target_link_libraries(unit_test_animation_manager PRIVATE tinexus_common tinexus_warnings)
+add_test(NAME unit_test_animation_manager COMMAND unit_test_animation_manager)
+
+add_executable(unit_test_lifecycle_dock
+    unit/test_lifecycle_dock.cpp
+    ${CMAKE_SOURCE_DIR}/src/dock/ui/DockWidget.cpp
+)
+target_include_directories(unit_test_lifecycle_dock PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/dock/include
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(unit_test_lifecycle_dock PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_lifecycle_dock COMMAND unit_test_lifecycle_dock)
