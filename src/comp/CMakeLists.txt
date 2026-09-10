@@ -44,6 +44,7 @@ add_executable(tinexus-comp
     shell/shell_state.cpp
     render/frame_scheduler.cpp
     animation/animation.cpp
+    animation/animation_manager.cpp
     input/shortcut_engine.cpp
     surface/surface_manager.cpp
     surface/layer_shell_manager.cpp
