@@ -38,7 +38,9 @@ void FileContextMenu::show_at(double x, double y, const std::filesystem::path& p
     if (frame().width() > 0.0 && frame().height() > 0.0) {
         layout_override(frame());
     } else {
-        layout_override(txui::Rect(0.0, 0.0, 1920.0, 1080.0));
+        const double parent_w = parent() && parent()->frame().width() > 0.0 ? parent()->frame().width() : 800.0;
+        const double parent_h = parent() && parent()->frame().height() > 0.0 ? parent()->frame().height() : 600.0;
+        layout_override(txui::Rect(0.0, 0.0, parent_w, parent_h));
     }
 }
 
