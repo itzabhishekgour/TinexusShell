@@ -1,5 +1,6 @@
 #include "comp/surface/layer_shell_manager.hpp"
 #include "comp/surface/surface_manager.hpp"
+#include "comp/output/output_manager.hpp"
 #include "common/logger.hpp"
 
 namespace tinexus::comp {
@@ -39,7 +40,12 @@ bool LayerShellManager::configure_layer_surface(uint64_t id, uint32_t width, uin
     rec.exclusive_zone = exclusive_zone;
     rec.margin = margin;
 
-    OutputBounds output_bounds{1920, 1080};
+    OutputBounds output_bounds{0, 0};
+    auto outputs = OutputManager::instance().get_active_outputs();
+    if (!outputs.empty()) {
+        output_bounds.width = outputs[0].width;
+        output_bounds.height = outputs[0].height;
+    }
     rec.computed_geometry = ExclusiveZoneCalculator::calculate_geometry(output_bounds, width, height, anchor_flags, margin);
     rec.configured = true;
 

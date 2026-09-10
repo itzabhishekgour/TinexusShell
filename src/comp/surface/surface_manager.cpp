@@ -10,7 +10,7 @@ SurfaceManager& SurfaceManager::instance() noexcept {
 
 uint32_t SurfaceManager::create_surface(pid_t pid, const std::string& app_id) {
     uint32_t id = m_next_id++;
-    SurfaceRecord record{id, pid, app_id, 1, "HDMI-A-1", SurfaceState::Created, SurfaceRole::None, SurfaceLifecycle::Created};
+    SurfaceRecord record{id, pid, app_id, 1, "", SurfaceState::Created, SurfaceRole::None, SurfaceLifecycle::Created};
     m_surfaces[id] = record;
 
     log::info("PID={} APP={} SURFACE={} WORKSPACE={} OUTPUT={} STATE={} LIFECYCLE={}",

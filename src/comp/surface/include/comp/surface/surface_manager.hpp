@@ -85,7 +85,7 @@ struct SurfaceRecord {
     pid_t pid{-1};
     std::string app_id;
     uint32_t workspace_id{1};
-    std::string output_name{"HDMI-A-1"};
+    std::string output_name;
     SurfaceState state{SurfaceState::Created};
     SurfaceRole role{SurfaceRole::None};
     SurfaceLifecycle lifecycle{SurfaceLifecycle::Created};

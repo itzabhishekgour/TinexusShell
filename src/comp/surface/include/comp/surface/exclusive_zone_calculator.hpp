@@ -36,15 +36,15 @@ struct LayerGeometry {
 };
 
 struct OutputBounds {
-    int32_t width{1920};
-    int32_t height{1080};
+    int32_t width{0};
+    int32_t height{0};
 };
 
 struct UsableArea {
     int32_t x{0};
     int32_t y{0};
-    int32_t width{1920};
-    int32_t height{1080};
+    int32_t width{0};
+    int32_t height{0};
 };
 
 class ExclusiveZoneCalculator {
