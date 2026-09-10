@@ -63,6 +63,11 @@ PickResult FocusManager::pick_surface(double x, double y) const noexcept {
         return {};
     }
 
+    if (y <= 60.0) {
+        log::debug("[Focus] pick_surface ({:.1f}, {:.1f}) -> surf={} sx={:.1f} sy={:.1f}",
+                   x, y, static_cast<void*>(scene_surf->surface), sx, sy);
+    }
+
     return PickResult{ scene_surf->surface, sx, sy };
 }
 

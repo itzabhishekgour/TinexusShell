@@ -1,5 +1,6 @@
 #include "comp/workspace/workspace_manager.hpp"
 #include "comp/window/window_manager.hpp"
+#include "comp/output/output_manager.hpp"
 #include "common/logger.hpp"
 #include <algorithm>
 #include <cmath>
@@ -114,11 +115,21 @@ bool WorkspaceManager::toggle_overview() {
             }
         }
 
-        // Layout grid math: screen resolution is 1920x1080
-        int32_t screen_w = 1920;
-        int32_t screen_h = 1080;
-        int32_t pad_x = 100;
-        int32_t pad_y = 100;
+        // Layout grid math: query active output dynamically
+        int32_t screen_w = 0;
+        int32_t screen_h = 0;
+        auto active_outputs = OutputManager::instance().get_active_outputs();
+        if (!active_outputs.empty()) {
+            screen_w = active_outputs[0].width;
+            screen_h = active_outputs[0].height;
+        }
+        if (screen_w <= 0 || screen_h <= 0) {
+            // Fallback to active window manager bounds
+            screen_w = 1280;
+            screen_h = 720;
+        }
+        int32_t pad_x = std::max<int32_t>(20, screen_w / 20);
+        int32_t pad_y = std::max<int32_t>(20, screen_h / 20);
         int32_t usable_w = screen_w - 2 * pad_x;
         int32_t usable_h = screen_h - 2 * pad_y;
 
