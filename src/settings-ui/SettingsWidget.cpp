@@ -1076,13 +1076,6 @@ void SettingsWidget::paint_sound_page(txui::Painter& p, const txui::Rect& area) 
     draw_card(p, txui::Rect(cx, y2, cw, 180.0));
 
     p.draw_text(txui::Point(cx + 20.0, y2 + 20.0), "Detected Sound Hardware", TXT_PRI, 15.0, true);
-    draw_badge_pill(p, cx + cw - 90.0, y2 + 18.0, "ALSA Native", SUCCESS_BG, SUCCESS_TXT);
-
-    std::string active_ctrl = hardware::AudioUtils::detect_primary_control();
-    std::string dev_desc = "Primary Active Mixer Channel: [" + active_ctrl + "]  •  Direct ALSA Kernel Driver";
-    p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), dev_desc, TXT_SEC, 12.0);
-
-    p.fill_rect(txui::Rect(cx + 20.0, y2 + 76.0, cw - 40.0, 1.0), DIVIDER);
 
     // Enumerate sound cards from /proc/asound/cards
     std::vector<std::string> sound_cards;
@@ -1095,15 +1088,32 @@ void SettingsWidget::paint_sound_page(txui::Painter& p, const txui::Rect& area) 
             }
         }
     }
-    if (sound_cards.empty()) {
-        sound_cards.push_back("0 [DefaultAudio  ]: Universal Audio Controller (Realtek / Intel HDA / VirtIO)");
-    }
 
-    float64 card_y = y2 + 96.0;
-    for (size_t i = 0; i < std::min<size_t>(sound_cards.size(), 2); ++i) {
-        p.draw_text(txui::Point(cx + 20.0, card_y), sound_cards[i], TXT_PRI, 12.0, true);
-        p.draw_text(txui::Point(cx + 20.0, card_y + 18.0), "Direct Hardware PCM Playback  •  48 kHz / 24-bit", TXT_DIM, 11.0);
-        card_y += 38.0;
+    if (!sound_cards.empty()) {
+        draw_badge_pill(p, cx + cw - 90.0, y2 + 18.0, "ALSA Native", SUCCESS_BG, SUCCESS_TXT);
+
+        std::string active_ctrl = hardware::AudioUtils::detect_primary_control();
+        std::string dev_desc = "Primary Active Mixer Channel: [" + active_ctrl + "]  •  Direct ALSA Kernel Driver";
+        p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), dev_desc, TXT_SEC, 12.0);
+
+        p.fill_rect(txui::Rect(cx + 20.0, y2 + 76.0, cw - 40.0, 1.0), DIVIDER);
+
+        float64 card_y = y2 + 96.0;
+        for (size_t i = 0; i < std::min<size_t>(sound_cards.size(), 2); ++i) {
+            p.draw_text(txui::Point(cx + 20.0, card_y), sound_cards[i], TXT_PRI, 12.0, true);
+            p.draw_text(txui::Point(cx + 20.0, card_y + 18.0), "Direct Hardware PCM Playback  •  48 kHz / 24-bit", TXT_DIM, 11.0);
+            card_y += 38.0;
+        }
+    } else {
+        draw_badge_pill(p, cx + cw - 105.0, y2 + 18.0, "Not Detected", WARNING_BG, WARNING_TXT);
+
+        std::string dev_desc = "No active ALSA audio controller or soundcard found in /proc/asound/cards";
+        p.draw_text(txui::Point(cx + 20.0, y2 + 48.0), dev_desc, TXT_SEC, 12.0);
+
+        p.fill_rect(txui::Rect(cx + 20.0, y2 + 76.0, cw - 40.0, 1.0), DIVIDER);
+
+        p.draw_text(txui::Point(cx + 20.0, y2 + 96.0), "No output devices detected", TXT_PRI, 13.0, true);
+        p.draw_text(txui::Point(cx + 20.0, y2 + 118.0), "Audio driver or hardware codec initialization is pending.", TXT_DIM, 11.0);
     }
 }
 
