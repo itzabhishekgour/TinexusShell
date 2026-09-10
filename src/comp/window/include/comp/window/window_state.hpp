@@ -65,16 +65,6 @@ struct WindowBox {
     }
 };
 
-struct OutputGeometry {
-    int32_t x{0};
-    int32_t y{0};
-    int32_t width{0};
-    int32_t height{0};
-    double scale{1.0};
-    uint32_t refresh_mhz{60000};
-    std::string connector{};
-};
-
 struct WorkArea {
     int32_t x{0};
     int32_t y{0};
@@ -86,6 +76,46 @@ struct WorkArea {
     }
     bool operator!=(const WorkArea& other) const noexcept {
         return !(*this == other);
+    }
+};
+
+struct OutputGeometry {
+    void* output{nullptr};
+
+    int32_t global_x{0};
+    int32_t global_y{0};
+
+    int32_t logical_width{0};
+    int32_t logical_height{0};
+
+    double scale{1.0};
+
+    int32_t work_x{0};
+    int32_t work_y{0};
+    int32_t work_width{0};
+    int32_t work_height{0};
+
+    uint32_t refresh_mhz{60000};
+    std::string connector{};
+
+    // Compatibility aliases for existing callers
+    int32_t x{0};
+    int32_t y{0};
+    int32_t width{0};
+    int32_t height{0};
+
+    void sync_compat() noexcept {
+        x = global_x;
+        y = global_y;
+        width = logical_width;
+        height = logical_height;
+    }
+
+    [[nodiscard]] WorkArea work_area() const noexcept {
+        return WorkArea{work_x, work_y, work_width, work_height};
+    }
+    [[nodiscard]] WindowBox full_box() const noexcept {
+        return WindowBox{global_x, global_y, logical_width, logical_height};
     }
 };
 
@@ -209,7 +239,7 @@ public:
     }
 
     bool request_fullscreen(const OutputGeometry& full_output_box) {
-        return request_fullscreen(WindowBox{full_output_box.x, full_output_box.y, full_output_box.width, full_output_box.height});
+        return request_fullscreen(full_output_box.full_box());
     }
 
     void mark_closing() noexcept {
