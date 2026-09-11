@@ -6,6 +6,7 @@
 #include "comp/workspace/workspace_manager.hpp"
 #include "comp/render/frame_scheduler.hpp"
 #include "comp/input/shortcut_engine.hpp"
+#include "comp/input/seat_manager.hpp"
 #include "common/logger.hpp"
 #include "common/RuntimePaths.hpp"
 #include "common/AudioUtils.hpp"
@@ -47,6 +48,10 @@ static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
                     app_id.pop_back();
                 }
                 backend->focus_app(app_id);
+            } else if (cmd.starts_with("click")) {
+                tinexus::log::info("[Server] Simulating pointer click via FIFO");
+                tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 1);
+                tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 0);
             }
         }
     }
