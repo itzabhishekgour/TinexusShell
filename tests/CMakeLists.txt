@@ -54,7 +54,6 @@ target_include_directories(unit_test_wifi_contracts PRIVATE
 )
 
 target_link_libraries(unit_test_wifi_contracts PRIVATE
-    txui
     tinexus_common
     tinexus_warnings
     tinexus_sanitizers
@@ -1138,6 +1137,7 @@ target_include_directories(smoke_surface_lifecycle PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/output/include
 )
 
 target_link_libraries(smoke_surface_lifecycle PRIVATE
@@ -1657,3 +1657,25 @@ target_include_directories(unit_test_lifecycle_dock PRIVATE
 )
 target_link_libraries(unit_test_lifecycle_dock PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_lifecycle_dock COMMAND unit_test_lifecycle_dock)
+
+if(TINEXUS_BUILD_QT_APPS)
+    message(STATUS "Qt6 Tier 2 apps/tests enabled (TINEXUS_BUILD_QT_APPS=ON)")
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2)
+    add_subdirectory(qt6_popup_test)
+endif()
+
+# ── Tier 1 Migration Gate ──────────────────────────────────────────────────────
+# test-tier1-gate: validates all blockers for tinexus-shell, tinexus-dock,
+# tinexus-launcher Qt6 migration in one combined proof-of-concept harness.
+# Does NOT require TINEXUS_BUILD_QT_APPS — runs standalone with Qt6 Core/Gui/Quick.
+# Requires Qt6 to be present on the build host.
+find_package(Qt6 QUIET COMPONENTS Core Gui Quick Qml WaylandClient)
+if(Qt6_FOUND AND Qt6Gui_FOUND AND Qt6Quick_FOUND)
+    add_subdirectory(tier1_gate)
+    message(STATUS "Tier 1 Gate: test-tier1-gate enabled")
+    message(STATUS "  Run: cmake --build . --target test-tier1-gate")
+    message(STATUS "  For live layer-shell test: cmake -DTIER1_GATE_LAYERSHELL=ON .")
+else()
+    message(STATUS "Tier 1 Gate: Qt6 not found — test-tier1-gate SKIPPED")
+    message(STATUS "  Install Qt6 and re-run cmake to enable the migration gate.")
+endif()
