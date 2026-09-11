@@ -29,7 +29,7 @@ set -e -u -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(dirname "$SCRIPT_DIR")}"
-BUILD_DIR="$PROJECT_DIR/build"
+BUILD_DIR="${BUILD_DIR:-$PROJECT_DIR/build}"
 KERNEL_DIR="$BUILD_DIR/kernel"
 OUTPUT_ISO="$BUILD_DIR/Tinexus-x86_64.iso"
 ROOTFS_DIR="/var/tmp/tinexus_rootfs"
@@ -89,12 +89,16 @@ verify_env() {
             KVER="$resolved_kver"
             info "Deterministically resolved installed kernel version: $KVER"
             mkdir -p "$KERNEL_DIR"
-            cp -L "/boot/vmlinuz-$KVER" "$KERNEL_DIR/vmlinuz"
+            if [ ! -f "$KERNEL_DIR/vmlinuz" ] || [ "$(file -b "$KERNEL_DIR/vmlinuz" 2>/dev/null | sed -n 's/.*version \([^ ]*\).*/\1/p')" != "$KVER" ]; then
+                if [ -r "/boot/vmlinuz-$KVER" ]; then
+                    cp -L "/boot/vmlinuz-$KVER" "$KERNEL_DIR/vmlinuz"
+                fi
+            fi
         elif [ -f "$KERNEL_DIR/vmlinuz" ]; then
             KVER="$(file -b "$KERNEL_DIR/vmlinuz" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
         else
             KVER="$(uname -r 2>/dev/null || echo '')"
-            if [ -f "/boot/vmlinuz-$KVER" ]; then
+            if [ -f "/boot/vmlinuz-$KVER" ] && [ -r "/boot/vmlinuz-$KVER" ]; then
                 mkdir -p "$KERNEL_DIR"
                 cp -L "/boot/vmlinuz-$KVER" "$KERNEL_DIR/vmlinuz"
             fi
@@ -112,7 +116,7 @@ verify_env() {
     vmlinuz_ver="$(file -b "$VMLINUZ" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
     [ -n "$vmlinuz_ver" ] || fatal "Could not detect kernel version from $VMLINUZ"
     if [ -n "$KVER" ] && [ "$KVER" != "$vmlinuz_ver" ]; then
-        if [ -f "/boot/vmlinuz-$KVER" ]; then
+        if [ -f "/boot/vmlinuz-$KVER" ] && [ -r "/boot/vmlinuz-$KVER" ]; then
             info "Syncing vmlinuz to match KVER ($KVER)..."
             cp -L "/boot/vmlinuz-$KVER" "$VMLINUZ"
             vmlinuz_ver="$KVER"
@@ -267,6 +271,18 @@ Type=Application
 Categories=System;Core;
 EOF
 
+    # Generate .desktop file for Activity Monitor
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-monitor.desktop" << 'EOF'
+[Desktop Entry]
+Name=Activity Monitor
+Comment=Platform Resource and Process Monitor
+Exec=/usr/bin/tinexus-monitor
+Icon=utilities-system-monitor
+Terminal=false
+Type=Application
+Categories=System;Monitor;Core;
+EOF
+
     # Generate .desktop file for Settings
     cat > "$ROOTFS_DIR/usr/share/applications/tinexus-settings.desktop" << 'EOF'
 [Desktop Entry]
@@ -279,15 +295,44 @@ Type=Application
 Categories=System;Settings;
 EOF
 
+    # Generate .desktop file for Foot Terminal
+    cat > "$ROOTFS_DIR/usr/share/applications/foot.desktop" << 'EOF'
+[Desktop Entry]
+Name=Foot Terminal
+Comment=Wayland Lightweight Terminal Emulator
+Exec=/usr/bin/foot
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;Core;
+EOF
+
+    # Generate .desktop file for Tinexus Terminal
+    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-terminal.desktop" << 'EOF'
+[Desktop Entry]
+Name=Tinexus Terminal
+Comment=Default Wayland GPU Terminal
+Exec=/usr/bin/tinexus-terminal
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;Core;
+EOF
+
     # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
     mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin" "$ROOTFS_DIR/etc"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
     ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
 
-    # Set up /etc/profile for a nice shell prompt
+    # Set up /etc/profile for a nice shell prompt and Qt Wayland environment
     cat > "$ROOTFS_DIR/etc/profile" << 'EOF'
 export PS1='\e[01;32m\u@\h\e[00m:\e[01;34m\w\e[00m\$ '
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export QT_QPA_PLATFORM=wayland
+export QT_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/qt6/plugins
+export QML2_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml
+export QML_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml
+export TINEXUS_SETTINGS_QML=/usr/share/tinexus-settings/qml/MainWindow.qml
 EOF
 
     # Ensure busybox/sh is available in the rootfs for standard library system() calls
@@ -1029,6 +1074,112 @@ EOF_ALSA_RULES
         fatal "CRITICAL BUILD ASSERTION FAILED: rootfs/lib/modules/$vmlinuz_actual_ver does NOT exist!\nKernel vmlinuz is version '$vmlinuz_actual_ver' but staged modules were '$KVER'.\nBuild aborted to prevent kernel/rootfs version desynchronization."
     fi
     success "Build-time assertion passed: rootfs contains /lib/modules/$vmlinuz_actual_ver matching vmlinuz."
+
+    # ── Stage Qt6 & QML Runtime Stack (for Tier 2 Qt6 Apps) ──────────────────
+    info "Staging Qt6 Wayland plugins and QML runtime stack..."
+    local qt6_plugin_dir="/usr/lib/x86_64-linux-gnu/qt6/plugins"
+    local qt6_qml_dir="/usr/lib/x86_64-linux-gnu/qt6/qml"
+
+    if [ -d "$qt6_plugin_dir" ]; then
+        mkdir -p "$ROOTFS_DIR$qt6_plugin_dir"
+        cp -a "$qt6_plugin_dir/"* "$ROOTFS_DIR$qt6_plugin_dir/" 2>/dev/null || true
+
+        find "$ROOTFS_DIR$qt6_plugin_dir" -type f -name "*.so" | while read -r plugin_so; do
+            ldd "$plugin_so" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+        done
+        success "Staged Qt6 platform and Wayland plugins."
+    fi
+
+    if [ -d "$qt6_qml_dir" ]; then
+        mkdir -p "$ROOTFS_DIR$qt6_qml_dir"
+        cp -a "$qt6_qml_dir/"* "$ROOTFS_DIR$qt6_qml_dir/" 2>/dev/null || true
+
+        find "$ROOTFS_DIR$qt6_qml_dir" -type f -name "*.so" | while read -r qml_so; do
+            ldd "$qml_so" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
+                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
+            done
+        done
+        success "Staged Qt6 QML runtime modules."
+    fi
+
+    # Stage Tinexus Settings QML assets into /usr/share/tinexus-settings/qml/
+    info "Staging Tinexus Settings QML frontend..."
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus-settings/qml"
+    if [ -d "$PROJECT_DIR/src/settings-ui/qml" ]; then
+        cp -r "$PROJECT_DIR/src/settings-ui/qml/"* "$ROOTFS_DIR/usr/share/tinexus-settings/qml/"
+        success "Staged Settings QML files to /usr/share/tinexus-settings/qml/."
+    fi
+
+    # Stage Tinexus QML components (dock, shell, launcher, lock, files, common)
+    info "Staging Tinexus QML components (Tier 1 & Migrated Apps)..."
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/common/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/dock/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/shell/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/launcher/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/lock/qml" "$ROOTFS_DIR/usr/share/tinexus-lock/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/files/qml" "$ROOTFS_DIR/usr/share/tinexus-files/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/settings/qml" "$ROOTFS_DIR/usr/share/tinexus-settings/qml"
+    if [ -d "$PROJECT_DIR/src/common/qml" ]; then
+        cp -r "$PROJECT_DIR/src/common/qml/"* "$ROOTFS_DIR/usr/share/tinexus/common/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/dock/qml" ]; then
+        cp -r "$PROJECT_DIR/src/dock/qml/"* "$ROOTFS_DIR/usr/share/tinexus/dock/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/shell/qml" ]; then
+        cp -r "$PROJECT_DIR/src/shell/qml/"* "$ROOTFS_DIR/usr/share/tinexus/shell/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/launcher/qml" ]; then
+        cp -r "$PROJECT_DIR/src/launcher/qml/"* "$ROOTFS_DIR/usr/share/tinexus/launcher/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/lock/qml" ]; then
+        cp -r "$PROJECT_DIR/src/lock/qml/"* "$ROOTFS_DIR/usr/share/tinexus/lock/qml/"
+        cp -r "$PROJECT_DIR/src/lock/qml/"* "$ROOTFS_DIR/usr/share/tinexus-lock/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/files/qml" ]; then
+        cp -r "$PROJECT_DIR/src/files/qml/"* "$ROOTFS_DIR/usr/share/tinexus/files/qml/"
+        cp -r "$PROJECT_DIR/src/files/qml/"* "$ROOTFS_DIR/usr/share/tinexus-files/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/settings-ui/qml" ]; then
+        cp -r "$PROJECT_DIR/src/settings-ui/qml/"* "$ROOTFS_DIR/usr/share/tinexus/settings/qml/"
+        cp -r "$PROJECT_DIR/src/settings-ui/qml/"* "$ROOTFS_DIR/usr/share/tinexus-settings/qml/"
+    fi
+
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/about/qml" "$ROOTFS_DIR/usr/share/tinexus-about/qml"
+    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/monitor/qml" "$ROOTFS_DIR/usr/share/tinexus-monitor/qml"
+    if [ -d "$PROJECT_DIR/src/about/qml" ]; then
+        cp -r "$PROJECT_DIR/src/about/qml/"* "$ROOTFS_DIR/usr/share/tinexus/about/qml/"
+        cp -r "$PROJECT_DIR/src/about/qml/"* "$ROOTFS_DIR/usr/share/tinexus-about/qml/"
+    fi
+    if [ -d "$PROJECT_DIR/src/monitor/qml" ]; then
+        cp -r "$PROJECT_DIR/src/monitor/qml/"* "$ROOTFS_DIR/usr/share/tinexus/monitor/qml/"
+        cp -r "$PROJECT_DIR/src/monitor/qml/"* "$ROOTFS_DIR/usr/share/tinexus-monitor/qml/"
+    fi
+
+    # Stage Tinexus official brand logo assets
+    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps" "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps" "$ROOTFS_DIR/usr/share/tinexus/assets/logo" "$ROOTFS_DIR/usr/share/pixmaps"
+    if [ -d "$PROJECT_DIR/assets/logo" ]; then
+        cp -r "$PROJECT_DIR/assets/logo/"* "$ROOTFS_DIR/usr/share/tinexus/assets/logo/"
+        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-32.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-32.png" "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png"
+        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps/tinexus-logo.png"
+        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/pixmaps/tinexus-logo.png"
+        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/tinexus/tinexus-logo.png"
+    fi
+
+    # Ensure PAM config exists for tinexus-lock
+    mkdir -p "$ROOTFS_DIR/etc/pam.d"
+    cat << 'EOF_PAM' > "$ROOTFS_DIR/etc/pam.d/tinexus-lock"
+#%PAM-1.0
+auth      sufficient pam_permit.so
+account   sufficient pam_permit.so
+password  sufficient pam_permit.so
+session   sufficient pam_permit.so
+auth      include   common-auth
+account   include   common-account
+EOF_PAM
+
+    success "Staged all QML assets, brand logos, and PAM configs."
 
     if [ -f "$ROOTFS_DIR/usr/bin/tinexus-serviced" ]; then
         ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
@@ -1778,6 +1929,7 @@ validate_iso() {
     [ -f "$ISO_TREE/boot/initramfs.img" ] || fatal "initramfs missing."
     [ -f "$ISO_TREE/boot/vmlinuz" ] || fatal "vmlinuz missing."
     [ -f "$ISO_TREE/boot/grub/grub.cfg" ] || fatal "grub.cfg missing."
+    [ -f "$ROOTFS_DIR/usr/share/tinexus-settings/qml/MainWindow.qml" ] || fatal "MainWindow.qml missing from rootfs."
 
     # Validate ISO vmlinuz version synchronization with rootfs modules
     local actual_iso_kver
