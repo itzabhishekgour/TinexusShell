@@ -1,93 +1,103 @@
-#include "settings/SettingsWidget.hpp"
+#include "SettingsBridge.hpp"
 #include "settings/WifiManager.hpp"
-#include <txui/render/Canvas.hpp>
-#include <txui/render/PixmanBackend.hpp>
-#include <txui/render/Painter.hpp>
-#include <txui/render/ImageWriter.hpp>
+#include <common/logger.hpp>
+#include <common/version.hpp>
+
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQuickWindow>
+#include <QQuickItem>
+#include <QFileInfo>
+#include <QUrl>
+#include <QImage>
 #include <iostream>
 #include <unistd.h>
 
-using namespace tinexus;
-using namespace tinexus::settings_ui;
-
-int main() {
-    std::cout << "[Visual Test] Initializing SettingsWidget..." << std::endl;
-    auto widget = txui::make_ref<SettingsWidget>();
-
-    txui::Constraints constraints(0, 1000, 0, 640);
-    widget->measure(constraints);
-    widget->layout(txui::Rect(0, 0, 1000, 640));
-
-    // 1. Switch to Network Tab (Key::N3)
-    txui::Event e3;
-    e3.type = txui::EventType::KeyDown;
-    e3.keyboard.key = txui::Key::N3;
-    e3.keyboard.modifiers = txui::KeyModifier::None;
-    widget->handle_event(e3);
-
-    // Wait up to 3s for background scan thread to finish populating networks
-    for (int i = 0; i < 30; ++i) {
-        if (!WifiManager::instance().is_scanning()) break;
-        usleep(100000);
+int main(int argc, char* argv[]) {
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    }
+    if (!qEnvironmentVariableIsSet("QSG_RHI_BACKEND")) {
+        qputenv("QSG_RHI_BACKEND", "software");
     }
 
-    txui::Canvas canvas(1000, 640);
-    canvas.clear(txui::Color(18, 18, 24, 255));
-    txui::PixmanBackend backend;
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("tinexus-wifi-render"));
+    app.setDesktopFileName(QStringLiteral("io.tinexus.Settings"));
 
-    // Render Network Page (Card list populated)
-    {
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
-    }
+    std::cout << "[Visual Test (Qt6)] Initializing Wi-Fi Render Test..." << std::endl;
 
-    if (!txui::ImageWriter::save_png(canvas, "wifi_settings_network_page.png")) {
-        std::cerr << "FAIL: Failed to save wifi_settings_network_page.png" << std::endl;
-        return 1;
-    }
-    std::cout << "[Visual Test] Successfully saved wifi_settings_network_page.png" << std::endl;
+    tinexus::settings_ui::SettingsBridge bridge;
 
-    // 2. Summon modal explicitly for test rendering
-    widget->open_wifi_password_modal("OPPO F23 5G");
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
-    // Type a password into modal: "SecretPass123"
-    std::string test_pw = "SecretPass123";
-    for (char c : test_pw) {
-        txui::Event key_ev;
-        key_ev.type = txui::EventType::KeyDown;
-        key_ev.keyboard.modifiers = txui::KeyModifier::None;
-        if (c >= 'a' && c <= 'z') {
-            key_ev.keyboard.key = static_cast<txui::Key>(static_cast<int>(txui::Key::A) + (c - 'a'));
-        } else if (c >= 'A' && c <= 'Z') {
-            key_ev.keyboard.key = static_cast<txui::Key>(static_cast<int>(txui::Key::A) + (c - 'A'));
-            key_ev.keyboard.modifiers = txui::KeyModifier::Shift;
-        } else if (c >= '0' && c <= '9') {
-            key_ev.keyboard.key = static_cast<txui::Key>(static_cast<int>(txui::Key::N0) + (c - '0'));
+    QString qmlPath;
+    if (qEnvironmentVariableIsSet("TINEXUS_SETTINGS_QML")) {
+        qmlPath = qEnvironmentVariable("TINEXUS_SETTINGS_QML");
+    } else {
+        QString appDir = QCoreApplication::applicationDirPath();
+        QStringList candidates = {
+            appDir + QStringLiteral("/../src/settings-ui/qml/MainWindow.qml"),
+            appDir + QStringLiteral("/qml/MainWindow.qml"),
+            QStringLiteral("src/settings-ui/qml/MainWindow.qml"),
+            QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/settings-ui/qml/MainWindow.qml")
+        };
+        for (const auto& cand : candidates) {
+            if (QFileInfo::exists(cand)) {
+                qmlPath = cand;
+                break;
+            }
         }
-        widget->handle_event(key_ev);
     }
 
-    // Render Modal Dialog Overlay
-    txui::Canvas modal_canvas(1000, 640);
-    modal_canvas.clear(txui::Color(18, 18, 24, 255));
-    {
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, modal_canvas);
-    }
-
-    if (!txui::ImageWriter::save_png(modal_canvas, "wifi_settings_modal_dialog.png")) {
-        std::cerr << "FAIL: Failed to save wifi_settings_modal_dialog.png" << std::endl;
+    if (qmlPath.isEmpty() || !QFileInfo::exists(qmlPath)) {
+        std::cerr << "FAIL: Could not locate MainWindow.qml" << std::endl;
         return 1;
     }
-    std::cout << "[Visual Test] Successfully saved wifi_settings_modal_dialog.png" << std::endl;
 
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object" << std::endl;
+        return 1;
+    }
+
+    auto window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (!window) {
+        std::cerr << "FAIL: Root object is not a QQuickWindow" << std::endl;
+        return 1;
+    }
+
+    window->show();
+
+    auto grab_and_save = [&](const std::string& filename) -> bool {
+        for (int i = 0; i < 8; ++i) {
+            app.processEvents();
+            usleep(25000);
+        }
+        QImage img = window->grabWindow();
+        if (!img.isNull()) {
+            img.save(QString::fromStdString(filename));
+            std::cout << "[Visual Test (Qt6)] Successfully saved " << filename
+                      << " (" << img.width() << "x" << img.height() << ")" << std::endl;
+            return true;
+        } else {
+            std::cerr << "FAIL: grabWindow returned null for " << filename << std::endl;
+            return false;
+        }
+    };
+
+    // 1. Render Network / Wi-Fi Page
+    bridge.selectPage(3);
+    bridge.triggerWifiScan();
+    if (!grab_and_save("wifi_settings_network_page.png")) return 1;
+
+    // 2. Render Wi-Fi Password Modal Dialog
+    bridge.openWifiModal(QStringLiteral("Tinexus-TestNet-5G"));
+    if (!grab_and_save("wifi_settings_modal_dialog.png")) return 1;
+    bridge.closeWifiModal();
+
+    std::cout << "=== Wi-Fi UI visual tests completed successfully! ===" << std::endl;
     return 0;
 }

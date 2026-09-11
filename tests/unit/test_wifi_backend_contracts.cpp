@@ -15,7 +15,7 @@ int main() {
     // ── Contract 1: WPA2/WPA3 Personal Transition Mode Cipher & PMF Contract ─
     {
         std::cout << "[Contract Test] 1. Asserting WPA2/WPA3 transition mode command sequence..." << std::endl;
-        auto cmds = WifiManager::build_wpa_network_commands("0", "OPPO F23 5G", "Abhi2002");
+        auto cmds = WifiManager::build_wpa_network_commands("0", "Tinexus-TestNet-5G", "TestWpaPassword123");
 
         bool has_pairwise_ccmp_only = false;
         bool has_forbidden_pairwise_tkip = false;
