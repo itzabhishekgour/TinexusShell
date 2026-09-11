@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <pwd.h>
 #include <cstring>
 #include <cstdio>
@@ -77,22 +78,7 @@ std::vector<ProcessInfo> ProcessTree::discover_processes() {
         char path_buf[128];
         char read_buf[1024];
 
-        // 1. /proc/[pid]/comm for process name
-        std::snprintf(path_buf, sizeof(path_buf), "/proc/%d/comm", pid);
-        int fd_comm = open(path_buf, O_RDONLY | O_CLOEXEC);
-        if (fd_comm < 0) continue; // Process exited (ENOENT)
-
-        ssize_t n_comm = read(fd_comm, read_buf, sizeof(read_buf) - 1);
-        close(fd_comm);
-        if (n_comm <= 0) continue;
-        read_buf[n_comm] = '\0';
-        // Trim trailing newline
-        if (n_comm > 0 && (read_buf[n_comm - 1] == '\n' || read_buf[n_comm - 1] == '\r')) {
-            read_buf[n_comm - 1] = '\0';
-        }
-        std::string proc_name(read_buf);
-
-        // 2. /proc/[pid]/stat for state, ppid, utime, stime
+        // 1. Single /proc/[pid]/stat read for proc_name, state, ppid, utime, stime, rss
         std::snprintf(path_buf, sizeof(path_buf), "/proc/%d/stat", pid);
         int fd_stat = open(path_buf, O_RDONLY | O_CLOEXEC);
         if (fd_stat < 0) continue;
@@ -102,71 +88,38 @@ std::vector<ProcessInfo> ProcessTree::discover_processes() {
         if (n_stat <= 0) continue;
         read_buf[n_stat] = '\0';
 
+        char* lparen = std::strchr(read_buf, '(');
         char* rparen = std::strrchr(read_buf, ')');
-        if (!rparen) continue;
+        if (!lparen || !rparen || rparen <= lparen) continue;
+
+        // Extract comm from inside parens
+        *rparen = '\0';
+        std::string proc_name(lparen + 1);
+        *rparen = ')';
+
         const char* p_after = rparen + 2;
 
         char state_ch = 'S';
         int ppid = 0;
         unsigned long utime = 0, stime = 0;
-        if (std::sscanf(p_after, "%c %d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu",
-                        &state_ch, &ppid, &utime, &stime) < 4) {
+        long rss_pages = 0;
+        if (std::sscanf(p_after, "%c %d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu %*d %*d %*d %*d %*d %*d %*u %*u %ld",
+                        &state_ch, &ppid, &utime, &stime, &rss_pages) < 4) {
             continue;
         }
 
-        // 3. /proc/[pid]/statm for RSS resident pages
-        std::snprintf(path_buf, sizeof(path_buf), "/proc/%d/statm", pid);
-        uint64_t rss_bytes = 0;
-        int fd_statm = open(path_buf, O_RDONLY | O_CLOEXEC);
-        if (fd_statm >= 0) {
-            ssize_t n_statm = read(fd_statm, read_buf, sizeof(read_buf) - 1);
-            close(fd_statm);
-            if (n_statm > 0) {
-                read_buf[n_statm] = '\0';
-                unsigned long resident_pages = 0;
-                if (std::sscanf(read_buf, "%*u %lu", &resident_pages) == 1) {
-                    rss_bytes = static_cast<uint64_t>(resident_pages) * static_cast<uint64_t>(m_page_size);
-                }
-            }
+        uint64_t rss_bytes = (rss_pages > 0) ? (static_cast<uint64_t>(rss_pages) * static_cast<uint64_t>(m_page_size)) : 0;
+
+        // 2. Fast UID lookup via fstatat on dirfd (avoids opening /proc/[pid]/status)
+        uid_t real_uid = 1000;
+        struct stat st;
+        if (fstatat(dirfd(dir), ent->d_name, &st, 0) == 0) {
+            real_uid = st.st_uid;
         }
 
-        // 4. /proc/[pid]/status for real UID
-        std::snprintf(path_buf, sizeof(path_buf), "/proc/%d/status", pid);
-        uid_t real_uid = 0;
-        int fd_status = open(path_buf, O_RDONLY | O_CLOEXEC);
-        if (fd_status >= 0) {
-            ssize_t n_status = read(fd_status, read_buf, sizeof(read_buf) - 1);
-            close(fd_status);
-            if (n_status > 0) {
-                read_buf[n_status] = '\0';
-                char* uid_line = std::strstr(read_buf, "Uid:\t");
-                if (uid_line) {
-                    unsigned int parsed_uid = 0;
-                    if (std::sscanf(uid_line + 5, "%u", &parsed_uid) == 1) {
-                        real_uid = static_cast<uid_t>(parsed_uid);
-                    }
-                }
-            }
-        }
-
-        // 5. /proc/[pid]/io for disk read/write bytes (gracefully handle EACCES)
-        std::snprintf(path_buf, sizeof(path_buf), "/proc/%d/io", pid);
         bool has_io = false;
         uint64_t curr_r_bytes = 0;
         uint64_t curr_w_bytes = 0;
-        int fd_io = open(path_buf, O_RDONLY | O_CLOEXEC);
-        if (fd_io >= 0) {
-            ssize_t n_io = read(fd_io, read_buf, sizeof(read_buf) - 1);
-            close(fd_io);
-            if (n_io > 0) {
-                read_buf[n_io] = '\0';
-                has_io = true;
-                char* r_pos = std::strstr(read_buf, "read_bytes: ");
-                char* w_pos = std::strstr(read_buf, "write_bytes: ");
-                if (r_pos) std::sscanf(r_pos + 12, "%lu", &curr_r_bytes);
-                if (w_pos) std::sscanf(w_pos + 13, "%lu", &curr_w_bytes);
-            }
-        }
 
         // 6. CPU% and Disk Throughput Delta Calculation
         uint64_t curr_utime_stime = utime + stime;

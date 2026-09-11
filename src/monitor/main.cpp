@@ -1,68 +1,59 @@
-#include "monitor/MonitorWidget.hpp"
-#include <txui/window/Window.hpp>
-#include <txui/widgets/ChromeWidget.hpp>
-#include <txui/input/Event.hpp>
-#include <txui/core/SingleInstance.hpp>
+// ============================================================================
+// main.cpp — tinexus-monitor (Qt6 / QML)
+// ============================================================================
+#include "MonitorBridge.hpp"
 #include <common/logger.hpp>
-#include <common/version.hpp>
-#include <chrono>
+#include <QtGui/QGuiApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <iostream>
 
-int main(int /*argc*/, char** /*argv*/) {
-    tinexus::log::set_component_name("tinexus-monitor");
+int main(int argc, char* argv[]) {
+    tinexus::log::set_component_name("monitor");
+    tinexus::log::info("Starting tinexus-monitor (Qt6)...");
 
-    txui::SingleInstance single_instance("tinexus-monitor");
-    if (!single_instance.is_primary()) {
-        single_instance.request_focus_primary();
-        return 0;
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("tinexus-monitor"));
+    app.setDesktopFileName(QStringLiteral("tinexus-monitor"));
+
+    tinexus::monitor::MonitorBridge monitorBridge;
+
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("monitorBridge"), &monitorBridge);
+
+    QString qmlPath;
+    const QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/MonitorWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/monitor/qml/MonitorWindow.qml"),
+        QStringLiteral("src/monitor/qml/MonitorWindow.qml"),
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/monitor/qml/MonitorWindow.qml"),
+        QStringLiteral("/usr/share/tinexus/monitor/qml/MonitorWindow.qml")
+    };
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
+            break;
+        }
     }
 
-    tinexus::log::info("Starting Tinexus Activity Monitor v{}", tinexus::VERSION_STRING);
-
-    // 860 x 580 window — premium Activity Monitor proportions
-    auto window = txui::Window::create(860, 580, "Activity Monitor", false, "tinexus-monitor");
-    if (!window || !window->is_wayland_connected()) {
-        tinexus::log::error("[monitor] Failed to connect to Wayland display!");
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate MonitorWindow.qml" << std::endl;
         return 1;
     }
 
-    auto root = txui::make_ref<tinexus::monitor::MonitorWidget>();
-
-    // Wrap in ChromeWidget for native traffic lights (🔴 🟡 🟢) and titlebar
-    auto chrome = txui::make_ref<txui::ChromeWidget>(
-        "Activity Monitor",
-        root,
-        [w = window.get()]() { w->on_close_request(); },
-        [w = window.get()]() { w->minimize(); },
-        [w = window.get()]() { w->set_maximized(!w->is_maximized()); },
-        [w = window.get()](uint32_t serial) { w->start_interactive_move(serial); },
-        [w = window.get()](uint32_t edges, uint32_t serial) { w->start_interactive_resize(edges, serial); }
-    );
-    window->set_root_widget(chrome);
-
-    auto last_telemetry_time = std::chrono::steady_clock::now();
-    bool running = true;
-
-    while (running && !window->should_close()) {
-        txui::Event event;
-        while (window->poll_event(event)) {
-            if (event.type == txui::EventType::WindowClose) {
-                running = false;
-            }
-            chrome->handle_event(event);
-        }
-
-        // Live refresh every 1.5 seconds
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_telemetry_time).count() >= 1500) {
-            root->refresh_telemetry();
-            window->request_repaint();
-            last_telemetry_time = now;
-        }
-
-        window->present();
-        window->wait_timeout(100);
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object for monitor" << std::endl;
+        return 1;
     }
 
-    tinexus::log::info("[monitor] Exiting cleanly.");
-    return 0;
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (window) {
+        window->show();
+    }
+
+    return app.exec();
 }
