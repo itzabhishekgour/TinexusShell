@@ -194,11 +194,12 @@ bool AudioUtils::set_volume_percent(int pct, bool persist, bool throttle) {
         s_last_audio_write = std::chrono::steady_clock::now();
     }
 
-    int card_id = detect_primary_card_id();
-    std::string card_str = std::to_string(card_id);
-    std::string ctrl = detect_primary_control();
+    auto cards = get_sound_cards();
+    if (!cards.empty() && fs::exists("/usr/bin/amixer")) {
+        int card_id = detect_primary_card_id();
+        std::string card_str = std::to_string(card_id);
+        std::string ctrl = detect_primary_control();
 
-    if (fs::exists("/usr/bin/amixer")) {
         std::string arg_val = std::to_string(pct) + "%";
         if (pct > 0) {
             run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", ctrl, (arg_val + " unmute")});
@@ -227,11 +228,11 @@ bool AudioUtils::is_muted() {
 bool AudioUtils::toggle_mute(bool persist) {
     s_cached_muted = !s_cached_muted;
 
-    int card_id = detect_primary_card_id();
-    std::string card_str = std::to_string(card_id);
-    std::string ctrl = detect_primary_control();
-
-    if (fs::exists("/usr/bin/amixer")) {
+    auto cards = get_sound_cards();
+    if (!cards.empty() && fs::exists("/usr/bin/amixer")) {
+        int card_id = detect_primary_card_id();
+        std::string card_str = std::to_string(card_id);
+        std::string ctrl = detect_primary_control();
         run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", ctrl, "toggle"});
     }
 
@@ -253,6 +254,11 @@ int AudioUtils::step_volume(int delta_pct, bool persist) {
 
 void AudioUtils::play_chime(const std::string& chime_path) {
     if (!fs::exists(chime_path) || !fs::exists("/usr/bin/aplay")) {
+        return;
+    }
+
+    auto cards = get_sound_cards();
+    if (cards.empty()) {
         return;
     }
 

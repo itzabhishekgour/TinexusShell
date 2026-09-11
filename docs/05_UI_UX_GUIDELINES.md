@@ -1,10 +1,49 @@
 # Tinexus Shell — UI/UX Design Guidelines
 
 > **Document:** 05_UI_UX_GUIDELINES.md  
-> **Version:** 1.0.0  
-> **Status:** FROZEN  
+> **Version:** 1.1.0  
+> **Status:** ACTIVE (supersedes v1.0.0 FROZEN)  
+> **Previous Version:** 1.0.0 (FROZEN — archived in git history)  
 > **Classification:** Public — Open Source  
-> **Depends on:** 01_VISION.md, 03_SYSTEM_ARCHITECTURE.md
+> **Depends on:** 01_VISION.md, 03_SYSTEM_ARCHITECTURE.md  
+> **HIG Reference:** Apple Human Interface Guidelines for macOS  
+> https://developer.apple.com/design/human-interface-guidelines/designing-for-macos
+
+---
+
+## § 0 — CHANGELOG (v1.0.0 → v1.1.0)
+
+> **Policy:** The v1.0.0 doc was FROZEN. This version (v1.1.0) is an **additive** update.  
+> No v1.0.0 sections have been removed or silently overwritten. All additions are clearly  
+> marked with `[NEW in v1.1.0]` in their section headings. HIG references cite the  
+> specific section that inspired each change.
+
+### What Changed
+
+| § | Change | HIG Justification | Impact |
+|---|---|---|---|
+| §1.2 | Added "Material" to design vocabulary | HIG: named surface presets | Minor vocabulary addition |
+| §2.2 | Added `material.*` tokens to dark theme | HIG: "Materials" page | New token namespace — additive |
+| §2.3 | Added `material.*` tokens to light theme | HIG: "Materials" page | New token namespace — additive |
+| §2.4 | Added `material.*` rows to semantic usage table | Extends §2.2 | Additive |
+| §2.6 | **NEW** HIG Reconciliation Table | HIG: "Designing for macOS — Best Practices" | Reference only |
+| §2.7 | **NEW** Semantic Color Audit result | HIG: "Color — avoid purely decorative color" | Confirms existing QML is clean |
+| §6.4 | **NEW** Materials System (5 named materials) | HIG: "Materials" | New `material.*` token namespace |
+| §6.5 | **NEW** Material Fallback Hierarchy | HIG: "Materials — Accessibility" | Clarifies degradation path |
+| §6.6 | **NEW** Sidebar Vibrancy Decision (opaque) | HIG: "Sidebars" | Documents deliberate rejection |
+| §16.2 | Added `[material]` section to theme TOML spec | Extends §6.4 | Additive |
+| §19 | **NEW** macOS HIG Pattern Reference section | HIG: Multiple sections | Non-binding reference |
+
+### What Was NOT Changed (and Why)
+
+| Topic | Decision | Rationale |
+|---|---|---|
+| Accent color `#6B8CEF` | **Kept unchanged** | HIG does not publish fixed hex values — it uses semantic system colors. Our indigo-blue is our brand identity and has no conflict with any HIG rule. |
+| Menu bar conventions | **Not adopted** | HIG §"Menu bar menus" assumes a traditional macOS menu bar. Tinexus Shell uses a command-palette (`Ctrl+K`) model. See §19.2 for full decision. |
+| Sidebar vibrancy (behind-window) | **Rejected for v1.0** | macOS `NSVisualEffectView` samples desktop content at compositor level. `tinexus-comp` does not expose a content sampling API. Deferred to v2.0. |
+| Source list sidebar row style | **Already implemented** | List-row architecture already in `Sidebar.qml` from previous sprint. §19.3 formalizes as a reference. |
+| All typography tokens | **Unchanged** | HIG's SF Pro recommendations don't apply to Linux. Inter is our font. Our type scale is correct. |
+| All motion/easing tokens | **Unchanged** | Our easing curves (ease-decelerate, ease-spring) are already aligned with HIG's "fluid animation" principles. |
 
 ---
 
@@ -54,6 +93,7 @@ Tinexus Shell's visual identity is built on four pillars:
 | **Token** | A named design value (color, size, duration) |
 | **Easing** | The acceleration curve of an animation |
 | **Affordance** | A visual cue that an element is interactive |
+| **Material** | A named surface preset combining color, opacity, blur, and saturation [NEW in v1.1.0] |
 
 ---
 
@@ -107,9 +147,16 @@ border.default          = "#FFFFFF0F" # Very subtle border (6% white)
 border.focus            = "#6B8CEF80" # Focus ring (50% accent)
 border.hover            = "#FFFFFF1A" # Hover border (10% white)
 
-# Glass effect base
+# Glass effect base (v1.0.0 — preserved)
 glass.background        = "#13131ACC" # 80% opacity surface
 glass.blur_strength     = "40px"
+
+# Materials (v1.1.0 — see §6.4 for full spec)
+material.sidebar.background  = "#141420CC"  # 80% opacity, slightly cooler
+material.toolbar.background  = "#13131AE6"  # 90% opacity
+material.popover.background  = "#1C1C28F2"  # 95% opacity, elevated
+material.menu.background     = "#1C1C28F0"  # 94% opacity
+material.overlay.background  = "#0A0A0E99"  # 60% — alias of background.overlay
 ```
 
 ### 2.3 Base Color Tokens (Light Theme)
@@ -138,6 +185,12 @@ border.focus            = "#4A6EE080"
 
 glass.background        = "#FFFFFFCC"
 glass.blur_strength     = "30px"
+
+# Materials (v1.1.0)
+material.sidebar.background  = "#F0F0F5E6"  # 90% opacity
+material.toolbar.background  = "#FFFFFFF5"  # 96% opacity
+material.popover.background  = "#FFFFFFFB"  # 98% opacity
+material.menu.background     = "#FFFFFFFB"  # 98% opacity
 ```
 
 ### 2.4 Semantic Color Usage Rules
@@ -149,6 +202,10 @@ glass.blur_strength     = "30px"
 | `text.secondary` | Descriptions, timestamps, hints | Primary content |
 | `border.default` | Subtle separators | Prominent borders |
 | `glass.background` | Launcher, notifications, lock screen | Regular app windows |
+| `material.sidebar.*` | Sidebar navigation surface | Content area |
+| `material.toolbar.*` | Top navigation / toolbar area | Content area |
+| `material.popover.*` | Popover panels, flyouts | Full-window backgrounds |
+| `material.menu.*` | Context menus, dropdown lists | Persistent surfaces |
 
 ### 2.5 Color Contrast Requirements
 
@@ -158,6 +215,51 @@ glass.blur_strength     = "30px"
 | `text.secondary` on `background.surface` | 3:1 | 4.5:1 |
 | `accent.primary` on `background.surface` | 3:1 | 4.5:1 |
 | Interactive element on any background | 3:1 | 4.5:1 |
+
+---
+
+### 2.6 HIG Reconciliation Table [NEW in v1.1.0]
+
+> **Reference:** Apple Human Interface Guidelines for macOS  
+> **Note:** HIG uses *semantic, adaptive* system color roles — not fixed hex values. This  
+> table maps HIG *concepts* to Tinexus token equivalents. We do NOT copy Apple's  
+> hex values because they are dynamic and platform-managed (NSColor system roles).
+
+| HIG Concept | HIG Description | Our Token / Pattern | Conflict? | Recommended Action |
+|---|---|---|---|---|
+| **Sidebar material** | Translucent surface showing content behind window | `material.sidebar.background` | ⚠️ Partial | Our sidebar is opaque by design (see §6.6). Use `material.sidebar` token. Behind-window blending deferred to v2.0. |
+| **Titlebar / toolbar material** | Thin strip at top, slightly translucent | `material.toolbar.background` | ✅ Compatible | Already implemented as frosted top bar. Formalize with `material.toolbar` token. |
+| **Popover material** | Elevated floating panel, near-opaque with border | `material.popover.background` + `border.default` | ✅ Compatible | Our flyouts should adopt `material.popover`. |
+| **Menu material** | Dropdown/context menu, slightly opaque | `material.menu.background` | ✅ Compatible | New token added. Enforce in launcher result list and context menus. |
+| **Window background** | Flat opaque window content area | `background.surface` | ✅ Identical | No change needed. |
+| **Vibrancy (general)** | Automatic color adaptation based on background content | `glass.blur_strength` + opacity | ⚠️ Approximate | We approximate with blur + translucency. True content-aware vibrancy requires compositor support not in v1.0. |
+| **Semantic label colors** | `labelColor`, `secondaryLabelColor`, `tertiaryLabelColor` | `text.primary`, `text.secondary`, `text.disabled` | ✅ Compatible | Our 3-tier text system maps exactly to HIG's label hierarchy. |
+| **System Blue accent** | Default system accent for interactive controls | `accent.primary = #6B8CEF` | ✅ Compatible (distinct) | HIG system blue is `#007AFF` on macOS. We use indigo `#6B8CEF`. Both are semantic accent colors. Our brand identity is preserved. |
+| **Destructive action color** | Red for destructive actions (delete, format) | `status.critical = #EF4444` | ✅ Compatible | Already used correctly in power menu. |
+| **Separator lines** | 1px hairline between list rows | `border.default` at `height: 1px` | ✅ Compatible | Already present in sidebar list rows. |
+| **Source list sidebar** | Nav sidebar with monochrome icons, tight rows | `Sidebar.qml` list-row architecture | ✅ Implemented | §19.3 formalizes the pattern spec. |
+| **Menu bar** | Global App/File/Edit/View/Window/Help bar | Not applicable | ➖ N/A | Tinexus uses Ctrl+K command palette. See §19.2. |
+| **Traffic lights** | Red/yellow/green window controls | `MacTrafficLights.qml` (settings-ui only) | ✅ Scoped | Present in settings-ui as a design element; compositor manages windows natively. |
+| **Focus ring** | System focus indicator | `border.focus` (2px, `accent.primary` 50%) | ✅ Compatible | Our spec matches HIG guidance. |
+| **Reduce Motion** | Minimize animation for accessibility | `motion.reduced_motion` token | ✅ Compatible | Already specified in §5.8. |
+| **Liquid Glass (macOS 26+)** | Dynamic animated glass — Metal GPU pipeline | **Not adopted** | ➖ Deferred | Requires Metal-equivalent GPU pipeline. Qt6/QML evaluation deferred to v2.0. |
+
+### 2.7 Semantic Color Audit [NEW in v1.1.0]
+
+> **Finding: PASS.** All QML files in `src/settings-ui/qml/` reference `Theme.*` tokens.  
+> No hardcoded hex values found in production QML, with one intentional exception.
+
+| Component | Status | Note |
+|---|---|---|
+| `Sidebar.qml` | ✅ Token-clean | Uses `Theme.colorBg`, `Theme.colorAccent`, `Theme.colorText*` |
+| `MacSwitch.qml` | ✅ Token-clean | Uses `Theme.colorSuccess`, `Theme.colorBg*` |
+| `MacCard.qml` | ✅ Token-clean | Uses `Theme.colorBg`, `Theme.colorBorder` |
+| `MacTrafficLights.qml` | ⚠️ Intentional hardcode | Fixed colors (`#FF5F57`, `#FFBD2E`, `#28C840`) — universally recognized OS UI conventions, not brand tokens. Accepted. |
+| `PrivacyPage.qml` | ✅ Token-clean | Uses `Theme.colorText*`, `Theme.colorAccent` |
+
+**Action required for next sprint:** When implementing `material.*` tokens in `Theme.qml`,  
+ensure flyout widgets (`VolumeFlyoutWidget`, `CalendarFlyoutWidget`, `BrightnessFlyoutWidget`)  
+adopt `material.popover.background` instead of raw `glass.background`.
 
 ---
 
@@ -410,6 +512,115 @@ Gradients are used sparingly:
 | Notification urgency indicator | Solid (no gradient) | Cleaner appearance |
 
 **Rule:** No more than one gradient per surface. Background surfaces are flat colors only.
+
+---
+
+### 6.4 Materials System [NEW in v1.1.0]
+
+> **HIG Reference:** Apple defines named *material types* (sidebar, titlebar, popover, menu,  
+> window) that combine translucency, blur, and tinting to create recognizable surface types.  
+> We adapt the *concept* — named semantic surface presets — without copying  
+> Apple's `NSVisualEffectView` implementation (which is platform-native and closed).
+
+A **Material** in Tinexus Shell bundles: background color (RGBA), blur radius, saturation, and border.
+
+#### Material Definitions (Dark Theme)
+
+| Material Name | Token Prefix | Background | Blur | Saturation | Usage |
+|---|---|---|---|---|---|
+| **sidebar** | `material.sidebar` | `#141420CC` (80%) | 20px | 110% | Navigation sidebars (Settings, Files, Monitor) |
+| **toolbar** | `material.toolbar` | `#13131AE6` (90%) | 16px | 108% | Top navigation bar, window chrome |
+| **popover** | `material.popover` | `#1C1C28F2` (95%) | 12px | 105% | Flyout panels (volume, calendar, brightness) |
+| **menu** | `material.menu` | `#1C1C28F0` (94%) | 10px | 104% | Context menus, dropdown lists |
+| **overlay** | `material.overlay` | `#0A0A0E99` (60%) | 0px | 100% | Scrim behind modals |
+
+> `glass.background` (v1.0.0) is preserved specifically for the **Launcher** — the one  
+> surface that uses maximum blur (40px) and remains outside the material system.
+
+#### Material TOML Spec
+
+```toml
+[material.sidebar]
+background   = "#141420CC"
+blur_radius  = 20
+saturation   = 110
+border_color = "#FFFFFF0D"  # 5% white
+border_width = 1
+
+[material.toolbar]
+background   = "#13131AE6"
+blur_radius  = 16
+saturation   = 108
+border_color = "#FFFFFF0F"  # 6% white
+border_width = 1
+
+[material.popover]
+background   = "#1C1C28F2"
+blur_radius  = 12
+saturation   = 105
+border_color = "#FFFFFF14"  # 8% white
+border_width = 1
+
+[material.menu]
+background   = "#1C1C28F0"
+blur_radius  = 10
+saturation   = 104
+border_color = "#FFFFFF14"
+border_width = 1
+
+[material.overlay]
+background   = "#0A0A0E99"
+blur_radius  = 0
+saturation   = 100
+border_color = "none"
+border_width = 0
+```
+
+#### QML Usage
+
+```qml
+// Access materials through Theme object:
+Rectangle {
+    color: Theme.material.sidebar.background
+    // Blur applied via MultiEffect on a parent item
+}
+```
+
+### 6.5 Material Fallback Hierarchy [NEW in v1.1.0]
+
+> **HIG Reference:** "When Reduce Transparency is enabled, the system replaces  
+> translucent materials with opaque equivalents that preserve legibility."
+
+When `visual.backdrop_blur = false` (user preference or hardware limit):
+
+| Material | Fallback Color (Dark) | Fallback Color (Light) |
+|---|---|---|
+| sidebar | `#141420` (fully opaque) | `#F0F0F5` |
+| toolbar | `#13131A` | `#FFFFFF` |
+| popover | `#1C1C28` | `#FFFFFF` |
+| menu | `#1C1C28` | `#FFFFFF` |
+| overlay | `#0A0A0E99` (alpha kept — it's a scrim) | `#00000040` |
+
+**Rule:** When blur is disabled, border colors become slightly more opaque  
+(`#FFFFFF20` instead of `#FFFFFF0D`) to maintain visual separation between surfaces.
+
+### 6.6 Sidebar Vibrancy Decision [NEW in v1.1.0]
+
+> **HIG Recommendation:** "Sidebars — Consider extending colorful content behind  
+> the sidebar to reinforce the floating, layered feel."
+
+**Tinexus Shell Decision: OPAQUE SIDEBAR — NOT ADOPTED for v1.0**
+
+| Reason | Detail |
+|---|---|
+| Compositor limitation | `tinexus-comp` does not expose a surface content-sampling API |
+| Architecture constraint | Sampling desktop content requires compositor-level support (`NSVisualEffectView` equivalent) |
+| Scope boundary | Adding this would require a new custom Wayland protocol — outside v1.0 scope |
+
+**Alternative adopted:** `material.sidebar` uses 80% opacity + 20px blur — approximates  
+depth without requiring desktop content sampling.
+
+**Future:** Revisit in v2.0 if `tinexus-comp` adds a `tinexus_content_sample_v1` protocol.
 
 ---
 
@@ -780,6 +991,10 @@ duration_slow = 400
 duration_xslow = 600
 reduced_motion = false   # Override: all durations → 0
 
+[material]
+# See §6.4 for full spec — TOML values here are the computed defaults
+# sidebar, toolbar, popover, menu, overlay sub-tables defined in theme file
+
 [effects]
 backdrop_blur = true
 backdrop_blur_radius = 40
@@ -872,5 +1087,99 @@ Pressed:    ┃ [ICON] App Name                  Description
 
 ---
 
+## 19. macOS HIG Pattern Reference [NEW in v1.1.0]
+
+> **Status:** Reference only. Patterns here are **inspirations adapted for Tinexus Shell**,  
+> not mandates. Where we deviate from HIG, the deviation is documented with rationale.  
+>  
+> **Source:** Apple Human Interface Guidelines for macOS  
+> https://developer.apple.com/design/human-interface-guidelines/designing-for-macos
+
+---
+
+### 19.1 HIG Core Principles vs. Tinexus Philosophy
+
+| HIG Principle | HIG Meaning | Tinexus Equivalent | Verdict |
+|---|---|---|---|
+| **Clarity** | Text legible, icons precise, UI unambiguous | "Precision" pillar — 4px grid, 7:1 contrast targets | ✅ Aligned |
+| **Deference** | UI helps users focus on content, not compete with it | "Restraint" pillar — fewer elements, purposeful color | ✅ Aligned |
+| **Depth** | Layered surfaces with translucency convey hierarchy | "Translucency" pillar — glass + material system | ✅ Aligned |
+
+### 19.2 Menu Bar — Deliberate Non-Adoption
+
+> **HIG Section:** "Menu bar menus — macOS provides the menu bar across the top of  
+> the screen, where users find menus specific to the app they're currently using."
+
+**Decision: NOT ADOPTED.**
+
+Tinexus Shell does not implement a traditional global menu bar:
+
+1. **Command palette replaces discoverability** — `Ctrl+K` provides fuzzy-search access  
+   to all system and app actions without requiring users to memorize menu paths.
+2. **Linux/Wayland conventions** — No Wayland desktop environment (GNOME, KDE,  
+   Sway) uses a global menu bar model for compositor-native apps.
+3. **Architecture** — A global menu bar would require `tinexus-comp` to own  
+   app-specific menu state — an IPC coupling we explicitly prohibit (AGENTS.md §3.2).
+
+**What we adopt instead:** All system actions (shutdown, lock, settings) are accessible  
+via the `Ctrl+K` launcher. App-specific actions belong to each app's own window chrome.
+
+### 19.3 Source List Sidebar Pattern
+
+> **HIG Section:** "Sidebars — use a sidebar to help people navigate your app and  
+> access top-level collections of content."
+
+**Status: Already implemented.** Pattern characteristics:
+
+| Pattern | HIG Guideline | Our Implementation |
+|---|---|---|
+| Icon style | Monochrome (avoid tinted icons that clash with translucent bg) | Monochrome SVG, `text.secondary` color |
+| Row height | Compact — 22–28pt | 36px rows in Settings sidebar |
+| Selection highlight | Soft rounded rect with accent tint | `accent.primary` 10% bg + 3px left border |
+| Separator lines | 1px hairline between groups | `border.default` 1px between sections |
+| Group header labels | Uppercase, subdued | ALL-CAPS, `text.secondary`, `label-sm` 11px |
+| Hover state | Subtle background | `background.surface_alt` on hover |
+
+### 19.4 Keyboard-First Interaction Pattern
+
+> **HIG Section:** "Keyboard — people who use the keyboard for most or all  
+> interactions need access to all the functionality your app provides."
+
+**Status: Adopted — already specified in §10.** Additional rules to enforce:
+
+- Every interactive element reachable by `Tab` / `Shift+Tab`
+- `Enter` confirms, `Escape` cancels — no exceptions across all surfaces
+- Destructive actions have keyboard cancellation (`Escape` always available)
+- Modal dialogs must trap focus (implemented in launcher per §10.3)
+
+### 19.5 Destructive Action Pattern
+
+> **HIG Section:** "Alerts — use an alert to give people important information and  
+> sometimes to help them confirm or reverse potentially destructive actions."
+
+**Status: Already adopted per §14.2.** HIG rules verified:
+
+| Rule | HIG Requirement | Our Compliance |
+|---|---|---|
+| Default button | Destructive button is **never** the default | `[Cancel]` is left/default; `[Shut Down]` is right — ✅ |
+| Button label | Use exact action verb, not "OK" or "Yes" | "Shut Down", "Restart", "Log Out" — ✅ |
+| Countdown timer | Apple pattern for power actions | 5-second countdown implemented — ✅ |
+| Reversible actions | Sleep, Lock require no confirmation | Confirmed in §14.2 — ✅ |
+
+### 19.6 Vibrancy and Materials — Summary of Tinexus Position
+
+| HIG Material | HIG Purpose | Tinexus Decision |
+|---|---|---|
+| `.sidebar` | Source list navigation | `material.sidebar` token (opaque variant — §6.6) |
+| `.titleBar` | Window title area | `material.toolbar` token |
+| `.popover` | Transient popover | `material.popover` token |
+| `.menu` | Context/dropdown menus | `material.menu` token |
+| `.windowBackground` | Content area | `background.surface` (unchanged from v1.0.0) |
+| `.sheet` | Modal sheets | `material.overlay` scrim + `material.popover` panel |
+| Liquid Glass | Dynamic Metal-based glass (macOS 26+) | **Deferred to v2.0** |
+
+---
+
 *Document End: 05_UI_UX_GUIDELINES.md*  
-*Next: 06_COMPONENT_DESIGN.md*
+*Version: 1.1.0 — supersedes v1.0.0 (FROZEN)*  
+*Previous: 04_FOLDER_STRUCTURE.md | Next: 06_COMPONENT_DESIGN.md*

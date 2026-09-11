@@ -5,6 +5,7 @@ add_executable(tinexus-drm-info
 
 target_include_directories(tinexus-drm-info PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/backend/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
 )
 
 target_link_libraries(tinexus-drm-info PRIVATE

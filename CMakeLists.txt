@@ -34,6 +34,7 @@ option(TINEXUS_ENABLE_SANITIZERS "Enable ASan/UBSan sanitizers in debug builds" 
 option(TINEXUS_WARNINGS_AS_ERRORS "Treat all compiler warnings as errors" OFF)
 option(TINEXUS_ENABLE_LTO "Enable Link-Time Optimization in release builds" OFF)
 option(BUILD_TESTING "Build unit and integration test suites" ON)
+option(TINEXUS_BUILD_QT_APPS "Build Qt6-based Tier 2 applications and test harness" OFF)
 
 # Dynamically query wlroots package version to inject into compositor and UI string queries
 find_package(PkgConfig QUIET)
