@@ -87,7 +87,7 @@ void NotificationStackWidget::update(std::chrono::milliseconds delta_time) {
 }
 
 double NotificationStackWidget::calculate_stack_height() const noexcept {
-    if (m_bubbles.empty()) return 10.0;
+    if (m_bubbles.empty()) return 0.0;
 
     double total = 8.0;
     for (const auto& b : m_bubbles) {
@@ -98,6 +98,20 @@ double NotificationStackWidget::calculate_stack_height() const noexcept {
 
 bool NotificationStackWidget::has_active_bubbles() const noexcept {
     return !m_bubbles.empty();
+}
+
+std::vector<txui::Rect> NotificationStackWidget::get_input_rects() const noexcept {
+    std::vector<txui::Rect> rects;
+    rects.reserve(m_bubbles.size());
+    for (const auto& b : m_bubbles) {
+        if (b && b->state() != BubbleState::Hidden) {
+            const auto& f = b->frame();
+            if (f.width() > 0.0 && f.height() > 0.0) {
+                rects.push_back(f);
+            }
+        }
+    }
+    return rects;
 }
 
 txui::Size NotificationStackWidget::measure_override(const txui::Constraints& constraints) noexcept {

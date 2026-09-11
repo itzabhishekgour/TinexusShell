@@ -26,6 +26,7 @@ public:
 
     [[nodiscard]] double calculate_stack_height() const noexcept;
     [[nodiscard]] bool has_active_bubbles() const noexcept;
+    [[nodiscard]] std::vector<txui::Rect> get_input_rects() const noexcept;
     [[nodiscard]] const std::vector<txui::Ref<NotificationBubble>>& bubbles() const noexcept { return m_bubbles; }
 
     void set_on_height_changed(std::function<void(uint32_t new_height)> cb) { m_on_height_changed = std::move(cb); }

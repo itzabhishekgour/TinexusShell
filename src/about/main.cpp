@@ -1,57 +1,59 @@
-#include "AboutWidget.hpp"
-#include <txui/window/Window.hpp>
-#include <txui/widgets/ChromeWidget.hpp>
-#include <txui/input/Event.hpp>
-#include <txui/core/SingleInstance.hpp>
+// ============================================================================
+// main.cpp — tinexus-about (Qt6)
+// ============================================================================
+#include "AboutBridge.hpp"
 #include <common/logger.hpp>
-#include <common/version.hpp>
+#include <QtGui/QGuiApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <iostream>
 
-int main(int /*argc*/, char** /*argv*/) {
-    tinexus::log::set_component_name("tinexus-about");
+int main(int argc, char* argv[]) {
+    tinexus::log::set_component_name("about");
+    tinexus::log::info("Starting tinexus-about (Qt6)...");
 
-    txui::SingleInstance single_instance("tinexus-about");
-    if (!single_instance.is_primary()) {
-        single_instance.request_focus_primary();
-        return 0;
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("tinexus-about"));
+    app.setDesktopFileName(QStringLiteral("tinexus-about"));
+
+    tinexus::about::AboutBridge bridge;
+
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
+
+    QString qmlPath;
+    const QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/AboutWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/about/qml/AboutWindow.qml"),
+        QStringLiteral("src/about/qml/AboutWindow.qml"),
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/about/qml/AboutWindow.qml"),
+        QStringLiteral("/usr/share/tinexus/about/qml/AboutWindow.qml")
+    };
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
+            break;
+        }
     }
 
-    tinexus::log::info("Starting About Tinexus Profiler v{}", tinexus::VERSION_STRING);
-
-    // 680 x 420 window — authentic macOS About window proportions
-    auto window = txui::Window::create(680, 420, "About Tinexus", false, "tinexus-about");
-    if (!window || !window->is_wayland_connected()) {
-        tinexus::log::error("[about] Failed to connect to Wayland display!");
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate AboutWindow.qml" << std::endl;
         return 1;
     }
 
-    auto root = txui::make_ref<tinexus::about::AboutWidget>();
-
-    // Wrap in ChromeWidget for traffic lights (🔴 🟡 🟢) and window move
-    auto chrome = txui::make_ref<txui::ChromeWidget>(
-        "About Tinexus",
-        root,
-        [w = window.get()]() { w->on_close_request(); },
-        [w = window.get()]() { w->minimize(); },
-        [w = window.get()]() { w->set_maximized(!w->is_maximized()); },
-        [w = window.get()](uint32_t serial) { w->start_interactive_move(serial); },
-        [w = window.get()](uint32_t edges, uint32_t serial) { w->start_interactive_resize(edges, serial); }
-    );
-    window->set_root_widget(chrome);
-
-    bool running = true;
-    while (running && !window->should_close()) {
-        txui::Event event;
-        while (window->poll_event(event)) {
-            if (event.type == txui::EventType::WindowClose) {
-                running = false;
-            }
-            chrome->handle_event(event);
-        }
-
-        window->present();
-        window->wait();
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object for about" << std::endl;
+        return 1;
     }
 
-    tinexus::log::info("[about] Exiting cleanly.");
-    return 0;
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (window) {
+        window->show();
+    }
+
+    return app.exec();
 }

@@ -49,7 +49,7 @@ int main() {
     window->set_root_widget(stack_widget);
 
     stack_widget->set_on_height_changed([window_ptr = window.get()](uint32_t new_h) {
-        window_ptr->resize(420, std::max(10u, new_h));
+        window_ptr->resize(420, std::max(1u, new_h));
     });
 
     // 3. Register D-Bus socket with TxUI WaylandEventLoop
@@ -63,20 +63,13 @@ int main() {
         }
     }
 
-    // 4. Enqueue initial welcome notification
-    notifications::NotificationServer::instance().notify(
-        "Tinexus System",
-        0,
-        "tinexus",
-        "Welcome to Tinexus OS",
-        "Press Ctrl+K to open Pulse launcher",
-        {},
-        notifications::Urgency::Normal,
-        8000
-    );
+    // 4. Initial idle state: empty input region so surface is 100% click-through
+    window->set_input_region({});
+    window->resize(420, 1);
 
     // 5. Main TxUI event and frame loop
     auto last_time = std::chrono::steady_clock::now();
+    bool had_bubbles = false;
 
     while (!window->should_close() && g_running) {
         txui::Event event;
@@ -88,17 +81,29 @@ int main() {
             }
         }
 
+        // Always sync incoming notifications from queue
+        stack_widget->sync_active_notifications();
+
         auto now = std::chrono::steady_clock::now();
         auto delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time);
         last_time = now;
 
         if (stack_widget->has_active_bubbles()) {
+            had_bubbles = true;
             stack_widget->update(delta_ms);
+            window->set_input_region(stack_widget->get_input_rects());
             window->request_repaint();
             window->present();
             window->wait_timeout(16);
         } else {
-            window->present();
+            if (had_bubbles) {
+                // Transitioned from active bubbles to empty: clear input region and collapse window
+                had_bubbles = false;
+                window->set_input_region({});
+                window->resize(420, 1);
+                window->request_repaint();
+                window->present();
+            }
             window->wait_timeout(100);
         }
     }

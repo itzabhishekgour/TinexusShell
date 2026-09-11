@@ -132,7 +132,12 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
             "XDG_RUNTIME_DIR=/run/user/0",
             "WAYLAND_DISPLAY=wayland-0",
             "LANG=C.UTF-8",
-            "LC_ALL=C.UTF-8"
+            "LC_ALL=C.UTF-8",
+            "QT_QPA_PLATFORM=wayland",
+            "QT_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/qt6/plugins",
+            "QML2_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml",
+            "QML_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml",
+            "TINEXUS_SETTINGS_QML=/usr/share/tinexus-settings/qml/MainWindow.qml"
         };
         
         static const std::unordered_set<std::string> ALLOWED_OVERRIDE_KEYS = {
