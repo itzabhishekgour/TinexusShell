@@ -1,0 +1,94 @@
+// ============================================================================
+// DesktopShellWindow.qml — Root Window for tinexus-shell
+// ============================================================================
+import QtQuick
+import QtQuick.Window
+
+Window {
+    id: rootWindow
+    width: 1920
+    color: "transparent"
+    flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+
+    // Dynamically expand window height when a flyout opens so it can receive input and render
+    readonly property bool anyFlyoutOpen: typeof bridge !== "undefined" && (
+        bridge.logoMenuOpen || bridge.appMenuOpen || bridge.calendarOpen || bridge.notificationsOpen ||
+        bridge.volumeFlyoutOpen || bridge.brightnessFlyoutOpen ||
+        bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen
+    )
+
+    height: anyFlyoutOpen ? 380 : 46
+
+    Item {
+        id: container
+        anchors.fill: parent
+
+        // ── Top Bar (32px baseline + notch) ─────────────────────────
+        TopBar {
+            id: topBar
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+        }
+
+        // ── Logo Menu Flyout ────────────────────────────────────────
+        LogoMenuFlyout {
+            id: logoFlyout
+            x: 8
+            y: 36
+            visible: typeof bridge !== "undefined" && bridge.logoMenuOpen
+        }
+
+        // ── Applications Dropdown Flyout ────────────────────────────
+        ApplicationsFlyout {
+            id: appsFlyout
+            x: 48
+            y: 36
+            visible: typeof bridge !== "undefined" && bridge.appMenuOpen
+        }
+
+        // ── Calendar Flyout (Directly under Aura Notch Date Pill) ──
+        CalendarFlyout {
+            id: calFlyout
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.horizontalCenterOffset: 60
+            y: 48
+            visible: typeof bridge !== "undefined" && bridge.calendarOpen
+        }
+
+        // ── Notifications Flyout (Under Notification Bell) ───────────
+        NotificationFlyout {
+            id: notifFlyout
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            y: 36
+            visible: typeof bridge !== "undefined" && bridge.notificationsOpen
+        }
+
+        // ── Volume Flyout (Under Volume Tray Icon) ───────────────────
+        VolumeFlyout {
+            id: volFlyout
+            anchors.right: parent.right
+            anchors.rightMargin: 40
+            y: 36
+            visible: typeof bridge !== "undefined" && bridge.volumeFlyoutOpen
+        }
+
+        // ── Brightness Flyout (Under Brightness Tray Icon) ───────────
+        BrightnessFlyout {
+            id: briFlyout
+            anchors.right: parent.right
+            anchors.rightMargin: 70
+            y: 36
+            visible: typeof bridge !== "undefined" && bridge.brightnessFlyoutOpen
+        }
+
+        // ── Power Confirmation Modal ────────────────────────────────
+        PowerConfirmationDialog {
+            id: powerDialog
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: 60
+            visible: typeof bridge !== "undefined" && (bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen)
+        }
+    }
+}

@@ -1,194 +1,133 @@
-// tinexus-shell — Main Shell Entry Point
-#include "DesktopShellWidget.hpp"
-#include <txui/window/Window.hpp>
-#include <txui/render/WaylandRenderTarget.hpp>
-#include <txui/input/Event.hpp>
-#include <ipcd/protocol/header.hpp>
+// ============================================================================
+// main.cpp — tinexus-shell (Qt6 / Layer-shell)
+// ============================================================================
+#include "ShellBridge.hpp"
 #include <common/logger.hpp>
-#include <csignal>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
-#include <thread>
-#include <atomic>
+#include <QtGui/QGuiApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <iostream>
 
-using namespace tinexus;
-using namespace tinexus::shell;
+#if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
+#include <LayerShellQt/Window>
+#endif
 
-static std::atomic<int> g_ipc_fd{-1};
+int main(int argc, char* argv[]) {
+    tinexus::log::set_component_name("shell");
+    tinexus::log::info("tinexus-shell starting (Qt6)...");
 
-void ipc_listener_thread() {
-    int fd = -1;
-    for (int a = 0; a < 30 && fd < 0; ++a) {
-        fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd < 0) { ::sleep(1); continue; }
-        struct sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        char path[108];
-        snprintf(path, sizeof(path), "/run/user/%d/tinexus/ipc.sock", static_cast<int>(getuid()));
-        memcpy(addr.sun_path, path, strlen(path) + 1);
-        if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
-            close(fd); fd = -1; ::sleep(1);
+    qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("tinexus-shell"));
+    app.setDesktopFileName(QStringLiteral("io.tinexus.shell.TopBar"));
+
+    tinexus::shell::ShellBridge bridge;
+
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
+
+    QString qmlPath;
+    QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/DesktopShellWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("/usr/share/tinexus/shell/qml/DesktopShellWindow.qml")
+    };
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
+            break;
         }
     }
-    if (fd < 0) { log::warn("[Shell] Could not connect to ipcd"); return; }
-    g_ipc_fd.store(fd);
 
-    uint16_t topic = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_OPEN);
-    tinexus::ipcd::protocol::Header sh{};
-    sh.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-    sh.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-    sh.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC);
-    sh.payload_len = sizeof(topic);
-    send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
-    send(fd, &topic, sizeof(topic), MSG_NOSIGNAL);
-    log::info("[Shell] Connected to ipcd and subscribed to LAUNCHER_OPEN topic");
-
-    while (true) {
-        tinexus::ipcd::protocol::Header rx{};
-        ssize_t got = 0;
-        auto* raw = reinterpret_cast<uint8_t*>(&rx);
-        while (got < static_cast<ssize_t>(sizeof(rx))) {
-            ssize_t n = recv(fd, raw + got, sizeof(rx) - static_cast<size_t>(got), 0);
-            if (n <= 0) goto done;
-            got += n;
-        }
-        std::vector<uint8_t> buf;
-        if (rx.payload_len > 0) {
-            buf.resize(rx.payload_len); ssize_t pg = 0;
-            while (pg < static_cast<ssize_t>(rx.payload_len)) {
-                ssize_t n = recv(fd, buf.data() + pg, rx.payload_len - static_cast<size_t>(pg), 0);
-                if (n <= 0) goto done;
-                pg += n;
-            }
-        }
-    }
-done:
-    close(fd);
-    g_ipc_fd.store(-1);
-    log::warn("[Shell] ipcd connection lost");
-}
-
-static void trigger_launcher() {
-    int fd = g_ipc_fd.load();
-    if (fd >= 0) {
-        tinexus::ipcd::protocol::Header sh{};
-        sh.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-        sh.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-        sh.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::LAUNCHER_OPEN);
-        sh.payload_len = 0;
-        send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
-        log::info("[Shell] Sent LAUNCHER_OPEN notification to ipcd");
-    } else {
-        log::info("[Shell] Spawning tinexus-launcher process directly");
-        pid_t pid = fork();
-        if (pid == 0) {
-            setsid();
-            execlp("tinexus-launcher", "tinexus-launcher", nullptr);
-            _exit(127);
-        }
-    }
-}
-
-int main(int argc, char** argv) {
-    (void)argc; (void)argv;
-    log::set_component_name("shell");
-    log::info("[Shell] Tinexus Unified Desktop Shell starting...");
-    signal(SIGCHLD, SIG_IGN);
-
-    const auto initial_bar_h = static_cast<uint32_t>(DesktopShellWidget::desired_bar_height());
-    auto window = txui::Window::create(800, initial_bar_h, "Aura", /*layer_shell=*/true);
-    std::thread(ipc_listener_thread).detach();
-
-    if (!window || !window->is_wayland_connected()) {
-        log::error("[Shell] Failed to connect to Wayland display! Exiting.");
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate DesktopShellWindow.qml" << std::endl;
         return 1;
     }
 
-    window->set_layer_shell_config(txui::LayerType::Top,
-        txui::LayerAnchor::Top | txui::LayerAnchor::Left | txui::LayerAnchor::Right,
-        DesktopShellWidget::desired_exclusive_zone());
-
-    auto shell_widget = txui::make_ref<DesktopShellWidget>();
-
-    auto update_input_region = [&](double w, double h) {
-        if (w <= 0.0) {
-            return;
-        }
-        if (h <= DesktopShellWidget::TOTAL_BAR_HEIGHT) {
-            window->set_input_region(shell_widget->compute_input_region(w, h));
-        } else {
-            window->clear_input_region();
-        }
-    };
-
-    bool needs_redraw = false;
-
-    shell_widget->on_resize_requested = [&](double new_h) {
-        window->resize(window->width(), static_cast<uint32_t>(new_h));
-        window->set_keyboard_interactivity(new_h > DesktopShellWidget::TOTAL_BAR_HEIGHT);
-        update_input_region(static_cast<double>(window->width()), new_h);
-        needs_redraw = true;
-    };
-
-    shell_widget->on_app_launch = [&](const AppItem& item) {
-        spawn_app(item);
-        shell_widget->close_all_flyouts();
-        needs_redraw = true;
-    };
-
-    shell_widget->on_pulse_toggle_requested = [&]() {
-        trigger_launcher();
-    };
-
-    window->set_root_widget(txui::Ref<txui::Widget>(shell_widget.get()));
-    shell_widget->mark_needs_paint();
-    window->present();
-
-    bool running = true;
-
-    while (running && !window->should_close()) {
-        txui::Event event;
-        while (window->poll_event(event)) {
-            if (event.type == txui::EventType::WindowClose) {
-                running = false;
-            } else if (event.type == txui::EventType::WindowResize) {
-                update_input_region(static_cast<double>(event.resize.width),
-                                    static_cast<double>(event.resize.height));
-                needs_redraw = true;
-            } else if (event.type == txui::EventType::PointerMove ||
-                       event.type == txui::EventType::PointerButtonPress ||
-                       event.type == txui::EventType::PointerButtonRelease) {
-                shell_widget->handle_event(event);
-                needs_redraw = true;
-            } else if (event.type == txui::EventType::KeyDown) {
-                needs_redraw = true;
-                const bool ctrl = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Ctrl);
-
-                if (ctrl && (event.keyboard.key == txui::Key::K || event.keyboard.key == txui::Key::Space)) {
-                    trigger_launcher();
-                    continue;
-                }
-
-                if (event.keyboard.key == txui::Key::Escape) {
-                    shell_widget->close_all_flyouts();
-                } else {
-                    shell_widget->handle_event(event);
-                }
-            }
-        }
-
-        if (!running) break;
-
-        if (needs_redraw) {
-            window->present();
-            needs_redraw = false;
-        }
-
-        window->wait_timeout(16);
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object for shell" << std::endl;
+        return 1;
     }
 
-    log::info("[Shell] Exiting cleanly.");
-    return 0;
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (window) {
+#if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
+        auto* lsWin = LayerShellQt::Window::get(window);
+        if (lsWin) {
+            lsWin->setLayer(LayerShellQt::Window::LayerTop);
+            lsWin->setAnchors(LayerShellQt::Window::Anchors::fromInt(LayerShellQt::Window::AnchorTop |
+                                                                    LayerShellQt::Window::AnchorLeft |
+                                                                    LayerShellQt::Window::AnchorRight));
+            lsWin->setExclusiveZone(32);
+            std::cout << "[tinexus-shell] LayerShellQt configured: Layer=Top, ExclusiveZone=32" << std::endl;
+        }
+#else
+        std::cout << "[tinexus-shell] LayerShellQt not linked — running in fallback QWindow mode" << std::endl;
+#endif
+
+        // ── Dynamic input-region mask (Tiny-Dead-Zone fix) ──────────────────
+        // The shell window is 46px tall (to accommodate the AuraNotch protrusion)
+        // but the exclusive zone is only 32px. Without a mask, the compositor's
+        // scene-graph hit-test (wlr_scene_node_at) will intercept clicks in the
+        // y=32–46 band on the LEFT and RIGHT sides where there is no interactive
+        // content — creating a "dead zone" below the top bar.
+        //
+        // QWindow::setMask(QRegion) translates to wl_surface_set_input_region()
+        // via the Qt Wayland platform plugin, so only the specified rects receive
+        // pointer input; all other areas are transparent to mouse events.
+        //
+        // Interactive regions:
+        //   • Full-width flat bar : (0,   0,  width, 32)
+        //   • Center notch top    : (cx-136, 32, 272,  14)  — AuraNotch trapezoid
+        //
+        // When any flyout is open, the mask is cleared → full 380px height is hit-testable.
+
+        constexpr int kBarH      = 32;    // flat bar height (exclusive zone)
+        constexpr int kNotchH    = 46;    // total notch height
+        constexpr int kNotchHalf = 136;   // half-width of notch top edge (AuraNotch.qml)
+
+        // Lambda: compute and apply the correct mask for the current flyout state.
+        auto applyInputMask = [window, &bridge, kBarH, kNotchH, kNotchHalf]() {
+            bool anyOpen = bridge.logoMenuOpen()   || bridge.appMenuOpen()       ||
+                           bridge.calendarOpen()   || bridge.notificationsOpen() ||
+                           bridge.volumeFlyoutOpen()|| bridge.brightnessFlyoutOpen() ||
+                           bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen();
+
+            if (anyOpen) {
+                // Flyout open — full window height must receive input
+                window->setMask(QRegion());
+                tinexus::log::debug("[shell] Input region: full window (flyout open)");
+            } else {
+                int w  = window->width();
+                int cx = w / 2;
+                QRegion mask;
+                mask += QRect(0,               0,    w,             kBarH);       // flat bar
+                mask += QRect(cx - kNotchHalf, kBarH, kNotchHalf * 2,
+                              kNotchH - kBarH);                                   // center notch
+                window->setMask(mask);
+                tinexus::log::debug("[shell] Input region: bar+notch only (idle)");
+            }
+        };
+
+        // Apply initial idle mask
+        applyInputMask();
+
+        // Re-apply whenever flyout state changes
+        QObject::connect(&bridge, &tinexus::shell::ShellBridge::flyoutStateChanged,
+                         window, applyInputMask);
+
+        // Re-apply if window width changes (e.g. dynamic output resize)
+        QObject::connect(window, &QWindow::widthChanged, window,
+                         [applyInputMask](int /*newW*/) { applyInputMask(); });
+
+        window->show();
+    }
+
+    return app.exec();
 }

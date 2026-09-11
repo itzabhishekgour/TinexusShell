@@ -1,0 +1,92 @@
+// ============================================================================
+// BrightnessFlyout.qml — Display & Brightness Control Flyout with LiquidGlass
+// ============================================================================
+import QtQuick
+import "../../common/qml"
+
+Item {
+    id: root
+    width: 250
+    height: 160
+
+    LiquidGlass {
+        anchors.fill: parent
+        materialType: "popover"
+        cornerRadius: 12
+    }
+
+    Column {
+        anchors.fill: parent
+        anchors.margins: 14
+        spacing: 12
+
+        // Header
+        Row {
+            width: parent.width
+            spacing: 8
+
+            Text { text: "☀️"; font.pixelSize: 16; anchors.verticalCenter: parent.verticalCenter }
+            Text { text: "Display"; color: "#FFFFFF"; font.pixelSize: 14; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+            Item { width: 10 }
+            Text {
+                text: (typeof bridge !== "undefined" ? bridge.brightness : 80) + "%"
+                color: Qt.rgba(1, 1, 1, 0.60)
+                font.pixelSize: 12
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+
+        // Slider track + thumb
+        Rectangle {
+            id: sliderTrack
+            width: parent.width
+            height: 24
+            radius: 12
+            color: Qt.rgba(0, 0, 0, 0.40)
+            border.color: Qt.rgba(1, 1, 1, 0.10)
+
+            Rectangle {
+                id: sliderProgress
+                height: parent.height
+                radius: 12
+                width: Math.max(height, parent.width * ((typeof bridge !== "undefined" ? bridge.brightness : 80) / 100.0))
+                color: "#FF9F0A"
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                onPositionChanged: function(mouse) {
+                    var pct = Math.max(0, Math.min(100, Math.round((mouse.x / width) * 100)));
+                    if (typeof bridge !== "undefined") {
+                        bridge.brightness = pct;
+                    }
+                }
+                onClicked: function(mouse) {
+                    var pct = Math.max(0, Math.min(100, Math.round((mouse.x / width) * 100)));
+                    if (typeof bridge !== "undefined") {
+                        bridge.brightness = pct;
+                    }
+                }
+            }
+        }
+
+        // Night Shift / Dark Mode Pill
+        Rectangle {
+            width: parent.width
+            height: 32
+            radius: 8
+            color: Qt.rgba(1, 1, 1, 0.08)
+            border.color: Qt.rgba(1, 1, 1, 0.10)
+
+            Row {
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+
+                Text { text: "🌙"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                Text { text: "Night Light"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            }
+        }
+    }
+}

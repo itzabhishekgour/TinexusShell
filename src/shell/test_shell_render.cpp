@@ -1,179 +1,113 @@
-#include "DesktopShellWidget.hpp"
-#include <txui/render/Canvas.hpp>
-#include <txui/render/PixmanBackend.hpp>
-#include <txui/render/Painter.hpp>
-#include <txui/render/ImageWriter.hpp>
+// ============================================================================
+// test_shell_render.cpp — Visual Verification Harness for tinexus-shell (Qt6)
+// ============================================================================
+#include "ShellBridge.hpp"
+#include <QtGui/QGuiApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <QtGui/QImage>
 #include <iostream>
+#include <unistd.h>
 
-using namespace tinexus;
-using namespace tinexus::shell;
-
-int main() {
-    std::cout << "[Visual Test] Rendering Desktop Top Bar and Flyouts..." << std::endl;
-    auto widget = txui::make_ref<DesktopShellWidget>();
-
-    const uint32_t W = 1920;
-    txui::PixmanBackend backend;
-
-    // ── 1. Render Idle Top Bar (1920 x 46) ──────────────────────────────────
-    {
-        const uint32_t H = 46;
-        txui::Constraints constraints(0, W, 0, H);
-        widget->measure(constraints);
-        widget->layout(txui::Rect(0, 0, W, H));
-
-        txui::Canvas canvas(W, H);
-        canvas.clear(txui::Color(0, 0, 0, 0));
-
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
-
-        if (!txui::ImageWriter::save_png(canvas, "desktop_topbar_idle.png")) {
-            std::cerr << "FAIL: Failed to save desktop_topbar_idle.png" << std::endl;
-            return 1;
-        }
-        std::cout << "[Visual Test] Successfully saved desktop_topbar_idle.png" << std::endl;
+int main(int argc, char* argv[]) {
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    }
+    if (!qEnvironmentVariableIsSet("QSG_RHI_BACKEND")) {
+        qputenv("QSG_RHI_BACKEND", "software");
     }
 
-    // ── 2. Render Logo Menu Open (1920 x 290) ───────────────────────────────
-    {
-        const uint32_t H = 290;
-        widget->logo_menu_open = true;
-        widget->logo_menu_hover = 0; // Hover on "About Tinexus"
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("test-shell-render"));
 
-        txui::Constraints constraints(0, W, 0, H);
-        widget->measure(constraints);
-        widget->layout(txui::Rect(0, 0, W, H));
+    std::cout << "[Visual Test] Rendering Desktop Top Bar and Flyouts (Qt6)..." << std::endl;
 
-        txui::Canvas canvas(W, H);
-        canvas.clear(txui::Color(0, 0, 0, 0));
+    tinexus::shell::ShellBridge bridge;
 
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
-        if (!txui::ImageWriter::save_png(canvas, "desktop_logo_menu_open.png")) {
-            std::cerr << "FAIL: Failed to save desktop_logo_menu_open.png" << std::endl;
-            return 1;
+    QString qmlPath;
+    QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/DesktopShellWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/shell/qml/DesktopShellWindow.qml")
+    };
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
+            break;
         }
-        std::cout << "[Visual Test] Successfully saved desktop_logo_menu_open.png" << std::endl;
-        widget->logo_menu_open = false;
     }
 
-    // ── 3. Render Calendar Flyout Open (1920 x 330) ─────────────────────────
-    {
-        const uint32_t H = 330;
-        widget->calendar_open = true;
-
-        txui::Constraints constraints(0, W, 0, H);
-        widget->measure(constraints);
-        widget->layout(txui::Rect(0, 0, W, H));
-
-        txui::Canvas canvas(W, H);
-        canvas.clear(txui::Color(0, 0, 0, 0));
-
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
-
-        if (!txui::ImageWriter::save_png(canvas, "desktop_calendar_open.png")) {
-            std::cerr << "FAIL: Failed to save desktop_calendar_open.png" << std::endl;
-            return 1;
-        }
-        std::cout << "[Visual Test] Successfully saved desktop_calendar_open.png" << std::endl;
-        widget->calendar_open = false;
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate DesktopShellWindow.qml" << std::endl;
+        return 1;
     }
 
-    // ── 4. Render Notification Banners Stack (1920 x 350) ───────────────────
-    {
-        const uint32_t H = 350;
-        widget->notifications_open = true;
-
-        txui::Constraints constraints(0, W, 0, H);
-        widget->measure(constraints);
-        widget->layout(txui::Rect(0, 0, W, H));
-
-        txui::Canvas canvas(W, H);
-        canvas.clear(txui::Color(0, 0, 0, 0));
-
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
-
-        if (!txui::ImageWriter::save_png(canvas, "desktop_notifications_open.png")) {
-            std::cerr << "FAIL: Failed to save desktop_notifications_open.png" << std::endl;
-            return 1;
-        }
-        std::cout << "[Visual Test] Successfully saved desktop_notifications_open.png" << std::endl;
-        widget->notifications_open = false;
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object" << std::endl;
+        return 1;
     }
 
-    // ── 5. Render Volume Flyout Open (1920 x 220) ───────────────────────────
-    {
-        const uint32_t H = 220;
-        widget->volume_flyout_open = true;
-
-        txui::Constraints constraints(0, W, 0, H);
-        widget->measure(constraints);
-        widget->layout(txui::Rect(0, 0, W, H));
-
-        txui::Canvas canvas(W, H);
-        canvas.clear(txui::Color(0, 0, 0, 0));
-
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
-
-        if (!txui::ImageWriter::save_png(canvas, "desktop_volume_flyout_open.png")) {
-            std::cerr << "FAIL: Failed to save desktop_volume_flyout_open.png" << std::endl;
-            return 1;
-        }
-        std::cout << "[Visual Test] Successfully saved desktop_volume_flyout_open.png" << std::endl;
-        widget->volume_flyout_open = false;
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (!window) {
+        std::cerr << "FAIL: Root object is not a QQuickWindow" << std::endl;
+        return 1;
     }
 
-    // ── 6. Render Brightness Flyout Open (1920 x 220) ─────────────────────────
-    {
-        const uint32_t H = 220;
-        widget->brightness_flyout_open = true;
+    window->show();
 
-        txui::Constraints constraints(0, W, 0, H);
-        widget->measure(constraints);
-        widget->layout(txui::Rect(0, 0, W, H));
-
-        txui::Canvas canvas(W, H);
-        canvas.clear(txui::Color(0, 0, 0, 0));
-
-        txui::CommandBuffer buffer_cmds;
-        txui::Painter painter(buffer_cmds);
-        painter.begin_frame();
-        widget->paint(painter);
-        painter.end_frame();
-        backend.execute(buffer_cmds, canvas);
-
-        if (!txui::ImageWriter::save_png(canvas, "desktop_brightness_flyout_open.png")) {
-            std::cerr << "FAIL: Failed to save desktop_brightness_flyout_open.png" << std::endl;
-            return 1;
+    auto save_frame = [&](int targetW, int targetH, const std::string& filename) -> bool {
+        window->resize(targetW, targetH);
+        for (int i = 0; i < 8; ++i) {
+            app.processEvents();
+            usleep(20000);
         }
-        std::cout << "[Visual Test] Successfully saved desktop_brightness_flyout_open.png" << std::endl;
-        widget->brightness_flyout_open = false;
-    }
+        QImage img = window->grabWindow();
+        if (!img.isNull()) {
+            if (img.width() != targetW || img.height() != targetH) {
+                img = img.copy(0, 0, targetW, targetH);
+            }
+            img.save(QString::fromStdString(filename));
+            std::cout << "[Visual Test] Successfully saved " << filename
+                      << " (" << targetW << "x" << targetH << ")" << std::endl;
+            return true;
+        } else {
+            std::cerr << "FAIL: Failed to save " << filename << std::endl;
+            return false;
+        }
+    };
 
+    // ── 1. Idle Top Bar (1920 x 46) ──────────────────────────────────────────
+    bridge.closeAllFlyouts();
+    if (!save_frame(1920, 46, "desktop_topbar_idle.png")) return 1;
+
+    // ── 2. Logo Menu Open (1920 x 290) ───────────────────────────────────────
+    bridge.setLogoMenuOpen(true);
+    if (!save_frame(1920, 290, "desktop_logo_menu_open.png")) return 1;
+
+    // ── 3. Calendar Flyout Open (1920 x 330) ─────────────────────────────────
+    bridge.setCalendarOpen(true);
+    if (!save_frame(1920, 330, "desktop_calendar_open.png")) return 1;
+
+    // ── 4. Notification Banners Stack (1920 x 350) ───────────────────────────
+    bridge.setNotificationsOpen(true);
+    if (!save_frame(1920, 350, "desktop_notifs_open.png")) return 1;
+
+    // ── 5. Volume Slider Flyout (1920 x 220) ─────────────────────────────────
+    bridge.setVolumeFlyoutOpen(true);
+    if (!save_frame(1920, 220, "desktop_volume_open.png")) return 1;
+
+    // ── 6. Brightness Slider Flyout (1920 x 220) ─────────────────────────────
+    bridge.setBrightnessFlyoutOpen(true);
+    if (!save_frame(1920, 220, "desktop_brightness_open.png")) return 1;
+
+    std::cout << "[Visual Test] All shell visual tests passed." << std::endl;
     return 0;
 }

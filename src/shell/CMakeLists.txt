@@ -1,91 +1,104 @@
+cmake_minimum_required(VERSION 3.28)
+project(tinexus-shell VERSION 1.0.0 LANGUAGES CXX)
+
+find_package(Qt6 REQUIRED COMPONENTS
+    Core
+    Gui
+    Quick
+    Qml
+    DBus
+    WaylandClient
+)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC OFF)
+set(CMAKE_AUTORCC OFF)
+
+find_package(LayerShellQt QUIET)
+
+# ── Main Shell Binary ─────────────────────────────────────────────────────────
 add_executable(tinexus-shell
     main.cpp
-    DesktopShellWidget.cpp
-    ui/AuraNotchWidget.cpp
-    ui/LogoMenuWidget.cpp
-    ui/CalendarFlyoutWidget.cpp
-    ui/NotificationFlyoutWidget.cpp
-    ui/VolumeFlyoutWidget.cpp
-    ui/BrightnessFlyoutWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
+    ShellBridge.cpp
+    ShellBridge.hpp
 )
 
 target_include_directories(tinexus-shell PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/indexer/include
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
 )
 
 target_link_libraries(tinexus-shell PRIVATE
     tinexus_common
-    txui
-    tinexus_protocols_client
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    Qt6::Qml
+    Qt6::DBus
+    Qt6::WaylandClient
     tinexus_warnings
-    tinexus_sanitizers
 )
+
+if(LayerShellQt_FOUND)
+    target_link_libraries(tinexus-shell PRIVATE LayerShellQt::Interface)
+    target_compile_definitions(tinexus-shell PRIVATE HAVE_LAYERSHELL=1)
+    message(STATUS "tinexus-shell: LayerShellQt linked")
+else()
+    message(STATUS "tinexus-shell: LayerShellQt not found — running in fallback QWindow mode")
+endif()
 
 install(TARGETS tinexus-shell RUNTIME DESTINATION bin)
 
+# ── Offscreen Visual Render Test ──────────────────────────────────────────────
 add_executable(test-shell-render
     test_shell_render.cpp
-    DesktopShellWidget.cpp
-    ui/AuraNotchWidget.cpp
-    ui/LogoMenuWidget.cpp
-    ui/CalendarFlyoutWidget.cpp
-    ui/NotificationFlyoutWidget.cpp
-    ui/VolumeFlyoutWidget.cpp
-    ui/BrightnessFlyoutWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
+    ShellBridge.cpp
+    ShellBridge.hpp
 )
 
 target_include_directories(test-shell-render PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/indexer/include
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
 )
 
 target_link_libraries(test-shell-render PRIVATE
     tinexus_common
-    txui
-    tinexus_protocols_client
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    Qt6::Qml
+    Qt6::DBus
     tinexus_warnings
-    tinexus_sanitizers
 )
 
 set_target_properties(test-shell-render PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-add_executable(test-full-desktop
-    test_full_desktop.cpp
-    DesktopShellWidget.cpp
-    ui/AuraNotchWidget.cpp
-    ui/LogoMenuWidget.cpp
-    ui/CalendarFlyoutWidget.cpp
-    ui/NotificationFlyoutWidget.cpp
-    ui/VolumeFlyoutWidget.cpp
-    ui/BrightnessFlyoutWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/indexer/desktop_parser.cpp
-    ${CMAKE_SOURCE_DIR}/src/about/AboutWidget.cpp
+# ── Live Functional Verification Test ─────────────────────────────────────────
+add_executable(test-shell-live
+    test_shell_live.cpp
+    ShellBridge.cpp
+    ShellBridge.hpp
 )
-
-target_include_directories(test-full-desktop PRIVATE
+target_include_directories(test-shell-live PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/indexer/include
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
-    ${CMAKE_SOURCE_DIR}/src/about
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
 )
-
-target_link_libraries(test-full-desktop PRIVATE
+target_link_libraries(test-shell-live PRIVATE
     tinexus_common
-    txui
-    tinexus_protocols_client
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    Qt6::Qml
+    Qt6::DBus
     tinexus_warnings
-    tinexus_sanitizers
 )
-
-set_target_properties(test-full-desktop PROPERTIES
+set_target_properties(test-shell-live PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
