@@ -10,12 +10,17 @@
 #include <atomic>
 #include <thread>
 #include <filesystem>
+#include <fstream>
+#include <cerrno>
+#include <cstring>
+#include <poll.h>
 
 using namespace tinexus;
 namespace fs = std::filesystem;
 
 static zwlr_layer_shell_v1* g_layer_shell = nullptr;
 static std::atomic<bool> g_running{true};
+static std::atomic<bool> g_reload_requested{false};
 
 static void registry_handle_global(void* data, struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     if (std::string_view(interface) == zwlr_layer_shell_v1_interface.name) {
@@ -54,13 +59,71 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
     .closed = layer_surface_closed,
 };
 
-void signal_handler(int) {
-    g_running = false;
+void signal_handler(int sig) {
+    if (sig == SIGUSR1) {
+        g_reload_requested = true;
+    } else {
+        g_running = false;
+    }
+}
+
+static std::string get_active_wallpaper_path() {
+    // 1. Check /run/user/<uid>/tinexus/current_wallpaper
+    const char* xdg_run = std::getenv("XDG_RUNTIME_DIR");
+    std::string run_path = xdg_run ? (std::string(xdg_run) + "/tinexus/current_wallpaper") : "";
+    if (!run_path.empty() && fs::exists(run_path)) {
+        std::ifstream f(run_path);
+        std::string p;
+        if (std::getline(f, p) && !p.empty() && fs::exists(p)) {
+            return p;
+        }
+    }
+    // 2. Check /tmp/current_wallpaper
+    if (fs::exists("/tmp/current_wallpaper")) {
+        std::ifstream f("/tmp/current_wallpaper");
+        std::string p;
+        if (std::getline(f, p) && !p.empty() && fs::exists(p)) {
+            return p;
+        }
+    }
+    // 3. Check ~/.config/tinexus/settings.toml for wallpaper_path
+    const char* home = std::getenv("HOME");
+    std::string cfg_path = home ? (std::string(home) + "/.config/tinexus/settings.toml") : "";
+    if (!cfg_path.empty() && fs::exists(cfg_path)) {
+        std::ifstream f(cfg_path);
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.starts_with("wallpaper_path")) {
+                auto pos = line.find('=');
+                if (pos != std::string::npos) {
+                    std::string p = line.substr(pos + 1);
+                    p.erase(0, p.find_first_not_of(" \t\""));
+                    p.erase(p.find_last_not_of(" \t\"") + 1);
+                    if (!p.empty() && fs::exists(p)) {
+                        return p;
+                    }
+                }
+            }
+        }
+    }
+    // 4. Default candidates
+    for (const auto& c : {"/usr/share/backgrounds/tinexus-default.jpg",
+                         "/usr/share/backgrounds/tinexus-os-primary.jpg",
+                         "/home/tinexus/Pictures/tinexus-default.jpg",
+                         "assets/wallpaper/tinexus-default.jpg"}) {
+        if (fs::exists(c)) return c;
+    }
+    return "";
 }
 
 int main() {
-    std::signal(SIGTERM, signal_handler);
-    std::signal(SIGINT, signal_handler);
+    struct sigaction sa{};
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // No SA_RESTART: interrupts poll() immediately on SIGUSR1
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGUSR1, &sa, nullptr);
 
     log::set_component_name("wallpaper");
     log::info("[Wallpaper] Tinexus Wallpaper Daemon starting...");
@@ -128,41 +191,57 @@ int main() {
         h = g_configured_h;
     }
 
-    // Try loading candidate wallpaper image paths
-    std::vector<std::string> image_candidates = {
-        "Temp/daniel-leone-v7daTKlZzaw-unsplash.jpg",
-        "/usr/share/backgrounds/tinexus-default.jpg",
-        "/usr/share/backgrounds/tinexus-default.png",
-        "/usr/share/backgrounds/daniel-leone-v7daTKlZzaw-unsplash.jpg"
+    wallpaper::ImageProvider provider;
+
+    auto render_and_commit = [&](uint32_t width, uint32_t height) {
+        std::string path = get_active_wallpaper_path();
+        if (!path.empty() && provider.load(path)) {
+            log::info("[Wallpaper] Loaded wallpaper image from '{}'", path);
+        } else {
+            log::warn("[Wallpaper] Custom wallpaper image not found at '{}', using procedural fallback.", path);
+        }
+
+        wallpaper::WallpaperBuffer buf = provider.render_buffer(width, height);
+        if (render_target->data() && !buf.pixels.empty()) {
+            std::copy(buf.pixels.begin(), buf.pixels.end(), render_target->data());
+            render_target->present();
+            connection.flush();
+            log::info("[Wallpaper] Wallpaper committed to BACKGROUND layer surface successfully.");
+        }
     };
 
-    wallpaper::ImageProvider provider;
-    bool loaded = false;
-    for (const auto& path : image_candidates) {
-        if (fs::exists(path) && provider.load(path)) {
-            loaded = true;
-            log::info("[Wallpaper] Using custom wallpaper image from '{}'", path);
-            break;
-        }
-    }
+    // Initial render
+    render_and_commit(w, h);
+    std::string last_loaded_path = get_active_wallpaper_path();
 
-    if (!loaded) {
-        log::warn("[Wallpaper] Custom wallpaper image not found, using procedural fallback.");
-    }
-
-    wallpaper::WallpaperBuffer buf = provider.render_buffer(w, h);
-
-    if (render_target->data() && !buf.pixels.empty()) {
-        std::copy(buf.pixels.begin(), buf.pixels.end(), render_target->data());
-        render_target->present();
-        connection.flush();
-        log::info("[Wallpaper] Custom wallpaper committed to BACKGROUND layer surface successfully.");
-    }
-
-    // Event loop
+    // Resilient Wayland event loop: non-blocking poll with 1000ms timeout
     while (g_running) {
-        if (wl_display_dispatch(connection.display()) == -1) {
-            break;
+        std::string current_path = get_active_wallpaper_path();
+        if (g_reload_requested || (!current_path.empty() && current_path != last_loaded_path)) {
+            g_reload_requested = false;
+            last_loaded_path = current_path;
+            log::info("[Wallpaper] Reloading wallpaper (requested or changed: '{}')", current_path);
+            render_and_commit(w, h);
+        }
+
+        while (wl_display_prepare_read(connection.display()) != 0) {
+            wl_display_dispatch_pending(connection.display());
+        }
+        connection.flush();
+
+        struct pollfd pfd{};
+        pfd.fd = wl_display_get_fd(connection.display());
+        pfd.events = POLLIN;
+        int ret = poll(&pfd, 1, 1000); // 1-second timeout
+        if (ret > 0) {
+            wl_display_read_events(connection.display());
+            wl_display_dispatch_pending(connection.display());
+        } else {
+            wl_display_cancel_read(connection.display());
+            if (ret < 0 && errno != EINTR) {
+                log::error("[Wallpaper] poll error: {}", std::strerror(errno));
+                break;
+            }
         }
     }
 
