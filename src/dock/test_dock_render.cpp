@@ -1,92 +1,110 @@
-#include "dock/DockWidget.hpp"
-#include <txui/render/Canvas.hpp>
-#include <txui/render/PixmanBackend.hpp>
-#include <txui/render/Painter.hpp>
-#include <txui/render/ImageWriter.hpp>
-#include <functional>
+// ============================================================================
+// test_dock_render.cpp — Visual Verification Harness for tinexus-dock (Qt6)
+// ============================================================================
+#include "dock/DockBridge.hpp"
+#include <QtGui/QGuiApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <QtGui/QImage>
 #include <iostream>
+#include <unistd.h>
 
-using namespace txui;
-
-static void render_dock_frame(const std::string& name,
-                              const std::function<void(DockWidget&)>& setup,
-                              const std::string& filename) {
-    std::cout << "[Visual Test] Rendering Dock: " << name << " -> " << filename << std::endl;
-    const uint32_t W = 960, H = 200;
-    Canvas canvas(W, H);
-    canvas.clear(Color(10, 12, 18, 255));
-    PixmanBackend backend;
-
-    auto dock = make_ref<DockWidget>();
-    setup(*dock);
-
-    Constraints constraints(0, W, 0, H);
-    dock->measure(constraints);
-    dock->layout(Rect(0, 0, W, H));
-
-    CommandBuffer cmds;
-    Painter painter(cmds);
-    painter.begin_frame();
-    dock->paint(painter);
-    painter.end_frame();
-    backend.execute(cmds, canvas);
-
-    if (ImageWriter::save_png(canvas, filename)) {
-        std::cout << "  [SUCCESS] Saved " << filename << std::endl;
-    } else {
-        std::cerr << "  [FAILURE] Could not save " << filename << std::endl;
+int main(int argc, char* argv[]) {
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
     }
-}
+    if (!qEnvironmentVariableIsSet("QSG_RHI_BACKEND")) {
+        qputenv("QSG_RHI_BACKEND", "software");
+    }
 
-int main() {
-    std::cout << "==================================================" << std::endl;
-    std::cout << " TxUI Dock Visual Verification Harness            " << std::endl;
-    std::cout << "==================================================" << std::endl;
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("test-dock-render"));
 
-    // 1. Idle Dock State (Running indicators active on Terminal and Files)
-    render_dock_frame("Dock Idle State", [](DockWidget& d) {
-        d.update_icon_state("tinexus-terminal", DockIconAppState::RunningFocused);
-        d.update_icon_state("tinexus-files",    DockIconAppState::RunningBg);
-        d.update_icon_state("tinexus-settings", DockIconAppState::NotRunning);
-        d.update_icon_state("tinexus-monitor",  DockIconAppState::NotRunning);
-        d.update_icon_state("tinexus-pkg",      DockIconAppState::NotRunning);
-    }, "dock_idle_state.png");
+    std::cout << "=== Tinexus Dock Visual Test Suite (Qt6) ===" << std::endl;
 
-    // 2. Hover Magnify State (Hover over Files icon: parabolic magnification + tooltip)
-    render_dock_frame("Dock Hover Magnify (Files)", [](DockWidget& d) {
-        d.update_icon_state("tinexus-terminal", DockIconAppState::RunningFocused);
-        d.update_icon_state("tinexus-files",    DockIconAppState::RunningBg);
+    tinexus::dock::DockBridge bridge;
 
-        // Pre-measure, layout, and warmup paint to compute icon center coordinates
-        Constraints constraints(0, 960, 0, 200);
-        d.measure(constraints);
-        d.layout(Rect(0, 0, 960, 200));
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
-        CommandBuffer warmup_cmds;
-        Painter warmup_painter(warmup_cmds);
-        warmup_painter.begin_frame();
-        d.paint(warmup_painter);
-        warmup_painter.end_frame();
-
-        // Center of icon 1 ("Files")
-        const auto& icons = d.icons();
-        int files_x = static_cast<int>(icons[1].center_x);
-
-        Event ev_move;
-        ev_move.type = EventType::PointerMove;
-        ev_move.pointer.x = files_x;
-        ev_move.pointer.y = 150;
-        d.handle_event(ev_move);
-
-        // Advance physics springs to reach target scale
-        for (int i = 0; i < 60; ++i) {
-            d.tick_animations(0.016);
+    QString qmlPath;
+    QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/DockBar.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/dock/qml/DockBar.qml"),
+        QStringLiteral("src/dock/qml/DockBar.qml"),
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/dock/qml/DockBar.qml")
+    };
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
+            break;
         }
-        for (const auto& ic : d.icons()) {
-            std::cout << "  [DEBUG] " << ic.label << ": scale=" << ic.scale_spring.value
-                      << " target=" << ic.scale_spring.target << " center_x=" << ic.center_x << std::endl;
-        }
-    }, "dock_hover_magnify.png");
+    }
 
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate DockBar.qml" << std::endl;
+        return 1;
+    }
+
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object" << std::endl;
+        return 1;
+    }
+
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (!window) {
+        std::cerr << "FAIL: Root object is not a QQuickWindow" << std::endl;
+        return 1;
+    }
+
+    window->show();
+
+    auto save_frame = [&](const std::string& filename) -> bool {
+        for (int i = 0; i < 10; ++i) {
+            app.processEvents();
+            usleep(20000);
+        }
+        QImage img = window->grabWindow();
+        if (!img.isNull()) {
+            img.save(QString::fromStdString(filename));
+            std::cout << "  [SUCCESS] Saved " << filename << " (" << img.width() << "x" << img.height() << ")" << std::endl;
+            return true;
+        } else {
+            std::cerr << "  [FAIL] grabWindow returned null for " << filename << std::endl;
+            return false;
+        }
+    };
+
+    // 1. Idle state
+    std::cout << "[Visual Test] Rendering Dock Idle State..." << std::endl;
+    bridge.resetHover();
+    if (!save_frame("dock_idle.png")) return 1;
+
+    // 2. Hover state over first icon (Terminal)
+    std::cout << "[Visual Test] Rendering Dock Hover State (Terminal)..." << std::endl;
+    if (!bridge.rawIcons().empty()) {
+        bridge.handleHover(bridge.rawIcons()[0].centerX);
+        for (int f = 0; f < 30; ++f) {
+            bridge.tickAnimations(0.016);
+            app.processEvents();
+        }
+    }
+    if (!save_frame("dock_hover_terminal.png")) return 1;
+
+    // 3. Focused state
+    std::cout << "[Visual Test] Rendering Dock Focused State..." << std::endl;
+    bridge.updateIconState(QStringLiteral("tinexus-terminal"), tinexus::dock::DockIconAppState::RunningFocused);
+    bridge.resetHover();
+    for (int f = 0; f < 20; ++f) {
+        bridge.tickAnimations(0.016);
+        app.processEvents();
+    }
+    if (!save_frame("dock_focused_app.png")) return 1;
+
+    std::cout << "[Visual Test] All dock visual tests passed." << std::endl;
     return 0;
 }
