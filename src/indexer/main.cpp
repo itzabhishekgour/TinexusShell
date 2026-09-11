@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
     // Application directories to scan & watch
     std::vector<fs::path> app_dirs;
     app_dirs.push_back("/usr/share/applications");
+    app_dirs.push_back("/usr/local/share/applications");
     const char* home = std::getenv("HOME");
     if (home) {
         fs::path user_app_dir = fs::path(home) / ".local" / "share" / "applications";

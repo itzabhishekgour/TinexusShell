@@ -1,89 +1,137 @@
-#include <launcher/LauncherWidget.hpp>
-#include <txui/render/Canvas.hpp>
-#include <txui/render/PixmanBackend.hpp>
-#include <txui/render/Painter.hpp>
-#include <txui/render/ImageWriter.hpp>
+// ============================================================================
+// test_launcher_render.cpp — Visual Verification Harness for tinexus-launcher (Qt6)
+// ============================================================================
+#include "LauncherBridge.hpp"
+#include <QtGui/QGuiApplication>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <QtGui/QImage>
+#include <QtGui/QPainter>
 #include <iostream>
 #include <vector>
+#include <unistd.h>
 
-using namespace txui;
-using namespace tinexus::launcher;
-
-static std::vector<AppItem> get_mock_apps() {
+static std::vector<tinexus::launcher::LauncherItem> get_mock_apps() {
     return {
-        {"Tinexus Terminal", "tinexus-terminal", "Default Wayland GPU Terminal", true, "utilities-terminal", ResultKind::App},
-        {"Tinexus Files", "tinexus-files", "Lightweight Miller Column File Manager", false, "system-file-manager", ResultKind::App},
-        {"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", false, "preferences-desktop", ResultKind::App},
-        {"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", false, "utilities-system-monitor", ResultKind::App},
-        {"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", false, "system-software-install", ResultKind::App},
+        {"Tinexus Terminal", "tinexus-terminal", "Default Wayland GPU Terminal", "utilities-terminal", "App", true},
+        {"Tinexus Files", "tinexus-files", "Lightweight Miller Column File Manager", "system-file-manager", "App", false},
+        {"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", "preferences-desktop", "App", false},
+        {"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", "utilities-system-monitor", "App", false},
+        {"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", "system-software-install", "App", false},
     };
 }
 
-static void render_launcher_frame(const std::string& name,
-                                  const std::function<void(LauncherWidget&)>& setup,
-                                  const std::string& filename) {
-    std::cout << "[Visual Test] Rendering Launcher: " << name << " -> " << filename << std::endl;
-    const uint32_t W = 900, H = 700;
-    Canvas canvas(W, H);
-    canvas.clear(Color(8, 9, 14, 255));
-    PixmanBackend backend;
-
-    auto launcher = make_ref<LauncherWidget>();
-    launcher->set_all_apps(get_mock_apps());
-    setup(*launcher);
-
-    Constraints constraints(0, W, 0, H);
-    launcher->measure(constraints);
-    launcher->layout(Rect(0, 0, W, H));
-
-    CommandBuffer cmds;
-    Painter painter(cmds);
-    painter.begin_frame();
-    launcher->paint(painter);
-    painter.end_frame();
-    backend.execute(cmds, canvas);
-
-    if (ImageWriter::save_png(canvas, filename)) {
-        std::cout << "  [SUCCESS] Saved " << filename << std::endl;
-    } else {
-        std::cerr << "  [FAILURE] Could not save " << filename << std::endl;
+int main(int argc, char* argv[]) {
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
     }
-}
+    if (!qEnvironmentVariableIsSet("QSG_RHI_BACKEND")) {
+        qputenv("QSG_RHI_BACKEND", "software");
+    }
 
-int main() {
+    QGuiApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("test-launcher-render"));
+
     std::cout << "==================================================" << std::endl;
-    std::cout << " TxUI Launcher Visual Verification Harness        " << std::endl;
+    std::cout << " TxUI -> Qt6 Launcher Visual Verification Harness " << std::endl;
     std::cout << "==================================================" << std::endl;
 
-    // 1. Empty State (placeholder search input, recent/suggested applications)
-    render_launcher_frame("Launcher Empty State", [](LauncherWidget& lw) {
-        lw.set_query("");
-        lw.set_selected_index(0);
-    }, "launcher_empty_state.png");
+    tinexus::launcher::LauncherBridge bridge;
+    bridge.setAllApps(get_mock_apps());
 
-    // 2. Search Results with Keyboard Navigation (search query 'sett', navigated down to Settings)
-    render_launcher_frame("Launcher Search Results", [](LauncherWidget& lw) {
-        // Simulate typing into TextInput via handle_event or set_query
-        lw.set_query("sett");
-        // Verify Up/Down event routing: Down key navigates selection
-        Event ev_down;
-        ev_down.type = EventType::KeyDown;
-        ev_down.keyboard.key = Key::Down;
-        ev_down.keyboard.modifiers = KeyModifier::None;
-        lw.handle_event(ev_down);
-    }, "launcher_search_results.png");
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
-    // 3. Calculator State (evaluating '42 * 8')
-    render_launcher_frame("Launcher Calculator", [](LauncherWidget& lw) {
-        lw.set_query("42 * 8");
-        lw.set_selected_index(0);
-    }, "launcher_calculator.png");
+    QString qmlPath;
+    QStringList candidates = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/LauncherWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/launcher/qml/LauncherWindow.qml"),
+        QStringLiteral("src/launcher/qml/LauncherWindow.qml"),
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/launcher/qml/LauncherWindow.qml")
+    };
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
+            break;
+        }
+    }
 
-    // 4. App Store Fallback Search (searching 'chrome' triggers store card with 'Get on Store' badge)
-    render_launcher_frame("Launcher Store Fallback", [](LauncherWidget& lw) {
-        lw.set_query("chrome");
-        lw.set_selected_index(0);
-    }, "launcher_store_search.png");
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate LauncherWindow.qml" << std::endl;
+        return 1;
+    }
 
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object" << std::endl;
+        return 1;
+    }
+
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (!window) {
+        std::cerr << "FAIL: Root object is not a QQuickWindow" << std::endl;
+        return 1;
+    }
+
+    window->show();
+
+    auto save_frame = [&](const std::string& name, const std::string& filename) -> bool {
+        std::cout << "[Visual Test] Rendering Launcher: " << name << " -> " << filename << std::endl;
+        window->resize(900, 700);
+
+        for (int i = 0; i < 8; ++i) {
+            app.processEvents();
+            usleep(20000);
+        }
+
+        QImage img = window->grabWindow();
+        if (!img.isNull()) {
+            QImage canvas(900, 700, QImage::Format_ARGB32_Premultiplied);
+            canvas.fill(QColor(8, 9, 14, 255));
+
+            QPainter p(&canvas);
+            // Center the launcher window on canvas
+            int x = (900 - img.width()) / 2;
+            int y = (700 - img.height()) / 2;
+            p.drawImage(x, y, img);
+            p.end();
+
+            if (canvas.save(QString::fromStdString(filename))) {
+                std::cout << "  [SUCCESS] Saved " << filename << " (" << canvas.width() << "x" << canvas.height() << ")" << std::endl;
+                return true;
+            } else {
+                std::cerr << "  [FAILURE] Could not save " << filename << std::endl;
+                return false;
+            }
+        } else {
+            std::cerr << "  [FAILURE] grabWindow returned null for " << filename << std::endl;
+            return false;
+        }
+    };
+
+    // 1. Empty State
+    bridge.setQuery(QStringLiteral(""));
+    bridge.setSelectedIndex(0);
+    if (!save_frame("Launcher Empty State", "launcher_empty_state.png")) return 1;
+
+    // 2. Search Results
+    bridge.setQuery(QStringLiteral("sett"));
+    bridge.selectNext();
+    if (!save_frame("Launcher Search Results", "launcher_search_results.png")) return 1;
+
+    // 3. Calculator
+    bridge.setQuery(QStringLiteral("42 * 8"));
+    bridge.setSelectedIndex(0);
+    if (!save_frame("Launcher Calculator", "launcher_calculator.png")) return 1;
+
+    // 4. Store Fallback
+    bridge.setQuery(QStringLiteral("chrome"));
+    bridge.setSelectedIndex(0);
+    if (!save_frame("Launcher Store Fallback", "launcher_store_search.png")) return 1;
+
+    std::cout << "[Visual Test] All launcher visual tests passed." << std::endl;
     return 0;
 }
