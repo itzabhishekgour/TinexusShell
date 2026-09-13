@@ -135,6 +135,21 @@ std::string AudioUtils::detect_primary_control(const std::string& base_proc_asou
 }
 
 int AudioUtils::get_volume_percent(const std::string& base_proc_asound) {
+    // 1. Query PipeWire (wpctl) if active (hardware-agnostic sink status)
+    if (fs::exists("/usr/bin/wpctl")) {
+        std::string wp_out = run_cmd_output("/usr/bin/wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null");
+        if (!wp_out.empty() && wp_out.find("Volume:") != std::string::npos) {
+            std::istringstream iss(wp_out);
+            std::string tag;
+            double vol = 0.0;
+            if (iss >> tag >> vol) {
+                s_cached_volume = std::clamp(static_cast<int>(vol * 100.0 + 0.5), 0, 100);
+                s_cached_muted = (wp_out.find("[MUTED]") != std::string::npos) || (s_cached_volume == 0);
+                return s_cached_volume;
+            }
+        }
+    }
+
     std::string ctrl = detect_primary_control(base_proc_asound);
     int card_id = detect_primary_card_id(base_proc_asound);
 
@@ -143,22 +158,37 @@ int AudioUtils::get_volume_percent(const std::string& base_proc_asound) {
         std::string out = run_cmd_output(cmd);
 
         if (!out.empty()) {
-            // Parse [XX%] and [on]/[off]
-            auto pct_pos = out.find('%');
-            if (pct_pos != std::string::npos) {
-                auto bracket_open = out.rfind('[', pct_pos);
-                if (bracket_open != std::string::npos) {
-                    try {
-                        int val = std::stoi(out.substr(bracket_open + 1, pct_pos - bracket_open - 1));
-                        s_cached_volume = std::clamp(val, 0, 100);
-                    } catch (...) {}
+            bool found_on = false;
+            bool found_off = false;
+            std::istringstream iss(out);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (line.find("Playback") != std::string::npos) {
+                    auto pct_pos = line.find('%');
+                    if (pct_pos != std::string::npos) {
+                        auto bracket_open = line.rfind('[', pct_pos);
+                        if (bracket_open != std::string::npos) {
+                            try {
+                                int val = std::stoi(line.substr(bracket_open + 1, pct_pos - bracket_open - 1));
+                                s_cached_volume = std::clamp(val, 0, 100);
+                            } catch (...) {}
+                        }
+                    }
+                    if (line.find("[on]") != std::string::npos) {
+                        found_on = true;
+                    }
+                    if (line.find("[off]") != std::string::npos) {
+                        found_off = true;
+                    }
                 }
             }
 
-            if (out.find("[off]") != std::string::npos) {
+            if (found_on) {
+                s_cached_muted = (s_cached_volume == 0);
+            } else if (found_off) {
                 s_cached_muted = true;
-            } else if (out.find("[on]") != std::string::npos) {
-                s_cached_muted = false;
+            } else if (out.find("[off]") != std::string::npos) {
+                s_cached_muted = true;
             }
 
             if (s_cached_volume >= 0) {
@@ -202,10 +232,28 @@ bool AudioUtils::set_volume_percent(int pct, bool persist, bool throttle) {
 
         std::string arg_val = std::to_string(pct) + "%";
         if (pct > 0) {
-            run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", ctrl, (arg_val + " unmute")});
+            // Unmute and set percentage as separate arguments so execv doesn't pass merged strings
+            run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", ctrl, arg_val, "unmute"});
+            // Simultaneously ensure all constituent analog sinks are unmuted
+            for (const char* sec_ctrl : {"Speaker", "Headphone", "PCM", "Front"}) {
+                if (std::string(sec_ctrl) != ctrl) {
+                    run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", sec_ctrl, "unmute", "-q"});
+                }
+            }
         } else {
             run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", ctrl, "mute"});
         }
+    }
+
+    // PipeWire / WirePlumber / PulseAudio synchronization
+    if (fs::exists("/usr/bin/wpctl")) {
+        char vol_buf[16];
+        snprintf(vol_buf, sizeof(vol_buf), "%.2f", pct / 100.0);
+        run_cmd_async("/usr/bin/wpctl", {"set-volume", "@DEFAULT_AUDIO_SINK@", vol_buf});
+        run_cmd_async("/usr/bin/wpctl", {"set-mute", "@DEFAULT_AUDIO_SINK@", (pct == 0 ? "1" : "0")});
+    } else if (fs::exists("/usr/bin/pactl")) {
+        run_cmd_async("/usr/bin/pactl", {"set-sink-volume", "@DEFAULT_SINK@", std::to_string(pct) + "%"});
+        run_cmd_async("/usr/bin/pactl", {"set-sink-mute", "@DEFAULT_SINK@", (pct == 0 ? "1" : "0")});
     }
 
     if (persist) {
@@ -236,6 +284,12 @@ bool AudioUtils::toggle_mute(bool persist) {
         run_cmd_async("/usr/bin/amixer", {"-c", card_str, "sset", ctrl, "toggle"});
     }
 
+    if (fs::exists("/usr/bin/wpctl")) {
+        run_cmd_async("/usr/bin/wpctl", {"set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"});
+    } else if (fs::exists("/usr/bin/pactl")) {
+        run_cmd_async("/usr/bin/pactl", {"set-sink-mute", "@DEFAULT_SINK@", "toggle"});
+    }
+
     if (persist) {
         auto cfg = HardwareConfig::load();
         cfg.muted = s_cached_muted;
@@ -252,26 +306,159 @@ int AudioUtils::step_volume(int delta_pct, bool persist) {
     return target;
 }
 
+std::string AudioUtils::resolve_chime_path(const std::string& preferred_path) {
+    if (!preferred_path.empty() && fs::exists(preferred_path)) {
+        return preferred_path;
+    }
+    const std::vector<std::string> candidates = {
+        "/usr/share/sounds/tinexus/volume-chime.wav",
+        "assets/sounds/volume-chime.wav",
+        "../assets/sounds/volume-chime.wav",
+        "../../assets/sounds/volume-chime.wav",
+        "/workspace/assets/sounds/volume-chime.wav",
+        "/mnt/e/Tinu's Technology/Tinexus Manager/assets/sounds/volume-chime.wav"
+    };
+    for (const auto& c : candidates) {
+        if (fs::exists(c)) {
+            return c;
+        }
+    }
+    return "";
+}
+
 void AudioUtils::play_chime(const std::string& chime_path) {
-    if (!fs::exists(chime_path) || !fs::exists("/usr/bin/aplay")) {
+    std::string actual_path = resolve_chime_path(chime_path);
+    if (actual_path.empty()) {
         return;
     }
 
+    // 1. If PipeWire pw-play is available, play asynchronously via PipeWire server
+    if (fs::exists("/usr/bin/pw-play")) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            execl("/usr/bin/pw-play", "pw-play", actual_path.c_str(), nullptr);
+            _exit(127);
+        }
+        return;
+    }
+
+    // 2. If PulseAudio paplay is available, play asynchronously via PulseAudio
+    if (fs::exists("/usr/bin/paplay")) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            execl("/usr/bin/paplay", "paplay", actual_path.c_str(), nullptr);
+            _exit(127);
+        }
+        return;
+    }
+
+    // 3. Fallback to ALSA aplay (using default PCM device from /etc/asound.conf)
+    if (fs::exists("/usr/bin/aplay")) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            execl("/usr/bin/aplay", "aplay", "-q", actual_path.c_str(), nullptr);
+            _exit(127);
+        }
+    }
+}
+
+static int s_current_output_index = 0;
+
+std::vector<std::string> AudioUtils::get_output_devices(const std::string& base_proc_asound) {
+    std::vector<std::string> devices;
+
+    // 1. Query runtime PipeWire / PulseAudio sinks if pactl is available
+    if (fs::exists("/usr/bin/pactl")) {
+        std::string out = run_cmd_output("/usr/bin/pactl list short sinks 2>/dev/null");
+        if (!out.empty()) {
+            std::istringstream iss(out);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (line.empty()) continue;
+                std::istringstream liness(line);
+                std::string idx, name;
+                if (liness >> idx >> name) {
+                    std::string label = name;
+                    if (label.rfind("alsa_output.", 0) == 0) {
+                        label = label.substr(12);
+                    }
+                    std::replace(label.begin(), label.end(), '_', ' ');
+                    std::replace(label.begin(), label.end(), '.', ' ');
+                    devices.push_back(label);
+                }
+            }
+        }
+    }
+
+    // 2. Query physical / virtual ALSA sound cards dynamically from /proc/asound/cards
+    if (devices.empty()) {
+        auto cards = get_sound_cards(base_proc_asound);
+        for (const auto& card : cards) {
+            std::string desc = "Card " + std::to_string(card.id) + ": " + card.name;
+            devices.push_back(desc);
+        }
+    }
+
+    // 3. Graceful fallback if no audio hardware exists
+    if (devices.empty()) {
+        devices.push_back("No Audio Output Devices Available");
+    }
+
+    return devices;
+}
+
+int AudioUtils::get_current_output_device_index() {
+    auto devs = get_output_devices();
+    if (devs.empty() || devs[0] == "No Audio Output Devices Available") {
+        return 0;
+    }
+    return std::clamp(s_current_output_index, 0, static_cast<int>(devs.size() - 1));
+}
+
+bool AudioUtils::set_output_device_by_index(int index) {
+    auto devs = get_output_devices();
+    if (index < 0 || index >= static_cast<int>(devs.size())) {
+        return false;
+    }
+
+    s_current_output_index = index;
+
+    // PipeWire / PulseAudio default sink switch
+    if (fs::exists("/usr/bin/pactl")) {
+        std::string out = run_cmd_output("/usr/bin/pactl list short sinks 2>/dev/null");
+        std::istringstream iss(out);
+        std::string line;
+        int i = 0;
+        while (std::getline(iss, line)) {
+            if (line.empty()) continue;
+            std::istringstream liness(line);
+            std::string sink_id, sink_name;
+            if (liness >> sink_id >> sink_name) {
+                if (i == index) {
+                    run_cmd_async("/usr/bin/pactl", {"set-default-sink", sink_name});
+                    break;
+                }
+                i++;
+            }
+        }
+    }
+
+    // ALSA default routing update
     auto cards = get_sound_cards();
-    if (cards.empty()) {
-        return;
+    if (index < static_cast<int>(cards.size())) {
+        int card_id = cards[index].id;
+        std::ofstream ofs("/etc/asound.conf");
+        if (ofs.is_open()) {
+            ofs << "defaults.pcm.card " << card_id << "\n";
+            ofs << "defaults.ctl.card " << card_id << "\n";
+            ofs.close();
+        }
+        s_detected_control.clear();
+        s_cached_volume = -1;
+        get_volume_percent();
     }
 
-    int card_id = detect_primary_card_id();
-    std::string dev_str = "plughw:" + std::to_string(card_id) + ",0";
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        // Child: play chime to the analog card directly, fallback to default ALSA device
-        execl("/usr/bin/aplay", "aplay", "-q", "-D", dev_str.c_str(), chime_path.c_str(), nullptr);
-        execl("/usr/bin/aplay", "aplay", "-q", chime_path.c_str(), nullptr);
-        _exit(127);
-    }
+    return true;
 }
 
 } // namespace tinexus::hardware

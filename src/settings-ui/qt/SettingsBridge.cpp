@@ -13,6 +13,7 @@
 #include <sys/statvfs.h>
 #include <sys/reboot.h>
 #include <linux/reboot.h>
+#include <csignal>
 #include <unistd.h>
 #include <fcntl.h>
 #include <fstream>
@@ -59,6 +60,10 @@ SettingsBridge::SettingsBridge(QObject* parent)
     m_brightness = hardware::BacklightUtils::get_brightness_percent();
     m_volume = hardware::AudioUtils::get_volume_percent();
     m_muted = hardware::AudioUtils::is_muted();
+    refreshAudioDevices();
+
+    connect(&m_audioSyncTimer, &QTimer::timeout, this, &SettingsBridge::syncAudioState);
+    m_audioSyncTimer.start(300);
 }
 
 SettingsBridge::~SettingsBridge() = default;
@@ -90,6 +95,10 @@ QString SettingsBridge::connectingSsid() const {
 
 QString SettingsBridge::ipAddress() const {
     return QString::fromStdString(WifiManager::instance().get_ip_address());
+}
+
+QString SettingsBridge::activeInterface() const {
+    return QString::fromStdString(WifiManager::instance().get_active_interface());
 }
 
 QString SettingsBridge::statusMessage() const {
@@ -165,7 +174,7 @@ void SettingsBridge::setVolume(int percent) {
     percent = std::clamp(percent, 0, 100);
     if (m_volume != percent) {
         m_volume = percent;
-        hardware::AudioUtils::set_volume_percent(m_volume, /*persist=*/false, /*throttle=*/true);
+        hardware::AudioUtils::set_volume_percent(m_volume, /*persist=*/true, /*throttle=*/false);
         emit volumeChanged();
         if (m_muted != hardware::AudioUtils::is_muted()) {
             m_muted = hardware::AudioUtils::is_muted();
@@ -182,6 +191,43 @@ void SettingsBridge::setMuted(bool muted) {
         }
         emit mutedChanged();
         emit toastNotification(m_muted ? QStringLiteral("Audio output muted") : QStringLiteral("Audio output unmuted"), false);
+    }
+}
+
+void SettingsBridge::setOutputDevice(int index) {
+    if (index >= 0 && index < m_outputDevices.size()) {
+        hardware::AudioUtils::set_output_device_by_index(index);
+        m_currentOutputIndex = index;
+        emit outputDeviceChanged();
+        m_volume = hardware::AudioUtils::get_volume_percent();
+        m_muted = hardware::AudioUtils::is_muted();
+        emit volumeChanged();
+        emit mutedChanged();
+        emit toastNotification(QStringLiteral("Audio routed to: ") + m_outputDevices.at(index), false);
+    }
+}
+
+void SettingsBridge::refreshAudioDevices() {
+    auto devs = hardware::AudioUtils::get_output_devices();
+    m_outputDevices.clear();
+    for (const auto& d : devs) {
+        m_outputDevices.append(QString::fromStdString(d));
+    }
+    m_currentOutputIndex = hardware::AudioUtils::get_current_output_device_index();
+    emit outputDevicesChanged();
+    emit outputDeviceChanged();
+}
+
+void SettingsBridge::syncAudioState() {
+    int cur_vol = hardware::AudioUtils::get_volume_percent();
+    bool cur_muted = hardware::AudioUtils::is_muted();
+    if (m_volume != cur_vol) {
+        m_volume = cur_vol;
+        emit volumeChanged();
+    }
+    if (m_muted != cur_muted) {
+        m_muted = cur_muted;
+        emit mutedChanged();
     }
 }
 
@@ -214,25 +260,60 @@ void SettingsBridge::setSelectedWallpaperIndex(int index) {
         m_selectedWallpaperIndex = index;
         QString path = m_wallpapers[index].toMap().value(QStringLiteral("path")).toString();
 
-        // Write current wallpaper path to runtime locations for tinexus-wallpaper
+        // 1. Write to /tmp/current_wallpaper (accessible by all processes)
+        QFile tmpWall(QStringLiteral("/tmp/current_wallpaper"));
+        if (tmpWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            tmpWall.write((path + QStringLiteral("\n")).toUtf8());
+            tmpWall.flush();
+            tmpWall.close();
+        }
+
+        // 2. Write to /run/user/<uid>/tinexus/current_wallpaper
         QString runDir = QStringLiteral("/run/user/%1/tinexus").arg(getuid());
         QDir().mkpath(runDir);
         QFile curWall(runDir + QStringLiteral("/current_wallpaper"));
         if (curWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            curWall.write(path.toUtf8());
+            curWall.write((path + QStringLiteral("\n")).toUtf8());
+            curWall.flush();
             curWall.close();
         }
-        QFile tmpWall(QStringLiteral("/tmp/current_wallpaper"));
-        if (tmpWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            tmpWall.write(path.toUtf8());
-            tmpWall.close();
+
+        // 3. Also write to /run/user/0/tinexus/current_wallpaper if writable
+        QFile rootWall(QStringLiteral("/run/user/0/tinexus/current_wallpaper"));
+        if (rootWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            rootWall.write((path + QStringLiteral("\n")).toUtf8());
+            rootWall.flush();
+            rootWall.close();
         }
 
         saveConfig();
         emit selectedWallpaperIndexChanged();
 
-        // Signal wallpaper daemon to reload immediately
-        QProcess::startDetached(QStringLiteral("pkill"), {QStringLiteral("-USR1"), QStringLiteral("-f"), QStringLiteral("tinexus-wallpaper")});
+        // Signal wallpaper daemon to reload immediately via direct kernel kill(pid, SIGUSR1)
+        bool signaled = false;
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
+                if (!entry.is_directory()) continue;
+                std::string fname = entry.path().filename().string();
+                if (!std::all_of(fname.begin(), fname.end(), ::isdigit)) continue;
+
+                std::ifstream comm_file(entry.path() / "comm");
+                std::string comm;
+                if (std::getline(comm_file, comm)) {
+                    if (comm.rfind("tinexus-wallpap", 0) == 0) {
+                        pid_t pid = std::stoi(fname);
+                        if (::kill(pid, SIGUSR1) == 0) {
+                            signaled = true;
+                        }
+                    }
+                }
+            }
+        } catch (...) {}
+
+        // Fallback to pkill if proc scan didn't deliver signal
+        if (!signaled) {
+            QProcess::startDetached(QStringLiteral("pkill"), {QStringLiteral("-USR1"), QStringLiteral("-f"), QStringLiteral("tinexus-wallpaper")});
+        }
 
         emit toastNotification(QStringLiteral("Wallpaper applied: %1").arg(m_wallpapers[index].toMap().value(QStringLiteral("name")).toString()), false);
     }
@@ -262,6 +343,7 @@ void SettingsBridge::disconnectWifi() {
     WifiManager::instance().disconnect();
     emit connectedSsidChanged();
     emit ipAddressChanged();
+    emit activeInterfaceChanged();
     emit toastNotification(QStringLiteral("Disconnected from Wi-Fi"), false);
 }
 
@@ -406,6 +488,7 @@ void SettingsBridge::pollWifiStatus() {
     emit isConnectingChanged();
     emit connectedSsidChanged();
     emit ipAddressChanged();
+    emit activeInterfaceChanged();
     emit statusMessageChanged();
     emit connectedSignalBarsChanged();
 }
@@ -494,8 +577,10 @@ void SettingsBridge::scanWallpapers() {
             QString alt = QStringLiteral("/home/tinexus/Pictures/") + QString::fromLatin1(w.fileName);
             if (QFile::exists(alt)) {
                 path = alt;
-            } else {
+            } else if (QFile::exists(QDir::current().absoluteFilePath(QStringLiteral("assets/wallpaper/") + QString::fromLatin1(w.fileName)))) {
                 path = QDir::current().absoluteFilePath(QStringLiteral("assets/wallpaper/") + QString::fromLatin1(w.fileName));
+            } else {
+                path = QStringLiteral("/usr/share/backgrounds/") + QString::fromLatin1(w.fileName);
             }
         }
         map["path"] = path;

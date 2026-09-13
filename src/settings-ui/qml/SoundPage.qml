@@ -149,12 +149,14 @@ ScrollView {
                 // Row 3: Output Device Dropdown
                 MacSettingRow {
                     title: "Output Device"
-                    subtitle: "Active PipeWire / PulseAudio sink"
+                    subtitle: "Active PipeWire / ALSA audio sink"
                     showSeparator: false
 
                     MacComboBox {
-                        model: ["Built-in Speakers (ALC294)", "Headphones (3.5mm Jack)", "HDMI / DisplayPort Audio"]
-                        currentIndex: 0
+                        model: (bridge.outputDevices && bridge.outputDevices.length > 0) ? bridge.outputDevices : ["No Audio Output Devices Available"]
+                        currentIndex: bridge.currentOutputIndex
+                        enabled: (bridge.outputDevices && bridge.outputDevices.length > 0 && bridge.outputDevices[0] !== "No Audio Output Devices Available")
+                        onActivated: (index) => bridge.setOutputDevice(index)
                     }
                 }
             }

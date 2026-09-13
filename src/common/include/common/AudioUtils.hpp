@@ -58,9 +58,30 @@ public:
     static int step_volume(int delta_pct, bool persist = true);
 
     /**
-     * @brief Plays a clean, short non-blocking audio chime via aplay.
+     * @brief Resolves the chime sound path across system and local directory candidates.
+     */
+    static std::string resolve_chime_path(const std::string& preferred_path = "/usr/share/sounds/tinexus/volume-chime.wav");
+
+    /**
+     * @brief Plays a clean, short non-blocking audio chime via PipeWire/PulseAudio/ALSA.
      */
     static void play_chime(const std::string& chime_path = "/usr/share/sounds/tinexus/volume-chime.wav");
+
+    /**
+     * @brief Dynamically enumerates available audio output devices/sinks.
+     * Guaranteed hardware-agnostic: queries runtime PipeWire/PulseAudio sinks or ALSA sound cards.
+     */
+    static std::vector<std::string> get_output_devices(const std::string& base_proc_asound = "/proc/asound");
+
+    /**
+     * @brief Gets current active output device index.
+     */
+    static int get_current_output_device_index();
+
+    /**
+     * @brief Changes the active audio output device/routing.
+     */
+    static bool set_output_device_by_index(int index);
 };
 
 } // namespace tinexus::hardware

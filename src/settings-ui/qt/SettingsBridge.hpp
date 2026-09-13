@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QTimer>
 #include <memory>
 #include <vector>
 
@@ -25,6 +26,8 @@ class SettingsBridge : public QObject {
     // ── Sound ─────────────────────────────────────────────────────────────
     Q_PROPERTY(int volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
+    Q_PROPERTY(QStringList outputDevices READ outputDevices NOTIFY outputDevicesChanged)
+    Q_PROPERTY(int currentOutputIndex READ currentOutputIndex WRITE setOutputDevice NOTIFY outputDeviceChanged)
 
     // ── Personalization ───────────────────────────────────────────────────
     Q_PROPERTY(int accentIndex READ accentIndex WRITE setAccentIndex NOTIFY accentIndexChanged)
@@ -43,6 +46,7 @@ class SettingsBridge : public QObject {
     Q_PROPERTY(QString connectedSsid READ connectedSsid NOTIFY connectedSsidChanged)
     Q_PROPERTY(QString connectingSsid READ connectingSsid NOTIFY connectingSsidChanged)
     Q_PROPERTY(QString ipAddress READ ipAddress NOTIFY ipAddressChanged)
+    Q_PROPERTY(QString activeInterface READ activeInterface NOTIFY activeInterfaceChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(int connectedSignalBars READ connectedSignalBars NOTIFY connectedSignalBarsChanged)
     Q_PROPERTY(QVariantList networkInterfaces READ networkInterfaces NOTIFY networkInterfacesChanged)
@@ -82,6 +86,8 @@ public:
 
     int volume() const { return m_volume; }
     bool muted() const { return m_muted; }
+    QStringList outputDevices() const { return m_outputDevices; }
+    int currentOutputIndex() const { return m_currentOutputIndex; }
 
     int accentIndex() const { return m_accentIndex; }
     QString accentColor() const;
@@ -95,6 +101,7 @@ public:
     QString connectedSsid() const;
     QString connectingSsid() const;
     QString ipAddress() const;
+    QString activeInterface() const;
     QString statusMessage() const;
     int connectedSignalBars() const;
     QVariantList networkInterfaces() const { return m_networkInterfaces; }
@@ -127,6 +134,9 @@ public slots:
     void setVolume(int percent);
     void setMuted(bool muted);
     void playTestSound();
+    Q_INVOKABLE void setOutputDevice(int index);
+    Q_INVOKABLE void refreshAudioDevices();
+    void syncAudioState();
 
     void setAccentIndex(int index);
     void setThemeMode(const QString& mode);
@@ -175,6 +185,8 @@ signals:
 
     void volumeChanged();
     void mutedChanged();
+    void outputDevicesChanged();
+    void outputDeviceChanged();
 
     void accentIndexChanged();
     void accentColorChanged();
@@ -188,6 +200,7 @@ signals:
     void connectedSsidChanged();
     void connectingSsidChanged();
     void ipAddressChanged();
+    void activeInterfaceChanged();
     void statusMessageChanged();
     void connectedSignalBarsChanged();
     void networkInterfacesChanged();
@@ -218,6 +231,9 @@ private:
 
     int m_volume{75};
     bool m_muted{false};
+    QStringList m_outputDevices;
+    int m_currentOutputIndex{0};
+    QTimer m_audioSyncTimer;
 
     int m_accentIndex{0};
     QString m_themeMode{"Dark"};
