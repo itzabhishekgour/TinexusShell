@@ -8,7 +8,7 @@
 
 namespace tinexus::installer {
 
-enum class InstallState {
+enum class BackendInstallState {
     Idle,
     ScanDisks,
     SelectDisk,
@@ -28,10 +28,10 @@ public:
     ~InstallController() = default;
 
     bool run_installation(const DiskInfo& disk, bool dry_run = false);
-    [[nodiscard]] InstallState state() const noexcept { return m_state; }
+    [[nodiscard]] BackendInstallState state() const noexcept { return m_state; }
 
 private:
-    InstallState m_state{InstallState::Idle};
+    BackendInstallState m_state{BackendInstallState::Idle};
     DiskInspector m_inspector;
     PartitionEngine m_partitioner;
 };

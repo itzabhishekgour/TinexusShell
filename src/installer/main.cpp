@@ -1,11 +1,31 @@
 #include "installer/InstallerWindow.hpp"
+#include "installer/install_controller.hpp"
+#include "installer/disk_inspector.hpp"
 #include <txui/wayland/WaylandEventLoop.hpp>
 #include "tinexus/client.hpp"
 #include "common/logger.hpp"
 
 int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("tinexus-installer");
-    tinexus::log::info("Starting Tinexus Graphical OS Installer (tinexus-installer)...");
+    tinexus::log::info("Starting Tinexus OS Installer (tinexus-installer)...");
+
+    // Headless / Automated CLI installation mode:
+    if (argc >= 3 && std::string(argv[1]) == "--target") {
+        std::string target_dev = argv[2];
+        bool dry_run = (argc >= 4 && std::string(argv[3]) == "--dry-run");
+        tinexus::log::info("Running automated headless install targeting '{}' (dry_run: {})...", target_dev, dry_run);
+
+        tinexus::installer::InstallController controller;
+        tinexus::installer::DiskInfo disk;
+        disk.device_path = target_dev;
+        disk.model = "Target Installation Drive";
+        disk.size_bytes = 15ULL * 1024 * 1024 * 1024;
+        disk.is_live_media = false;
+
+        bool ok = controller.run_installation(disk, dry_run);
+        tinexus::log::info("Headless installation finished with result: {}", ok ? "SUCCESS" : "FAILURE");
+        return ok ? 0 : 1;
+    }
 
     tinexus::Client sdk_client;
     if (sdk_client.connect().is_ok()) {
