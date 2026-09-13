@@ -149,1053 +149,456 @@ verify_env() {
     success "Toolchain & Environment OK."
 }
 
-# ── RootFS Generation ─────────────────────────────────────────────────────────
+# ── RootFS Generation via Debootstrap & APT ───────────────────────────────────
 build_rootfs() {
-    info "Building Tinexus root filesystem..."
-    rm -rf "$ROOTFS_DIR" "$ISO_TREE" "$WORK_DIR"
-    mkdir -p "$ROOTFS_DIR"/{bin,sbin,lib,lib64,usr/{bin,sbin,lib},etc,var/{log,run},run,dev,proc,sys,tmp,mnt,newroot,live,root,home}
-    chmod 1777 "$ROOTFS_DIR/tmp"
+    info "Building Tinexus root filesystem using pure Ubuntu resolute minbase..."
 
-    cat > "$ROOTFS_DIR/etc/os-release" << 'EOF'
+    # Ensure any previous virtual mounts are unmounted before wiping
+    umount -lf "$ROOTFS_DIR/dev/pts" 2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/dev" 2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/sys" 2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/proc" 2>/dev/null || true
+
+    rm -rf "$ROOTFS_DIR" "$ISO_TREE" "$WORK_DIR"
+    mkdir -p "$ROOTFS_DIR"
+
+    local suite="resolute"
+    local mirror="http://archive.ubuntu.com/ubuntu/"
+    local minbase_cache="$PROJECT_DIR/build/minbase-resolute.tar.gz"
+
+    if [ -f "$minbase_cache" ]; then
+        info "Unpacking cached Ubuntu resolute minbase from $minbase_cache..."
+        tar -xzf "$minbase_cache" -C "$ROOTFS_DIR"
+    else
+        info "Running debootstrap --variant=minbase $suite..."
+        debootstrap --variant=minbase "$suite" "$ROOTFS_DIR" "$mirror"
+        info "Caching pristine minbase to $minbase_cache..."
+        mkdir -p "$PROJECT_DIR/build"
+        tar -czf "$minbase_cache" -C "$ROOTFS_DIR" .
+    fi
+
+    info "Configuring APT sources, DNS, and keyrings..."
+    if [ -f /usr/share/keyrings/ubuntu-archive-keyring.gpg ]; then
+        mkdir -p "$ROOTFS_DIR/usr/share/keyrings"
+        cp -L /usr/share/keyrings/ubuntu-archive-keyring.gpg "$ROOTFS_DIR/usr/share/keyrings/"
+    fi
+
+    # Configure DNS in rootfs for apt inside chroot
+    cp -L /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
+
+    # Configure APT sources for Ubuntu resolute
+    mkdir -p "$ROOTFS_DIR/etc/apt/sources.list.d"
+    cat > "$ROOTFS_DIR/etc/apt/sources.list.d/ubuntu.sources" << 'EOF_APT'
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu/
+Suites: resolute resolute-updates resolute-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF_APT
+
+    # Blank out legacy sources.list
+    > "$ROOTFS_DIR/etc/apt/sources.list"
+
+    # ── Mozilla Firefox APT Repository (native deb, no snap) ────────────────
+    # Per Mozilla's official Ubuntu installation guide: packages.mozilla.org
+    # Add GPG keyring (fetched from host if available, otherwise wget inside chroot)
+    info "Configuring Mozilla Firefox official APT repository..."
+    mkdir -p "$ROOTFS_DIR/usr/share/keyrings"
+    local MOZILLA_KEY="$ROOTFS_DIR/usr/share/keyrings/mozilla.gpg"
+    if [ ! -f "$MOZILLA_KEY" ]; then
+        # Fetch key on host and copy into rootfs
+        wget -qO "$MOZILLA_KEY" "https://packages.mozilla.org/apt/repo-signing-key.gpg" || \
+        curl -fsSL "https://packages.mozilla.org/apt/repo-signing-key.gpg" -o "$MOZILLA_KEY" || \
+        warn "Could not fetch Mozilla GPG key — Firefox may not install from packages.mozilla.org"
+    fi
+    if [ -f "$MOZILLA_KEY" ]; then
+        cat > "$ROOTFS_DIR/etc/apt/sources.list.d/mozilla.sources" << 'EOF_MOZ'
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+Signed-By: /usr/share/keyrings/mozilla.gpg
+EOF_MOZ
+        # Pin Firefox from Mozilla repo above Ubuntu universe to avoid snap redirect
+        mkdir -p "$ROOTFS_DIR/etc/apt/preferences.d"
+        cat > "$ROOTFS_DIR/etc/apt/preferences.d/mozilla-firefox" << 'EOF_PIN'
+Package: *
+Pin: origin packages.mozilla.org
+Pin-Priority: 1001
+EOF_PIN
+        info "Mozilla Firefox APT repository configured."
+    fi
+
+    # Prevent daemons from auto-starting during apt install
+    cat > "$ROOTFS_DIR/usr/sbin/policy-rc.d" << 'EOF_POLICY'
+#!/bin/sh
+exit 101
+EOF_POLICY
+    chmod +x "$ROOTFS_DIR/usr/sbin/policy-rc.d"
+
+    # Bind mount virtual filesystems for chroot
+    info "Mounting proc, sys, dev into rootfs chroot..."
+    mount --bind /proc "$ROOTFS_DIR/proc"
+    mount --bind /sys "$ROOTFS_DIR/sys"
+    mount --bind /dev "$ROOTFS_DIR/dev"
+    mount --bind /dev/pts "$ROOTFS_DIR/dev/pts"
+
+    # APT package list to install inside chroot
+    info "Running apt-get update and installing runtime packages inside chroot..."
+    chroot "$ROOTFS_DIR" env -i \
+        DEBIAN_FRONTEND=noninteractive \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        apt-get update
+
+    chroot "$ROOTFS_DIR" env -i \
+        DEBIAN_FRONTEND=noninteractive \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        apt-get install -y --no-install-recommends \
+            udev kmod dbus dbus-daemon \
+            iproute2 net-tools iputils-ping \
+            wpasupplicant iw rfkill curl ca-certificates \
+            fuse3 libfuse3-4 busybox sudo locales \
+            alsa-utils libasound2t64 brightnessctl \
+            mesa-va-drivers mesa-vulkan-drivers libgl1-mesa-dri \
+            libegl-mesa0 libgbm1 \
+            libwayland-client0 libwayland-server0 libwayland-cursor0 libwayland-egl1 \
+            libxkbcommon0 libpixman-1-0 libinput10 libseat1 \
+            libwlroots-0.19 libliftoff0 liblayershellqtinterface6 layer-shell-qt \
+            libxcb-errors0 libxcb-ewmh2 libxcb-icccm4 \
+            qt6-wayland libqt6core6t64 libqt6gui6 libqt6qml6 libqt6quick6 \
+            libqt6quicktemplates2-6 libqt6quickcontrols2-6 \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtquick-dialogs \
+            qml6-module-qtquick-effects \
+            foot fonts-dejavu-core fonts-liberation fontconfig \
+            libpam-runtime libpam-modules \
+            isc-dhcp-client procps libcap2-bin \
+            parted e2fsprogs dosfstools squashfs-tools grub-efi-amd64-bin \
+            firefox
+
+    # ── Firefox: Stage Wayland profile & macOS traffic-light userChrome ────
+    # Firefox profile lands in /etc/skel/.mozilla so every user inherits it
+    info "Staging Firefox Wayland profile and Tinexus-themed userChrome.css..."
+    local FF_PROFILE="$ROOTFS_DIR/etc/skel/.mozilla/firefox/tinexus.default"
+    mkdir -p "$FF_PROFILE/chrome"
+
+    # user.js — enable userChrome.css and configure Wayland environment
+    cat > "$FF_PROFILE/user.js" << 'EOF_USERJS'
+// Tinexus Firefox Profile — auto-applied on first launch
+// Enable custom UI CSS
+user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
+// Prefer Wayland (EGL) rendering
+user_pref("gfx.webrender.enabled", true);
+user_pref("media.ffmpeg.vaapi.enabled", true);
+// Compact mode
+user_pref("browser.uidensity", 1);
+user_pref("browser.in-content.dark-mode", true);
+user_pref("browser.tabs.inTitlebar", 1);
+user_pref("browser.tabs.drawInTitlebar", true);
+// Disable telemetry
+user_pref("datareporting.healthreport.uploadEnabled", false);
+user_pref("datareporting.policy.dataSubmissionEnabled", false);
+EOF_USERJS
+
+    # userChrome.css — hide internal CSD buttons so Tinexus SSD is the single outer frame
+    cat > "$FF_PROFILE/chrome/userChrome.css" << 'EOF_CHROME'
+/* Tinexus Firefox userChrome.css — single frame configuration */
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* When running under Tinexus Compositor SSD (Server-Side Decorations),
+   hide Firefox's internal CSD window control buttons so exactly ONE outer frame remains. */
+.titlebar-buttonbox-container,
+.titlebar-buttonbox,
+.titlebar-button {
+    display: none !important;
+}
+
+#TabsToolbar {
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+}
+#TabsToolbar .tabbrowser-tab { min-height: 28px !important; }
+#navigator-toolbox { padding-top: 0 !important; }
+EOF_CHROME
+
+    # profiles.ini — tell Firefox to use this profile by default
+    cat > "$ROOTFS_DIR/etc/skel/.mozilla/firefox/profiles.ini" << 'EOF_PROFILES'
+[Profile0]
+Name=tinexus
+IsRelative=1
+Path=tinexus.default
+Default=1
+
+[General]
+StartWithLastProfile=1
+Version=2
+EOF_PROFILES
+
+    # installs.ini — point default install to this profile
+    cat > "$ROOTFS_DIR/etc/skel/.mozilla/firefox/installs.ini" << 'EOF_INSTALLS'
+[Install]
+Default=tinexus.default
+Locked=1
+EOF_INSTALLS
+
+    # Firefox .desktop entry with Wayland native flags
+    mkdir -p "$ROOTFS_DIR/usr/share/applications"
+    cat > "$ROOTFS_DIR/usr/share/applications/firefox.desktop" << 'EOF_FFDESKTOP'
+[Desktop Entry]
+Name=Firefox
+GenericName=Web Browser
+Comment=Browse the World Wide Web
+Exec=env MOZ_ENABLE_WAYLAND=1 firefox %u
+Icon=firefox
+Terminal=false
+Type=Application
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Categories=Network;WebBrowser;Internet;
+StartupNotify=true
+EOF_FFDESKTOP
+    chmod 0644 "$ROOTFS_DIR/usr/share/applications/firefox.desktop"
+    success "Firefox Wayland profile and Tinexus userChrome.css staged into /etc/skel."
+
+    # Pre-cache VLC and common test packages in apt cache
+    info "Pre-caching all VLC deb packages inside rootfs apt archive cache..."
+    chroot "$ROOTFS_DIR" env -i \
+        DEBIAN_FRONTEND=noninteractive \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        apt-get install -d -y --no-install-recommends vlc || true
+
+    # Build and package Tinexus .deb packages
+    info "Generating Tinexus modular Debian packages..."
+    bash "$PROJECT_DIR/tools/package_tinexus_debs.sh" "$PROJECT_DIR/build/debs"
+
+    # Stage debs into chroot /tmp/debs and install via dpkg
+    info "Installing Tinexus packages inside chroot..."
+    mkdir -p "$ROOTFS_DIR/tmp/debs"
+    cp "$PROJECT_DIR/build/debs"/*.deb "$ROOTFS_DIR/tmp/debs/"
+    chroot "$ROOTFS_DIR" env -i \
+        DEBIAN_FRONTEND=noninteractive \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        dpkg -i --force-overwrite /tmp/debs/tinexus-core_1.0.0_amd64.deb \
+                /tmp/debs/tinexus-compositor_1.0.0_amd64.deb \
+                /tmp/debs/tinexus-desktop_1.0.0_amd64.deb \
+                /tmp/debs/tinexus-apps_1.0.0_amd64.deb
+    rm -rf "$ROOTFS_DIR/tmp/debs"
+
+    # Run ldconfig to update shared library cache inside rootfs
+    info "Running ldconfig inside rootfs chroot..."
+    chroot "$ROOTFS_DIR" env -i \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        ldconfig
+
+    # ── Grant file capabilities to network binaries (setcap model) ─────────────
+    # This allows tinexus user (UID 1000) to invoke dhclient/wpa_supplicant/ip
+    # directly without sudo. cap_net_admin grants SIOCSIFADDR/ip-route access;
+    # cap_net_raw grants AF_PACKET socket for DHCP DISCOVER; cap_net_bind_service
+    # allows binding to port 68. This is the standard Linux approach used by
+    # NetworkManager itself — no NOPASSWD:ALL sudo policy needed at runtime.
+    info "Applying file capabilities to network binaries via setcap..."
+    # dhclient — isc-dhcp-client
+    for dhclient_bin in \
+        "$ROOTFS_DIR/usr/sbin/dhclient" \
+        "$ROOTFS_DIR/sbin/dhclient"; do
+        if [ -f "$dhclient_bin" ]; then
+            setcap cap_net_admin,cap_net_raw,cap_net_bind_service+ep "$dhclient_bin"
+            info "setcap applied to $dhclient_bin"
+        fi
+    done
+    # wpa_supplicant
+    for wpa_bin in \
+        "$ROOTFS_DIR/usr/sbin/wpa_supplicant" \
+        "$ROOTFS_DIR/sbin/wpa_supplicant"; do
+        if [ -f "$wpa_bin" ]; then
+            setcap cap_net_admin,cap_net_raw+ep "$wpa_bin"
+            info "setcap applied to $wpa_bin"
+        fi
+    done
+    # ip (iproute2)
+    for ip_bin in \
+        "$ROOTFS_DIR/usr/sbin/ip" \
+        "$ROOTFS_DIR/usr/bin/ip" \
+        "$ROOTFS_DIR/sbin/ip" \
+        "$ROOTFS_DIR/bin/ip"; do
+        if [ -f "$ip_bin" ]; then
+            setcap cap_net_admin+ep "$ip_bin"
+            info "setcap applied to $ip_bin"
+        fi
+    done
+    # /var/lib/dhcp must be writable by tinexus user for dhclient lease file fallback
+    mkdir -p "$ROOTFS_DIR/var/lib/dhcp"
+    chmod 1777 "$ROOTFS_DIR/var/lib/dhcp"
+    info "setcap network capability configuration complete."
+    success "Network binaries are capability-hardened (no sudo needed for tinexus user)."
+
+    # Strict check: Confirm libtinexus_common.so.0 is present in rootfs
+    info "Verifying libtinexus_common.so.0 presence in rootfs..."
+    if [ ! -e "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/libtinexus_common.so.0" ] && [ ! -e "$ROOTFS_DIR/usr/lib/libtinexus_common.so.0" ]; then
+        fatal "CRITICAL ERROR: libtinexus_common.so.0 is missing from rootfs /usr/lib!"
+    fi
+    success "Verified libtinexus_common.so.0 is present in rootfs."
+
+    # Strict check: Confirm ldconfig cache inside rootfs resolves libtinexus_common.so.0
+    info "Verifying ld.so.cache registration in rootfs chroot..."
+    chroot "$ROOTFS_DIR" env -i \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        ldconfig -p | grep -q "libtinexus_common.so.0" || fatal "CRITICAL ERROR: libtinexus_common.so.0 missing from ldconfig cache!"
+    success "Verified libtinexus_common.so.0 is registered in ld.so.cache."
+
+    # Strict check: Verify Qt6 Wayland layer-shell plugin is installed
+    info "Verifying Qt6 Wayland layer-shell integration plugin in rootfs..."
+    if [ ! -f "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so" ]; then
+        fatal "CRITICAL ERROR: liblayer-shell.so is missing from rootfs Qt6 wayland-shell-integration plugins!"
+    fi
+    success "Verified liblayer-shell.so plugin is present in rootfs."
+
+    # Strict check: Test ldd on all primary Tinexus binaries inside rootfs chroot
+    info "Verifying shared library resolution for all Tinexus binaries inside rootfs chroot..."
+    for chk_bin in tinexus-serviced tinexus-ipcd tinexus-session tinexus-comp tinexus-launcher tinexus-settings tinexus-shell tinexus-dock tinexus-wallpaper tinexus-lock tinexus-notifications; do
+        if [ -x "$ROOTFS_DIR/usr/bin/$chk_bin" ]; then
+            local unresolved
+            unresolved=$(chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ldd "/usr/bin/$chk_bin" 2>&1 | grep "not found" || true)
+            if [ -n "$unresolved" ]; then
+                fatal "CRITICAL ERROR: $chk_bin has unresolved shared libraries:\n$unresolved"
+            fi
+            info "Verified $chk_bin shared libraries resolve cleanly."
+        fi
+    done
+    success "Verified all primary Tinexus binaries resolve shared libraries cleanly inside rootfs chroot!"
+
+    # ── Systematic Automated Rootfs Verification Pass ────────────────────────
+    info "Running automated assertion: Verifying EVERY file promised by ANY .deb package exists in rootfs..."
+    local missing_files=0
+    for deb in "$PROJECT_DIR/build/debs"/*.deb; do
+        [ -f "$deb" ] || continue
+        local pkg_name
+        pkg_name="$(dpkg-deb -f "$deb" Package 2>/dev/null || basename "$deb")"
+        info "Auditing packaged payload of '$pkg_name' ($(basename "$deb"))..."
+        
+        while IFS= read -r line; do
+            [[ "$line" =~ ^d ]] && continue
+            local raw_target
+            raw_target="$(echo "$line" | awk '{print $NF}')"
+            if [[ "$line" =~ \ -\>\  ]]; then
+                raw_target="$(echo "$line" | sed -n 's/.* \(\.\/[^ ]*\) -> .*/\1/p')"
+            fi
+            local clean_target="${raw_target#./}"
+            [ -n "$clean_target" ] || continue
+            
+            if [ ! -e "$ROOTFS_DIR/$clean_target" ] && [ ! -L "$ROOTFS_DIR/$clean_target" ]; then
+                echo -e "\e[1;31m[MISSING FILE ERROR]\e[0m Package '$pkg_name' promises '/$clean_target', but it is MISSING from rootfs!" >&2
+                missing_files=$((missing_files + 1))
+            fi
+        done < <(dpkg-deb -c "$deb")
+    done
+
+    if [ "$missing_files" -gt 0 ]; then
+        fatal "Automated rootfs assertion FAILED: $missing_files packaged files are missing from rootfs!"
+    fi
+    success "Automated rootfs assertion PASSED: 100% of files across all .deb packages are confirmed present in rootfs."
+
+    # Ensure appimage runner script exists
+    if [ -f "$PROJECT_DIR/tools/tinexus-appimage-runner.sh" ]; then
+        cp -L "$PROJECT_DIR/tools/tinexus-appimage-runner.sh" "$ROOTFS_DIR/usr/bin/tx-appimage"
+        chmod 0755 "$ROOTFS_DIR/usr/bin/tx-appimage"
+    fi
+
+    # Set up user 'tinexus' (UID 1000)
+    info "Configuring default live user and permissions..."
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        /bin/bash -c "id -u tinexus >/dev/null 2>&1 || useradd -m -s /bin/bash -u 1000 tinexus; usermod -aG sudo,audio,video,input,render tinexus 2>/dev/null || true; echo 'tinexus:tinexus' | chpasswd; echo 'root:root' | chpasswd"
+
+    # Passwordless sudo for tinexus live session
+    mkdir -p "$ROOTFS_DIR/etc/sudoers.d"
+    echo "tinexus ALL=(ALL) NOPASSWD:ALL" > "$ROOTFS_DIR/etc/sudoers.d/tinexus-live"
+    chmod 0440 "$ROOTFS_DIR/etc/sudoers.d/tinexus-live"
+
+    # System identification & Hostname
+    cat > "$ROOTFS_DIR/etc/os-release" << 'EOF_OS'
 NAME="Tinexus OS"
 VERSION="1.0"
 ID=tinexus
+ID_LIKE=ubuntu
 PRETTY_NAME="Tinexus OS 1.0 (Live)"
 HOME_URL="https://github.com/itzabhishekgour/TinexusShell"
-EOF
-    echo "Tinexus-Desktop" > "$ROOTFS_DIR/etc/hostname"
-    echo "tmpfs   /tmp    tmpfs   defaults,nosuid,nodev   0 0" > "$ROOTFS_DIR/etc/fstab"
+EOF_OS
 
-    # Create minimal users and groups for Tinexus
-    cat > "$ROOTFS_DIR/etc/passwd" << 'EOF'
-root:x:0:0:root:/root:/bin/sh
-messagebus:x:104:104::/var/run/dbus:/bin/false
-tinexus:x:1000:1000:Tinexus User:/home/tinexus:/bin/sh
-EOF
-    cat > "$ROOTFS_DIR/etc/group" << 'EOF'
-root:x:0:
-messagebus:x:104:
-tinexus:x:1000:
-tty:x:5:
-audio:x:29:tinexus
-video:x:44:tinexus
-input:x:104:tinexus
-render:x:110:tinexus
-EOF
-    cat > "$ROOTFS_DIR/etc/shadow" << 'EOF'
-root::10933:0:99999:7:::
-tinexus::10933:0:99999:7:::
-EOF
-    mkdir -p "$ROOTFS_DIR/home/tinexus"
-    # chown won't work correctly without fakeroot/sudo unless we're root, but we can try or let init do it.
-    # We will let init handle the runtime ownership if needed, or just set it to 1000:1000
-    chown 1000:1000 "$ROOTFS_DIR/home/tinexus" || true
+    echo "tinexus-desktop" > "$ROOTFS_DIR/etc/hostname"
+    cat > "$ROOTFS_DIR/etc/hosts" << 'EOF_HOSTS'
+127.0.0.1 localhost
+127.0.1.1 tinexus-desktop
+EOF_HOSTS
 
-    # Create nsswitch.conf and pull in glibc NSS libraries so getpwuid() can actually read /etc/passwd
-    cat > "$ROOTFS_DIR/etc/nsswitch.conf" << 'EOF'
-passwd:         files
-group:          files
-shadow:         files
-hosts:          files dns
-networks:       files
-protocols:      files
-services:       files
-ethers:         files
-rpc:            files
-EOF
-    mkdir -p "$ROOTFS_DIR/lib/x86_64-linux-gnu/"
-    cp -P /lib/x86_64-linux-gnu/libnss_files.so* "$ROOTFS_DIR/lib/x86_64-linux-gnu/" 2>/dev/null || true
-    cp -P /lib/x86_64-linux-gnu/libnss_compat.so* "$ROOTFS_DIR/lib/x86_64-linux-gnu/" 2>/dev/null || true
+    # Locale generation
+    info "Generating locales..."
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        /bin/bash -c "locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8" || true
 
-    local staged=0
-    while IFS= read -r -d '' candidate; do
-        if [[ "$candidate" == *"/debug/"* ]] || [[ "$candidate" == *"/txui_verify/"* ]]; then continue; fi
-        if file "$candidate" | grep -q "ELF.*executable\|ELF.*shared object"; then
-            if [[ "$candidate" == *"tinexus-"* ]] || [[ "$candidate" == *"libtinexus"* ]]; then
-                local dest_dir="$ROOTFS_DIR/usr/bin"
-                [[ "$candidate" == *".so"* ]] && dest_dir="$ROOTFS_DIR/usr/lib"
-                mkdir -p "$dest_dir"
-                cp -L "$candidate" "$dest_dir/"
-                staged=$((staged + 1))
-                
-                ldd "$candidate" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                    [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-                done
-                ldd "$candidate" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                    [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-                done
-            fi
-        fi
-    done < <(find "$BUILD_DIR/bin/" -maxdepth 1 \( -type f -o -type l \) \( -name 'tinexus-*' -o -name 'libtinexus*.so*' \) -print0 2>/dev/null)
-    
-    # Force copy all shared libraries and their version symlinks to /usr/lib to fix broken RUNPATHs
-    find "$BUILD_DIR/lib/" -maxdepth 1 \( -type f -o -type l \) -name "libtinexus*.so*" -exec cp -a {} "$ROOTFS_DIR/usr/lib/" \; 2>/dev/null || true
-    
-    success "Staged $staged Tinexus ELF binaries and dependencies."
-
-    # Generate .desktop file for Tinexus App Store so it appears in the Launcher
-    mkdir -p "$ROOTFS_DIR/usr/share/applications"
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-store.desktop" << 'EOF'
-[Desktop Entry]
-Name=App Store
-Comment=Discover and install Linux & Flathub applications
-Exec=/usr/bin/tinexus-store
-Icon=system-software-install
-Terminal=false
-Type=Application
-Categories=System;Utility;PackageManager;
-EOF
-    ln -sf tinexus-store.desktop "$ROOTFS_DIR/usr/share/applications/tinexus-app-installer.desktop" 2>/dev/null || true
-
-    # Generate .desktop file for Tinexus Files (Miller Column Browser)
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-files.desktop" << 'EOF'
-[Desktop Entry]
-Name=Files
-Comment=Tinexus File Manager (Phase 2)
-Exec=/usr/bin/tinexus-files
-Icon=system-file-manager
-Terminal=false
-Type=Application
-Categories=System;Utility;Core;
-EOF
-
-    # Generate .desktop file for About Tinexus
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-about.desktop" << 'EOF'
-[Desktop Entry]
-Name=About Tinexus
-Comment=System Profiler and Hardware Specifications
-Exec=/usr/bin/tinexus-about
-Icon=tinexus-logo
-Terminal=false
-Type=Application
-Categories=System;Core;
-EOF
-
-    # Generate .desktop file for Activity Monitor
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-monitor.desktop" << 'EOF'
-[Desktop Entry]
-Name=Activity Monitor
-Comment=Platform Resource and Process Monitor
-Exec=/usr/bin/tinexus-monitor
-Icon=utilities-system-monitor
-Terminal=false
-Type=Application
-Categories=System;Monitor;Core;
-EOF
-
-    # Generate .desktop file for Settings
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-settings.desktop" << 'EOF'
-[Desktop Entry]
-Name=Settings
-Comment=Tinexus System Settings
-Exec=/usr/bin/tinexus-settings-ui
-Icon=preferences-system
-Terminal=false
-Type=Application
-Categories=System;Settings;
-EOF
-
-    # Generate .desktop file for Foot Terminal
-    cat > "$ROOTFS_DIR/usr/share/applications/foot.desktop" << 'EOF'
-[Desktop Entry]
-Name=Foot Terminal
-Comment=Wayland Lightweight Terminal Emulator
-Exec=/usr/bin/foot
-Icon=utilities-terminal
-Terminal=false
-Type=Application
-Categories=System;TerminalEmulator;Core;
-EOF
-
-    # Generate .desktop file for Tinexus Terminal
-    cat > "$ROOTFS_DIR/usr/share/applications/tinexus-terminal.desktop" << 'EOF'
-[Desktop Entry]
-Name=Tinexus Terminal
-Comment=Default Wayland GPU Terminal
-Exec=/usr/bin/tinexus-terminal
-Icon=utilities-terminal
-Terminal=false
-Type=Application
-Categories=System;TerminalEmulator;Core;
-EOF
-
-    # Create init symlinks pointing to tinexus-serviced (Supervisor PID 1)
-    mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin" "$ROOTFS_DIR/etc"
-    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
-    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
-
-    # Set up /etc/profile for a nice shell prompt and Qt Wayland environment
-    cat > "$ROOTFS_DIR/etc/profile" << 'EOF'
+    # Shell profile
+    cat > "$ROOTFS_DIR/etc/profile" << 'EOF_PROFILE'
 export PS1='\e[01;32m\u@\h\e[00m:\e[01;34m\w\e[00m\$ '
-export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export QT_QPA_PLATFORM=wayland
 export QT_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/qt6/plugins
 export QML2_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml
 export QML_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml
 export TINEXUS_SETTINGS_QML=/usr/share/tinexus-settings/qml/MainWindow.qml
-EOF
+EOF_PROFILE
 
-    # Ensure busybox/sh is available in the rootfs for standard library system() calls
-    local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
-    if [ -f "$bb_bin" ]; then
-        cp -L "$bb_bin" "$ROOTFS_DIR/bin/busybox"
-        for cmd in sh cat ls mkdir mount umount mdev sleep; do 
-            ln -sf busybox "$ROOTFS_DIR/bin/$cmd" || true
-        done
-        (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-        done
-        (ldd "$bb_bin" 2>/dev/null || true) | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-        done
-    fi
+    # Ensure Supervisor PID 1 symlinks
+    mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin"
+    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
+    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
 
-    # Stage kmod and its dependencies so the kernel and userspace can load kernel modules dynamically
-    info "Staging kmod for kernel module loading..."
-    if [ -f "/usr/bin/kmod" ]; then
-        cp -L "/usr/bin/kmod" "$ROOTFS_DIR/usr/bin/"
-        mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin" "$ROOTFS_DIR/usr/sbin" "$ROOTFS_DIR/usr/bin"
-        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/sbin/modprobe"
-        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/bin/modprobe"
-        ln -sf kmod "$ROOTFS_DIR/usr/sbin/modprobe"
-        ln -sf kmod "$ROOTFS_DIR/usr/bin/modprobe"
-        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/sbin/depmod"
-        ln -sf ../usr/bin/kmod "$ROOTFS_DIR/bin/depmod"
-        ln -sf kmod "$ROOTFS_DIR/usr/sbin/depmod"
-        ln -sf kmod "$ROOTFS_DIR/usr/bin/depmod"
-        ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-        done
-        ldd "/usr/bin/kmod" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-        done
-    fi
-
-    # Stage modprobe priority configuration for audio drivers (SOF vs legacy snd_hda_intel)
-    info "Staging audio driver priority configuration (/etc/modprobe.d/sof-priority.conf)..."
+    # Audio priority config (auto-detect dsp_driver=0 for universal hardware compatibility)
     mkdir -p "$ROOTFS_DIR/etc/modprobe.d"
-    cat << 'EOF' > "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf"
-# Force Sound Open Firmware (SOF) on DSP-capable Intel hardware platforms
-# dsp_driver: Force the DSP driver for Intel DSP (0=auto, 1=legacy, 2=SST, 3=SOF, 4=AVS)
-options snd-intel-dspcfg dsp_driver=3
-
-# Ensure SOF drivers are loaded and preferred before snd_hda_intel on Intel DSP platforms
+    cat << 'EOF_SOF' > "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf"
+options snd-intel-dspcfg dsp_driver=0
 softdep snd_hda_intel pre: snd_sof_pci_intel_cnl snd_sof_pci_intel_icl snd_sof_pci_intel_tgl snd_sof_pci_intel_mtl snd_sof_intel_hda_generic
-
-# Ensure generic ASoC HDA bridge and DSP machine driver are available with SOF
 softdep snd_sof_intel_hda_generic pre: snd_soc_hdac_hda snd_soc_skl_hda_dsp
-EOF
+EOF_SOF
 
-    # Stage Mesa DRI drivers, Gallium, and EGL ICD for Intel UHD 630 / Iris / AMD hardware rendering
-    info "Staging Mesa DRI drivers, Gallium runtime, and EGL ICD..."
-    mkdir -p "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri" "$ROOTFS_DIR/usr/share/glvnd/egl_vendor.d"
-    ln -sf x86_64-linux-gnu/dri "$ROOTFS_DIR/usr/lib/dri" 2>/dev/null || true
-    if [ -f "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]; then
-        cp -L "/usr/share/glvnd/egl_vendor.d/50_mesa.json" "$ROOTFS_DIR/usr/share/glvnd/egl_vendor.d/"
-    fi
-    if [ -d "/usr/lib/x86_64-linux-gnu/dri" ]; then
-        cp -a /usr/lib/x86_64-linux-gnu/dri/* "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri/" 2>/dev/null || true
-    fi
-    for mesa_lib in /usr/lib/x86_64-linux-gnu/libEGL_mesa.so* /usr/lib/x86_64-linux-gnu/libgallium-*.so*; do
-        if [ -e "$mesa_lib" ]; then
-            cp -a "$mesa_lib" "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/"
-            ldd "$mesa_lib" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
-            ldd "$mesa_lib" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-            done
-        fi
-    done
-
-    info "Staging AppImage support (FUSE3 and tx-appimage)..."
-    if [ -f "/usr/bin/fusermount3" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/bin"
-        cp -L "/usr/bin/fusermount3" "$ROOTFS_DIR/usr/bin/"
-        # FUSE relies on setuid or proper permissions, but inside our session it's often user-mounted.
-        chmod +s "$ROOTFS_DIR/usr/bin/fusermount3" 2>/dev/null || true
-        
-        # Pull in libfuse3.so.3
-        ldd "/usr/bin/fusermount3" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-        done
-        ldd "/usr/bin/fusermount3" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-        done
-    else
-        warn "fusermount3 not found on host. AppImages will rely solely on extraction fallback."
+    # Copy kernel vmlinuz and initrd into rootfs /boot so installed systems have boot components
+    mkdir -p "$ROOTFS_DIR/boot"
+    cp -L "$VMLINUZ" "$ROOTFS_DIR/boot/vmlinuz-$KVER"
+    ln -sf "vmlinuz-$KVER" "$ROOTFS_DIR/boot/vmlinuz"
+    if [ -f "/boot/initrd.img-$KVER" ]; then
+        cp -L "/boot/initrd.img-$KVER" "$ROOTFS_DIR/boot/initrd.img-$KVER"
+        ln -sf "initrd.img-$KVER" "$ROOTFS_DIR/boot/initrd.img"
+        info "Staged host initrd.img-$KVER into rootfs /boot for target bare-metal installations."
+    elif [ -f "/boot/initrd.img" ]; then
+        cp -L "/boot/initrd.img" "$ROOTFS_DIR/boot/initrd.img"
     fi
 
-    # Stage the tx-appimage wrapper script
-    if [ -f "$PROJECT_DIR/tools/tinexus-appimage-runner.sh" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/bin"
-        cp -L "$PROJECT_DIR/tools/tinexus-appimage-runner.sh" "$ROOTFS_DIR/usr/bin/tx-appimage"
-        chmod +x "$ROOTFS_DIR/usr/bin/tx-appimage"
-    fi
-
-    info "Staging udevd and udevadm for input device detection (libinput requirement)..."
-    if [ -f "/usr/bin/udevadm" ]; then
-        cp -L "/usr/bin/udevadm" "$ROOTFS_DIR/usr/bin/"
-        mkdir -p "$ROOTFS_DIR/lib/systemd" "$ROOTFS_DIR/lib/udev" "$ROOTFS_DIR/usr/lib/udev" "$ROOTFS_DIR/usr/lib/systemd" "$ROOTFS_DIR/etc/udev"
-        cp -L "/lib/systemd/systemd-udevd" "$ROOTFS_DIR/lib/systemd/" 2>/dev/null || true
-        cp -L "/lib/systemd/systemd-udevd" "$ROOTFS_DIR/usr/lib/systemd/" 2>/dev/null || true
-        cp -r /lib/udev/* "$ROOTFS_DIR/lib/udev/" 2>/dev/null || true
-        cp -r /lib/udev/* "$ROOTFS_DIR/usr/lib/udev/" 2>/dev/null || true
-        cp -r /etc/udev/* "$ROOTFS_DIR/etc/udev/" 2>/dev/null || true
-        mkdir -p "$ROOTFS_DIR/usr/share/libinput" "$ROOTFS_DIR/usr/share/X11/xkb" "$ROOTFS_DIR/etc/libinput"
-        cp -r /usr/share/libinput/* "$ROOTFS_DIR/usr/share/libinput/" 2>/dev/null || true
-        cp -r /usr/share/X11/xkb/* "$ROOTFS_DIR/usr/share/X11/xkb/" 2>/dev/null || true
-        cp -r /etc/libinput/* "$ROOTFS_DIR/etc/libinput/" 2>/dev/null || true
-        mkdir -p "$ROOTFS_DIR/etc/udev/rules.d" "$ROOTFS_DIR/lib/udev/rules.d" "$ROOTFS_DIR/usr/lib/udev/rules.d"
-        cat << 'EOF_UDEV_SEAT' > "$ROOTFS_DIR/etc/udev/rules.d/99-tinexus-seat.rules"
-SUBSYSTEM=="input", ENV{ID_INPUT}=="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
-SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="master-of-seat", TAG+="uaccess"
-EOF_UDEV_SEAT
-        cp -L "$ROOTFS_DIR/etc/udev/rules.d/99-tinexus-seat.rules" "$ROOTFS_DIR/lib/udev/rules.d/"
-        cp -L "$ROOTFS_DIR/etc/udev/rules.d/99-tinexus-seat.rules" "$ROOTFS_DIR/usr/lib/udev/rules.d/"
-        for bin in "/usr/bin/udevadm" "/lib/systemd/systemd-udevd"; do
-            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
-            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-            done
-        done
-    fi
-
-    # ── Stage D-Bus Daemon and Policies ──────────────────────────────
-    info "Staging D-Bus Daemon and Policies..."
-    if [ -f "/usr/bin/dbus-daemon" ]; then
-        cp -L "/usr/bin/dbus-daemon" "$ROOTFS_DIR/usr/bin/"
-        [ -f "/usr/bin/dbus-uuidgen" ] && cp -L "/usr/bin/dbus-uuidgen" "$ROOTFS_DIR/usr/bin/"
-        
-        # Directories
-        mkdir -p "$ROOTFS_DIR/var/run/dbus" "$ROOTFS_DIR/var/lib/dbus" "$ROOTFS_DIR/etc/dbus-1/system.d" "$ROOTFS_DIR/usr/share/dbus-1"
-        chown 104:104 "$ROOTFS_DIR/var/run/dbus" 2>/dev/null || true
-        chown 104:104 "$ROOTFS_DIR/var/lib/dbus" 2>/dev/null || true
-
-        # Conf files
-        cp -r /usr/share/dbus-1/* "$ROOTFS_DIR/usr/share/dbus-1/" 2>/dev/null || true
-        cp -r /etc/dbus-1/* "$ROOTFS_DIR/etc/dbus-1/" 2>/dev/null || true
-        
-        # Clean out host-specific policies that reference non-existent users (like polkitd, systemd-network)
-        rm -f "$ROOTFS_DIR/etc/dbus-1/system.d/"*.conf 2>/dev/null || true
-        rm -f "$ROOTFS_DIR/usr/share/dbus-1/system.d/"*.conf 2>/dev/null || true
-
-        # Add Tinexus Custom Policy for logind mimic
-        cat << 'EOF_DBUS_POL' > "$ROOTFS_DIR/etc/dbus-1/system.d/tinexus-logind.conf"
-<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
- "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig>
-  <policy user="root">
-    <allow own="org.freedesktop.login1"/>
-    <allow send_destination="org.freedesktop.login1"/>
-    <allow receive_sender="org.freedesktop.login1"/>
-  </policy>
-  <policy context="default">
-    <allow send_destination="org.freedesktop.login1"/>
-    <allow receive_sender="org.freedesktop.login1"/>
-  </policy>
-</busconfig>
-EOF_DBUS_POL
-
-        # Dependencies
-        for bin in "/usr/bin/dbus-daemon" "/usr/bin/dbus-uuidgen"; do
-            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
-            [ -f "$bin" ] && ldd "$bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-            done
-        done
-    else
-        warn "dbus-daemon not found on host. System bus will be unavailable."
-    fi
-
-    # ── Stage foot terminal + fonts + fontconfig ──────────────────────────────
-    info "Staging foot terminal and font stack..."
-    local foot_bin
-    foot_bin="$(command -v foot 2>/dev/null || true)"
-    if [ -n "$foot_bin" ] && [ -f "$foot_bin" ]; then
-        cp -L "$foot_bin" "$ROOTFS_DIR/usr/bin/foot"
-        ldd "$foot_bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-        done
-        ldd "$foot_bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld; do
-            [ -f "$ld" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld")"; cp -L "$ld" "$ROOTFS_DIR$ld" 2>/dev/null || true; }
-        done
-        # terminfo entry (foot needs its own)
-        if [ -d "/usr/share/terminfo/f" ]; then
-            mkdir -p "$ROOTFS_DIR/usr/share/terminfo/f"
-            cp -r /usr/share/terminfo/f/. "$ROOTFS_DIR/usr/share/terminfo/f/" 2>/dev/null || true
-        fi
-        success "foot binary staged."
-    else
-        warn "foot not found on host — terminal launch will fall back to weston-terminal/alacritty."
-    fi
-
-    # Fonts — without these foot renders blank text or crashes
-    info "Staging fonts for foot terminal..."
-    mkdir -p "$ROOTFS_DIR/usr/share/fonts"
-    for font_dir in \
-        "/usr/share/fonts/truetype/dejavu" \
-        "/usr/share/fonts/truetype/liberation" \
-        "/usr/share/fonts/truetype/noto" \
-        "/usr/share/fonts/opentype/noto" \
-        "/usr/share/fonts/X11/misc"; do
-        if [ -d "$font_dir" ]; then
-            local dest="$ROOTFS_DIR${font_dir}"
-            mkdir -p "$dest"
-            cp -r "${font_dir}/." "$dest/" 2>/dev/null || true
-        fi
-    done
-
-    # ── Tinexus UI Fonts (Inter) — hardcoded path in PixmanBackend.cpp ────────
-    # CRITICAL: PixmanBackend::init_freetype() expects Inter-Regular.ttf at
-    # /usr/share/tinexus/fonts/Inter-Regular.ttf — no fallback, explicit failure.
-    info "Staging Tinexus UI fonts (Inter) into rootfs..."
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/fonts"
-    if [ ! -f "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" ]; then
-        fatal "MISSING: assets/fonts/Inter-Regular.ttf — run: cp Inter-Regular.ttf assets/fonts/"
-    fi
-    if [ ! -f "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf" ]; then
-        fatal "MISSING: assets/fonts/Inter-Bold.ttf — run: cp Inter-Bold.ttf assets/fonts/"
-    fi
-    cp -v "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" "$ROOTFS_DIR/usr/share/tinexus/fonts/"
-    cp -v "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf"    "$ROOTFS_DIR/usr/share/tinexus/fonts/"
-    success "Staged Inter-Regular.ttf + Inter-Bold.ttf → /usr/share/tinexus/fonts/"
-
-    # ── Stage Tinexus Brand Logo & Icons into rootfs ──────────────────────────
-    info "Staging Tinexus brand logo and hicolor icons into rootfs..."
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus"
-    mkdir -p "$ROOTFS_DIR/usr/share/pixmaps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/scalable/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/512x512/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/128x128/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/64x64/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/48x48/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/24x24/apps"
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/16x16/apps"
-
-    if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.svg" ]; then
-        cp "$PROJECT_DIR/assets/logo/tinexus-logo.svg" "$ROOTFS_DIR/usr/share/tinexus/tinexus-logo.svg"
-        cp "$PROJECT_DIR/assets/logo/tinexus-logo.svg" "$ROOTFS_DIR/usr/share/icons/hicolor/scalable/apps/tinexus-logo.svg"
-    fi
-    if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ]; then
-        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/tinexus-logo.png"
-        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/tinexus/tinexus-logo.png"
-        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/pixmaps/tinexus.png"
-        cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/pixmaps/tinexus-logo.png"
-    fi
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-512.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-512.png" "$ROOTFS_DIR/usr/share/icons/hicolor/512x512/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-128.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-128.png" "$ROOTFS_DIR/usr/share/icons/hicolor/128x128/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-64.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-64.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/64x64/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-48.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-48.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/48x48/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-32.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-32.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-24.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-24.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/24x24/apps/tinexus-logo.png"
-    [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-16.png" ]  && cp "$PROJECT_DIR/assets/logo/tinexus-logo-16.png"  "$ROOTFS_DIR/usr/share/icons/hicolor/16x16/apps/tinexus-logo.png"
-    success "Staged Tinexus brand logo and hicolor icons."
-
-
-    # fontconfig — so foot can discover fonts at runtime
-    info "Staging fontconfig..."
-    if [ -d "/etc/fonts" ]; then
-        cp -r /etc/fonts "$ROOTFS_DIR/etc/" 2>/dev/null || true
-    fi
-    if [ -d "/usr/share/fontconfig" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/share/fontconfig"
-        cp -r /usr/share/fontconfig/. "$ROOTFS_DIR/usr/share/fontconfig/" 2>/dev/null || true
-    fi
-    if [ -d "/var/cache/fontconfig" ]; then
-        mkdir -p "$ROOTFS_DIR/var/cache/fontconfig"
-        cp -r /var/cache/fontconfig/. "$ROOTFS_DIR/var/cache/fontconfig/" 2>/dev/null || true
-    fi
-
-    # Stage custom wallpaper image from Temp directory or assets/
-    info "Staging custom wallpaper image into rootfs..."
-    mkdir -p "$ROOTFS_DIR/usr/share/backgrounds"
-    mkdir -p "$ROOTFS_DIR/home/tinexus/Pictures"
-    mkdir -p "$ROOTFS_DIR/home/tinexus/Desktop"
-    if [ -d "$PROJECT_DIR/assets/wallpaper" ]; then
-        cp -L "$PROJECT_DIR"/assets/wallpaper/* "$ROOTFS_DIR/usr/share/backgrounds/" 2>/dev/null || true
-        cp -L "$PROJECT_DIR"/assets/wallpaper/* "$ROOTFS_DIR/home/tinexus/Pictures/" 2>/dev/null || true
-        success "Staged wallpapers & test images to /usr/share/backgrounds/ and ~/Pictures/."
-    fi
-    if [ -f "$PROJECT_DIR/Temp/tinexus-default.jpg" ]; then
-        cp -L "$PROJECT_DIR/Temp/tinexus-default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/tinexus-default.jpg"
-        cp -L "$PROJECT_DIR/Temp/tinexus-default.jpg" "$ROOTFS_DIR/home/tinexus/Pictures/tinexus-default.jpg"
-    fi
-
-    # Stage timezone data so localtime_r() returns correct local time
-    info "Staging timezone data (Asia/Kolkata)..."
-    if [ -f "/usr/share/zoneinfo/Asia/Kolkata" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/share/zoneinfo/Asia"
-        cp /usr/share/zoneinfo/Asia/Kolkata "$ROOTFS_DIR/usr/share/zoneinfo/Asia/Kolkata"
-        ln -sf /usr/share/zoneinfo/Asia/Kolkata "$ROOTFS_DIR/etc/localtime"
-        echo "Asia/Kolkata" > "$ROOTFS_DIR/etc/timezone"
-        success "Timezone set to Asia/Kolkata (IST UTC+5:30)."
-    else
-        warn "Zoneinfo not found on build host — time will show UTC."
-    fi
-
-    # Stage any AppImages provided by the user in Temp/
-    info "Checking for 3rd-party AppImages in Temp/..."
-    if ls "$PROJECT_DIR/Temp/"*.AppImage 1> /dev/null 2>&1; then
-        mkdir -p "$ROOTFS_DIR/opt/AppImages"
-        cp -L "$PROJECT_DIR/Temp/"*.AppImage "$ROOTFS_DIR/opt/AppImages/" 2>/dev/null || true
-        chmod +x "$ROOTFS_DIR/opt/AppImages/"*.AppImage 2>/dev/null || true
-        success "Staged user-provided AppImages into /opt/AppImages/"
-
-        # Ensure secure permissions for Tinexus Apps and Trust Overrides directories
-        mkdir -p "$ROOTFS_DIR/opt/tinexus-apps"
-        mkdir -p "$ROOTFS_DIR/var/lib/tinexus"
-        # Note: Since fakeroot/iso builder runs as root during squashfs, these are implicitly root-owned
-        # but we enforce the directory modes explicitly.
-        chmod 0755 "$ROOTFS_DIR/opt/tinexus-apps"
-        chmod 0755 "$ROOTFS_DIR/var/lib/tinexus"
-
-        # [Jugaad] Stage full desktop libraries required by heavy AppImages like Chrome
-        info "[Jugaad] Staging Chrome/AppImage shared library dependencies (GTK, NSS, X11)..."
-        CHROME_LIBS=(
-            "libglib-2.0.so.0" "libgobject-2.0.so.0" "libnspr4.so" "libnss3.so" "libnssutil3.so"
-            "libsmime3.so" "libgio-2.0.so.0" "libatk-1.0.so.0" "libatk-bridge-2.0.so.0" "libdbus-1.so.3"
-            "libcups.so.2" "libexpat.so.1" "libfontconfig.so.1" "libX11.so.6" "libxcb.so.1"
-            "libxkbcommon.so.0" "libasound.so.2" "libgbm.so.1" "libXext.so.6" "libcairo.so.2"
-            "libpango-1.0.so.0" "libudev.so.1" "libXcomposite.so.1" "libXdamage.so.1" "libXfixes.so.3"
-            "libXrandr.so.2" "libatspi.so.0" "libm.so.6" "libgcc_s.so.1" "libc.so.6" "libatomic.so.1"
-            "libpcre2-8.so.0" "libffi.so.8" "libplc4.so" "libplds4.so" "libgmodule-2.0.so.0" "libz.so.1"
-            "libmount.so.1" "libselinux.so.1" "libsystemd.so.0" "libgssapi_krb5.so.2" "libavahi-common.so.3"
-            "libavahi-client.so.3" "libgnutls.so.30" "libfreetype.so.6" "libXau.so.6" "libXdmcp.so.6"
-            "libdrm.so.2" "libpng16.so.16" "libXrender.so.1" "libxcb-render.so.0" "libxcb-shm.so.0"
-            "libpixman-1.so.0" "libfribidi.so.0" "libthai.so.0" "libharfbuzz.so.0" "libXi.so.6"
-            "libXRes.so.1" "libblkid.so.1" "libkrb5.so.3" "libk5crypto.so.3" "libcom_err.so.2"
-            "libkrb5support.so.0" "libp11-kit.so.0" "libidn2.so.0" "libunistring.so.5" "libtasn1.so.6"
-            "libhogweed.so.6" "libnettle.so.8" "libgmp.so.10" "libbz2.so.1.0" "libbrotlidec.so.1"
-            "libdatrie.so.1" "libgraphite2.so.3" "libkeyutils.so.1" "libresolv.so.2" "libbrotlicommon.so.1"
-            "libwayland-client.so.0" "libwayland-cursor.so.0" "libwayland-egl.so.1" "libnssckbi.so"
-        )
-        for lib in "${CHROME_LIBS[@]}"; do
-            for search_dir in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib /lib; do
-                if [ -f "$search_dir/$lib" ]; then
-                    mkdir -p "$ROOTFS_DIR$search_dir"
-                    cp -L "$search_dir/$lib" "$ROOTFS_DIR$search_dir/" 2>/dev/null || true
-                    break
-                fi
-            done
-        done
-        success "Staged 70+ Chrome library dependencies."
-    fi
-
-    # Stage Mesa DRI drivers (iris_dri.so, etc.) and Gallium runtime for Intel/hardware acceleration
-    info "Staging Mesa DRI graphics drivers and Gallium runtime..."
-    if [ -d "/usr/lib/x86_64-linux-gnu/dri" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri"
-        cp -a /usr/lib/x86_64-linux-gnu/dri/* "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/dri/" 2>/dev/null || true
-    fi
-    for gallium in /usr/lib/x86_64-linux-gnu/libgallium-*.so*; do
-        if [ -e "$gallium" ]; then
-            cp -a "$gallium" "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
-        fi
-    done
-    for egl_mesa in /usr/lib/x86_64-linux-gnu/libEGL_mesa.so*; do
-        if [ -e "$egl_mesa" ]; then
-            cp -a "$egl_mesa" "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
-        fi
-    done
-    success "Staged Mesa DRI drivers and Gallium runtime."
-
-    # Locale — foot uses LC_ALL/LANG; stage minimal C.UTF-8
-    info "Staging locale data (C.UTF-8)..."
-    mkdir -p "$ROOTFS_DIR/usr/share/locale"
-    mkdir -p "$ROOTFS_DIR/usr/lib/locale"
-    if [ -f "/usr/lib/locale/locale-archive" ]; then
-        cp -L "/usr/lib/locale/locale-archive" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
-    fi
-    if [ -d "/usr/lib/locale/C.utf8" ]; then
-        cp -r "/usr/lib/locale/C.utf8" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
-    elif [ -d "/usr/lib/locale/C.UTF-8" ]; then
-        cp -r "/usr/lib/locale/C.UTF-8" "$ROOTFS_DIR/usr/lib/locale/" 2>/dev/null || true
-    fi
-    mkdir -p "$ROOTFS_DIR/etc"
-    echo "LANG=C.UTF-8" > "$ROOTFS_DIR/etc/locale.conf"
-
-    # PAM — required by tinexus-lock for authentication
-    info "Staging PAM libraries and configuration for tinexus-lock..."
-    mkdir -p "$ROOTFS_DIR/lib/security" "$ROOTFS_DIR/usr/lib/security" \
-             "$ROOTFS_DIR/etc/pam.d" "$ROOTFS_DIR/etc/security"
-    # Copy PAM modules (pam_unix.so, pam_permit.so, etc.)
-    for pam_dir in "/lib/security" "/lib/x86_64-linux-gnu/security" \
-                   "/usr/lib/security" "/usr/lib/x86_64-linux-gnu/security"; do
-        if [ -d "$pam_dir" ]; then
-            cp -r "${pam_dir}/." "$ROOTFS_DIR/lib/security/" 2>/dev/null || true
-            cp -r "${pam_dir}/." "$ROOTFS_DIR/usr/lib/security/" 2>/dev/null || true
-        fi
-    done
-    # Copy PAM config for 'login' (tinexus-lock calls pam_start("login", ...))
-    if [ -f "/etc/pam.d/login" ]; then
-        cp /etc/pam.d/login "$ROOTFS_DIR/etc/pam.d/login"
-    else
-        # Minimal fallback PAM config
-        cat > "$ROOTFS_DIR/etc/pam.d/login" << 'EOF_PAM'
-auth       required   pam_unix.so
-account    required   pam_unix.so
-session    required   pam_unix.so
-EOF_PAM
-    fi
-    # Common PAM includes
-    for f in common-auth common-account common-session; do
-        [ -f "/etc/pam.d/$f" ] && cp "/etc/pam.d/$f" "$ROOTFS_DIR/etc/pam.d/$f" 2>/dev/null || true
-    done
-    # We previously generated custom /etc/passwd, /etc/group, and /etc/shadow.
-    # Do NOT copy the host's files, as they will overwrite the custom ones!
-
-    # ── Non-blocking Userspace Networking Staging (DHCP / DNS) ────────────────
-    # POLICY BOUNDARY: Core platform daemons (comp/searchd/serviced/ipcd) never touch
-    # network connections. DHCP/DNS staging is purely for user-space apps (browser, curl, AppImages).
-    info "Staging lightweight userspace network stack (udhcpc / DNS)..."
-    mkdir -p "$ROOTFS_DIR/usr/share/udhcpc" "$ROOTFS_DIR/etc"
-    cat > "$ROOTFS_DIR/usr/share/udhcpc/default.script" << 'EOF_DHCP'
-#!/bin/sh
-# udhcpc script for Tinexus OS (Purely for user-space client application networking)
-[ -z "$1" ] && exit 1
-RESOLV_CONF="/etc/resolv.conf"
-
-case "$1" in
-    deconfig)
-        /bin/ip addr flush dev "$interface" 2>/dev/null || /sbin/ifconfig "$interface" 0.0.0.0 2>/dev/null || true
-        ;;
-    renew|bound)
-        if [ -n "$ip" ]; then
-            /bin/ip addr add "$ip/$mask" dev "$interface" 2>/dev/null || /sbin/ifconfig "$interface" "$ip" netmask "$subnet" 2>/dev/null || true
-        fi
-        if [ -n "$router" ]; then
-            for r in $router; do
-                /bin/ip route add default via "$r" dev "$interface" 2>/dev/null || /sbin/route add default gw "$r" dev "$interface" 2>/dev/null || true
-                break
-            done
-        fi
-        if [ -n "$dns" ]; then
-            echo -n > "$RESOLV_CONF.tmp"
-            [ -n "$domain" ] && echo "search $domain" >> "$RESOLV_CONF.tmp"
-            for d in $dns; do
-                echo "nameserver $d" >> "$RESOLV_CONF.tmp"
-            done
-            mv -f "$RESOLV_CONF.tmp" "$RESOLV_CONF"
-        fi
-        ;;
-esac
-exit 0
-EOF_DHCP
-    chmod 0755 "$ROOTFS_DIR/usr/share/udhcpc/default.script"
-
-    # Default fallback DNS nameserver
-    if [ ! -f "$ROOTFS_DIR/etc/resolv.conf" ]; then
-        echo "nameserver 1.1.1.1" > "$ROOTFS_DIR/etc/resolv.conf"
-        echo "nameserver 8.8.8.8" >> "$ROOTFS_DIR/etc/resolv.conf"
-    fi
-
-    # Ensure busybox networking applets are symlinked
-    local bb_host="$(command -v busybox || true)"
-    if [ -n "$bb_host" ] && [ -f "$bb_host" ]; then
-        cp -L "$bb_host" "$ROOTFS_DIR/bin/busybox"
-        for net_app in udhcpc ip ifconfig route ping wget; do
-            ln -sf busybox "$ROOTFS_DIR/bin/$net_app" 2>/dev/null || true
-            ln -sf /bin/busybox "$ROOTFS_DIR/sbin/$net_app" 2>/dev/null || true
-            ln -sf /bin/busybox "$ROOTFS_DIR/usr/bin/$net_app" 2>/dev/null || true
-        done
-        success "Staged busybox networking tools (udhcpc, ip, ifconfig, route, ping, wget)."
-    fi
-
-    # ── Stage Complete Distro Firmware Tree (/lib/firmware) into RootFS ───────
-    info "Staging complete firmware tree (/lib/firmware) into rootfs for universal hardware support..."
-    mkdir -p "$ROOTFS_DIR/lib/firmware"
-    for fw_source in /lib/firmware /usr/lib/firmware; do
-        if [ -d "$fw_source" ]; then
-            cp -a "$fw_source"/* "$ROOTFS_DIR/lib/firmware/" 2>/dev/null || true
-        fi
-    done
-
-    # Explicitly stage upstream SOF (Sound Open Firmware) and topology files into rootfs
-    info "Staging SOF audio firmware and topology files (/lib/firmware/intel/sof and sof-tplg)..."
-    mkdir -p "$ROOTFS_DIR/lib/firmware/intel/sof-tplg"
-    for sof_source in /lib/firmware/intel /usr/lib/firmware/intel; do
-        if [ -d "$sof_source/sof" ]; then
-            mkdir -p "$ROOTFS_DIR/lib/firmware/intel/sof"
-            cp -a "$sof_source/sof/"* "$ROOTFS_DIR/lib/firmware/intel/sof/" 2>/dev/null || true
-        fi
-        if [ -d "$sof_source/sof-tplg" ]; then
-            cp -a "$sof_source/sof-tplg/"* "$ROOTFS_DIR/lib/firmware/intel/sof-tplg/" 2>/dev/null || true
-        fi
-        if [ -d "$sof_source/sof-ace-tplg" ]; then
-            mkdir -p "$ROOTFS_DIR/lib/firmware/intel/sof-ace-tplg"
-            cp -a "$sof_source/sof-ace-tplg/"* "$ROOTFS_DIR/lib/firmware/intel/sof-ace-tplg/" 2>/dev/null || true
-        fi
-    done
-
-    # Ensure /usr/lib/firmware exists and mirrors /lib/firmware for usrmerge compatibility
-    mkdir -p "$ROOTFS_DIR/usr/lib"
-    if [ ! -e "$ROOTFS_DIR/usr/lib/firmware" ]; then
-        ln -s /lib/firmware "$ROOTFS_DIR/usr/lib/firmware" 2>/dev/null || true
-    fi
-
-    # Decompress any .zst and .xz compressed firmware (e.g. MediaTek MT7921, Intel SOF/DSP, Realtek)
-    find "$ROOTFS_DIR/lib/firmware" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
-    find "$ROOTFS_DIR/lib/firmware" -type f -name "*.xz" -exec unxz {} + 2>/dev/null || true
-    success "Staged complete firmware tree into rootfs ($(du -sh "$ROOTFS_DIR/lib/firmware" | cut -f1))."
-
-    # ── Stage Wireless Utilities (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill) ──
-    info "Staging wireless tools (wpa_supplicant, wpa_passphrase, wpa_cli, iw, rfkill)..."
-    for tool in wpa_supplicant wpa_passphrase wpa_cli iw rfkill; do
-        tool_path="$(command -v "$tool" || true)"
-        if [ -n "$tool_path" ] && [ -f "$tool_path" ]; then
-            cp -L "$tool_path" "$ROOTFS_DIR/usr/sbin/" 2>/dev/null || true
-            cp -L "$tool_path" "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
-            ldd "$tool_path" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
-            ldd "$tool_path" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-            done
-        fi
-    done
-    mkdir -p "$ROOTFS_DIR/etc/wpa_supplicant" "$ROOTFS_DIR/var/run/wpa_supplicant" "$ROOTFS_DIR/usr/share/dbus-1/system-services" "$ROOTFS_DIR/usr/share/dbus-1/system.d" "$ROOTFS_DIR/etc/dbus-1/system.d"
-    cat > "$ROOTFS_DIR/etc/wpa_supplicant/wpa_supplicant.conf" << 'EOF_WPA'
-ctrl_interface=/var/run/wpa_supplicant
-update_config=1
-EOF_WPA
-    [ -f "/usr/share/dbus-1/system-services/fi.w1.wpa_supplicant1.service" ] && cp -L "/usr/share/dbus-1/system-services/fi.w1.wpa_supplicant1.service" "$ROOTFS_DIR/usr/share/dbus-1/system-services/" 2>/dev/null || true
-    [ -f "/usr/share/dbus-1/system.d/wpa_supplicant.conf" ] && cp -L "/usr/share/dbus-1/system.d/wpa_supplicant.conf" "$ROOTFS_DIR/usr/share/dbus-1/system.d/" 2>/dev/null || true
-    [ -f "/usr/share/dbus-1/system.d/wpa_supplicant.conf" ] && cp -L "/usr/share/dbus-1/system.d/wpa_supplicant.conf" "$ROOTFS_DIR/etc/dbus-1/system.d/" 2>/dev/null || true
-
-    # ── Hostname Configuration (Option 12 Registration on DHCP) ──
-    echo "Tinexus-Desktop" > "$ROOTFS_DIR/etc/hostname"
-    cat > "$ROOTFS_DIR/etc/hosts" << 'EOF_HOSTS'
-127.0.0.1   localhost Tinexus-Desktop
-::1         localhost ip6-localhost ip6-loopback
-EOF_HOSTS
-
-    cat > "$ROOTFS_DIR/usr/bin/tinexus-wifi" << 'EOF_WIFI'
-#!/bin/sh
-rfkill unblock all 2>/dev/null || true
-
-# Dynamically discover primary Wi-Fi interface (wlo1, wlp3s0, wlan0, etc.)
-IFACE=""
-if [ -d /sys/class/net ]; then
-    for d in /sys/class/net/*; do
-        dev=$(basename "$d")
-        [ "$dev" = "lo" ] && continue
-        if [ -d "$d/wireless" ] || [ -d "$d/phy80211" ]; then
-            IFACE="$dev"
-            break
-        fi
-    done
-fi
-[ -z "$IFACE" ] && IFACE="wlan0"
-
-ip link set "$IFACE" up 2>/dev/null || true
-case "$1" in
-    scan)
-        echo "Scanning available Wi-Fi networks on $IFACE..."
-        iw dev "$IFACE" scan 2>/dev/null | grep -E "SSID: " | sed 's/^[ \t]*SSID: //' | sort -u
-        ;;
-    connect)
-        SSID="$2"
-        PASS="$3"
-        if [ -z "$SSID" ]; then
-            echo "Usage: tinexus-wifi connect <SSID> [password]"
-            exit 1
-        fi
-        killall wpa_supplicant 2>/dev/null || true
-        CONF="/tmp/wpa_connect.conf"
-        if [ -n "$PASS" ]; then
-            wpa_passphrase "$SSID" "$PASS" > "$CONF" 2>/dev/null
-        else
-            cat > "$CONF" << EOF_OPEN
-network={
-    ssid="$SSID"
-    key_mgmt=NONE
-}
-EOF_OPEN
-        fi
-        echo "Connecting to '$SSID' on interface '$IFACE'..."
-        wpa_supplicant -B -i "$IFACE" -c "$CONF"
-        sleep 2
-        echo "Obtaining IP address via DHCP with hostname 'Tinexus-Desktop'..."
-        udhcpc -i "$IFACE" -s /usr/share/udhcpc/default.script -x hostname:Tinexus-Desktop -q -n
-        echo "Testing internet connectivity..."
-        ping -c 3 -W 3 1.1.1.1 || ping -c 3 -W 3 8.8.8.8
-        ;;
-    status)
-        echo "Interface: $IFACE"
-        ip addr show "$IFACE"
-        iw dev "$IFACE" link
-        ;;
-    *)
-        echo "Tinexus OS Wi-Fi Manager (Active Interface: $IFACE)"
-        echo "Usage: tinexus-wifi scan"
-        echo "       tinexus-wifi connect <SSID> [password]"
-        echo "       tinexus-wifi status"
-        ;;
-esac
-EOF_WIFI
-    chmod 0755 "$ROOTFS_DIR/usr/bin/tinexus-wifi"
-
-    # ── Stage Network Downloader, SSL Trust Store & DNS Resolvers (curl, ca-certificates, NSS) ──
-    info "Staging curl, SSL CA certificates, and glibc NSS DNS resolvers..."
-    local curl_bin="$(command -v curl || true)"
-    if [ -n "$curl_bin" ] && [ -f "$curl_bin" ]; then
-        cp -L "$curl_bin" "$ROOTFS_DIR/usr/bin/curl"
-        ldd "$curl_bin" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-        done
-        ldd "$curl_bin" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-        done
-        success "curl binary and shared libraries staged."
-    fi
-
-    # Stage CA Certificates bundle for verified HTTPS connections
-    mkdir -p "$ROOTFS_DIR/etc/ssl/certs" "$ROOTFS_DIR/usr/share/ca-certificates" "$ROOTFS_DIR/etc/pki/tls/certs"
-    if [ -f "/etc/ssl/certs/ca-certificates.crt" ]; then
-        cp -L "/etc/ssl/certs/ca-certificates.crt" "$ROOTFS_DIR/etc/ssl/certs/ca-certificates.crt"
-        ln -sf certs/ca-certificates.crt "$ROOTFS_DIR/etc/ssl/cert.pem" 2>/dev/null || true
-        cp -L "/etc/ssl/certs/ca-certificates.crt" "$ROOTFS_DIR/etc/pki/tls/certs/ca-bundle.crt" 2>/dev/null || true
-        success "CA certificate store staged."
-    fi
-
-    # Stage glibc NSS dynamic resolver libraries (required for getaddrinfo / DNS lookups)
-    for nss_lib in /lib/x86_64-linux-gnu/libnss_dns* /lib/x86_64-linux-gnu/libnss_files* /lib/x86_64-linux-gnu/libresolv*; do
-        if [ -f "$nss_lib" ]; then
-            mkdir -p "$ROOTFS_DIR/lib/x86_64-linux-gnu"
-            cp -L "$nss_lib" "$ROOTFS_DIR/lib/x86_64-linux-gnu/" 2>/dev/null || true
-        fi
-    done
-
-    # Stage nsswitch.conf
-    if [ -f "/etc/nsswitch.conf" ]; then
-        cp -L "/etc/nsswitch.conf" "$ROOTFS_DIR/etc/nsswitch.conf"
-    else
-        cat > "$ROOTFS_DIR/etc/nsswitch.conf" << 'EOF_NSSWITCH'
-passwd:         files
-group:          files
-shadow:         files
-hosts:          files dns
-networks:       files
-protocols:      db files
-services:       db files
-ethers:         db files
-rpc:            db files
-EOF_NSSWITCH
-    fi
-
-    # ── Stage Audio Utilities (amixer, alsamixer, alsactl, aplay, speaker-test) ──
-    info "Staging ALSA audio utilities (amixer, alsamixer, alsactl, aplay, speaker-test)..."
-    for tool in amixer alsamixer alsactl aplay speaker-test; do
-        tool_path="$(command -v "$tool" || true)"
-        if [ -n "$tool_path" ] && [ -f "$tool_path" ]; then
-            cp -L "$tool_path" "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
-            cp -L "$tool_path" "$ROOTFS_DIR/usr/sbin/" 2>/dev/null || true
-            ldd "$tool_path" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
-            ldd "$tool_path" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-                [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-            done
-        fi
-    done
-
-    # Stage ALSA configuration & card profiles (/usr/share/alsa)
-    if [ -d "/usr/share/alsa" ]; then
-        mkdir -p "$ROOTFS_DIR/usr/share/alsa"
-        cp -a /usr/share/alsa/* "$ROOTFS_DIR/usr/share/alsa/" 2>/dev/null || true
-    fi
-    mkdir -p "$ROOTFS_DIR/var/lib/alsa"
-
-    # Stage volume chime sound
-    mkdir -p "$ROOTFS_DIR/usr/share/sounds/tinexus"
-    if [ -f "$PROJECT_DIR/assets/sounds/volume-chime.wav" ]; then
-        cp -L "$PROJECT_DIR/assets/sounds/volume-chime.wav" "$ROOTFS_DIR/usr/share/sounds/tinexus/volume-chime.wav"
-    fi
-
-    # ── Stage Display Backlight Utilities (brightnessctl) ───────────────────
-    info "Staging brightnessctl..."
-    local bctl_path="$(command -v brightnessctl || true)"
-    if [ -n "$bctl_path" ] && [ -f "$bctl_path" ]; then
-        cp -L "$bctl_path" "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
-        chmod 4755 "$ROOTFS_DIR/usr/bin/brightnessctl" 2>/dev/null || true
-        ldd "$bctl_path" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-            [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-        done
-        ldd "$bctl_path" 2>/dev/null | sed -n 's/^[[:space:]]*\(\/.*\) (0x.*/\1/p' | while read -r ld_loader; do
-            [ -f "$ld_loader" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$ld_loader")"; cp -L "$ld_loader" "$ROOTFS_DIR$ld_loader" 2>/dev/null || true; }
-        done
-    fi
-
-    # ── Secure Udev Rules for Backlight and Sound Devices ────────────────────
-    mkdir -p "$ROOTFS_DIR/etc/udev/rules.d" "$ROOTFS_DIR/lib/udev/rules.d"
-    cat > "$ROOTFS_DIR/etc/udev/rules.d/90-backlight.rules" << 'EOF_BACKLIGHT_RULES'
-ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"
-EOF_BACKLIGHT_RULES
-    cp -L "$ROOTFS_DIR/etc/udev/rules.d/90-backlight.rules" "$ROOTFS_DIR/lib/udev/rules.d/" 2>/dev/null || true
-
-    cat > "$ROOTFS_DIR/etc/udev/rules.d/90-alsa.rules" << 'EOF_ALSA_RULES'
-SUBSYSTEM=="sound", GROUP="audio", MODE="0660"
-KERNEL=="controlC[0-9]*", GROUP="audio", MODE="0660"
-KERNEL=="pcmC[0-9]*D[0-9]*[cp]", GROUP="audio", MODE="0660"
-EOF_ALSA_RULES
-    cp -L "$ROOTFS_DIR/etc/udev/rules.d/90-alsa.rules" "$ROOTFS_DIR/lib/udev/rules.d/" 2>/dev/null || true
-
-    # ── Stage Complete Kernel Modules Tree into RootFS (SquashFS) ────────────
-    info "Staging complete kernel module tree (/lib/modules/$KVER) into rootfs..."
+    # Copy host kernel modules and firmware
+    info "Staging kernel modules ($KVER) and firmware into rootfs..."
     mkdir -p "$ROOTFS_DIR/lib/modules"
     if [ -d "/lib/modules/$KVER" ]; then
         cp -a "/lib/modules/$KVER" "$ROOTFS_DIR/lib/modules/"
-        # Decompress any .zst module files so all modprobe and depmod operations work flawlessly
-        find "$ROOTFS_DIR/lib/modules/$KVER" -type f -name "*.zst" -exec zstd -d --rm {} + 2>/dev/null || true
-        
-        # Run depmod to rebuild modules.dep, modules.alias, modules.symbols accurately for the rootfs
-        if [ -f "/usr/sbin/depmod" ]; then
-            info "Running depmod -a to generate modules.dep and modules.alias for rootfs ($KVER)..."
-            /usr/sbin/depmod -a -b "$ROOTFS_DIR" "$KVER" 2>/dev/null || true
-        fi
-        success "Staged complete kernel modules tree ($(du -sh "$ROOTFS_DIR/lib/modules/$KVER" | cut -f1))."
-    else
-        fatal "/lib/modules/$KVER not found on host!"
+        chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            depmod -a "$KVER" 2>/dev/null || true
     fi
 
-    # ── BUILD-TIME ASSERTION: Verify rootfs kernel module synchronization ──────
-    local vmlinuz_actual_ver
-    vmlinuz_actual_ver="$(file -b "$VMLINUZ" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
-    [ -n "$vmlinuz_actual_ver" ] || fatal "Could not determine actual kernel version from $VMLINUZ"
-    if [ ! -d "$ROOTFS_DIR/lib/modules/$vmlinuz_actual_ver" ]; then
-        fatal "CRITICAL BUILD ASSERTION FAILED: rootfs/lib/modules/$vmlinuz_actual_ver does NOT exist!\nKernel vmlinuz is version '$vmlinuz_actual_ver' but staged modules were '$KVER'.\nBuild aborted to prevent kernel/rootfs version desynchronization."
-    fi
-    success "Build-time assertion passed: rootfs contains /lib/modules/$vmlinuz_actual_ver matching vmlinuz."
-
-    # ── Stage Qt6 & QML Runtime Stack (for Tier 2 Qt6 Apps) ──────────────────
-    info "Staging Qt6 Wayland plugins and QML runtime stack..."
-    local qt6_plugin_dir="/usr/lib/x86_64-linux-gnu/qt6/plugins"
-    local qt6_qml_dir="/usr/lib/x86_64-linux-gnu/qt6/qml"
-
-    if [ -d "$qt6_plugin_dir" ]; then
-        mkdir -p "$ROOTFS_DIR$qt6_plugin_dir"
-        cp -a "$qt6_plugin_dir/"* "$ROOTFS_DIR$qt6_plugin_dir/" 2>/dev/null || true
-
-        find "$ROOTFS_DIR$qt6_plugin_dir" -type f -name "*.so" | while read -r plugin_so; do
-            ldd "$plugin_so" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
+    if [ -d "/lib/firmware" ]; then
+        mkdir -p "$ROOTFS_DIR/lib/firmware"
+        for fw_sub in i915 intel mediatek rtw88 rtw89; do
+            if [ -d "/lib/firmware/$fw_sub" ]; then
+                cp -a "/lib/firmware/$fw_sub" "$ROOTFS_DIR/lib/firmware/" 2>/dev/null || true
+            fi
         done
-        success "Staged Qt6 platform and Wayland plugins."
     fi
 
-    if [ -d "$qt6_qml_dir" ]; then
-        mkdir -p "$ROOTFS_DIR$qt6_qml_dir"
-        cp -a "$qt6_qml_dir/"* "$ROOTFS_DIR$qt6_qml_dir/" 2>/dev/null || true
+    # Clean up policy-rc.d and unmount virtual filesystems
+    rm -f "$ROOTFS_DIR/usr/sbin/policy-rc.d"
+    info "Preserving pre-cached archives in rootfs ($(ls -1 "$ROOTFS_DIR/var/cache/apt/archives"/*.deb 2>/dev/null | wc -l) packages)..."
 
-        find "$ROOTFS_DIR$qt6_qml_dir" -type f -name "*.so" | while read -r qml_so; do
-            ldd "$qml_so" 2>/dev/null | sed -n 's/.*=> \(.*\) (0x.*/\1/p' | while read -r lib; do
-                [ -f "$lib" ] && { mkdir -p "$ROOTFS_DIR$(dirname "$lib")"; cp -L "$lib" "$ROOTFS_DIR$lib" 2>/dev/null || true; }
-            done
-        done
-        success "Staged Qt6 QML runtime modules."
-    fi
+    info "Unmounting chroot virtual filesystems..."
+    umount -lf "$ROOTFS_DIR/dev/pts" 2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/dev" 2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/sys" 2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/proc" 2>/dev/null || true
 
-    # Stage Tinexus Settings QML assets into /usr/share/tinexus-settings/qml/
-    info "Staging Tinexus Settings QML frontend..."
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus-settings/qml"
-    if [ -d "$PROJECT_DIR/src/settings-ui/qml" ]; then
-        cp -r "$PROJECT_DIR/src/settings-ui/qml/"* "$ROOTFS_DIR/usr/share/tinexus-settings/qml/"
-        success "Staged Settings QML files to /usr/share/tinexus-settings/qml/."
-    fi
-
-    # Stage Tinexus QML components (dock, shell, launcher, lock, files, common)
-    info "Staging Tinexus QML components (Tier 1 & Migrated Apps)..."
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/common/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/dock/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/shell/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/launcher/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/lock/qml" "$ROOTFS_DIR/usr/share/tinexus-lock/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/files/qml" "$ROOTFS_DIR/usr/share/tinexus-files/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/settings/qml" "$ROOTFS_DIR/usr/share/tinexus-settings/qml"
-    if [ -d "$PROJECT_DIR/src/common/qml" ]; then
-        cp -r "$PROJECT_DIR/src/common/qml/"* "$ROOTFS_DIR/usr/share/tinexus/common/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/dock/qml" ]; then
-        cp -r "$PROJECT_DIR/src/dock/qml/"* "$ROOTFS_DIR/usr/share/tinexus/dock/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/shell/qml" ]; then
-        cp -r "$PROJECT_DIR/src/shell/qml/"* "$ROOTFS_DIR/usr/share/tinexus/shell/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/launcher/qml" ]; then
-        cp -r "$PROJECT_DIR/src/launcher/qml/"* "$ROOTFS_DIR/usr/share/tinexus/launcher/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/lock/qml" ]; then
-        cp -r "$PROJECT_DIR/src/lock/qml/"* "$ROOTFS_DIR/usr/share/tinexus/lock/qml/"
-        cp -r "$PROJECT_DIR/src/lock/qml/"* "$ROOTFS_DIR/usr/share/tinexus-lock/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/files/qml" ]; then
-        cp -r "$PROJECT_DIR/src/files/qml/"* "$ROOTFS_DIR/usr/share/tinexus/files/qml/"
-        cp -r "$PROJECT_DIR/src/files/qml/"* "$ROOTFS_DIR/usr/share/tinexus-files/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/settings-ui/qml" ]; then
-        cp -r "$PROJECT_DIR/src/settings-ui/qml/"* "$ROOTFS_DIR/usr/share/tinexus/settings/qml/"
-        cp -r "$PROJECT_DIR/src/settings-ui/qml/"* "$ROOTFS_DIR/usr/share/tinexus-settings/qml/"
-    fi
-
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/about/qml" "$ROOTFS_DIR/usr/share/tinexus-about/qml"
-    mkdir -p "$ROOTFS_DIR/usr/share/tinexus/monitor/qml" "$ROOTFS_DIR/usr/share/tinexus-monitor/qml"
-    if [ -d "$PROJECT_DIR/src/about/qml" ]; then
-        cp -r "$PROJECT_DIR/src/about/qml/"* "$ROOTFS_DIR/usr/share/tinexus/about/qml/"
-        cp -r "$PROJECT_DIR/src/about/qml/"* "$ROOTFS_DIR/usr/share/tinexus-about/qml/"
-    fi
-    if [ -d "$PROJECT_DIR/src/monitor/qml" ]; then
-        cp -r "$PROJECT_DIR/src/monitor/qml/"* "$ROOTFS_DIR/usr/share/tinexus/monitor/qml/"
-        cp -r "$PROJECT_DIR/src/monitor/qml/"* "$ROOTFS_DIR/usr/share/tinexus-monitor/qml/"
-    fi
-
-    # Stage Tinexus official brand logo assets
-    mkdir -p "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps" "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps" "$ROOTFS_DIR/usr/share/tinexus/assets/logo" "$ROOTFS_DIR/usr/share/pixmaps"
-    if [ -d "$PROJECT_DIR/assets/logo" ]; then
-        cp -r "$PROJECT_DIR/assets/logo/"* "$ROOTFS_DIR/usr/share/tinexus/assets/logo/"
-        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-32.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-32.png" "$ROOTFS_DIR/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png"
-        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo-256.png" "$ROOTFS_DIR/usr/share/icons/hicolor/256x256/apps/tinexus-logo.png"
-        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/pixmaps/tinexus-logo.png"
-        [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ] && cp "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$ROOTFS_DIR/usr/share/tinexus/tinexus-logo.png"
-    fi
-
-    # Ensure PAM config exists for tinexus-lock
-    mkdir -p "$ROOTFS_DIR/etc/pam.d"
-    cat << 'EOF_PAM' > "$ROOTFS_DIR/etc/pam.d/tinexus-lock"
-#%PAM-1.0
-auth      sufficient pam_permit.so
-account   sufficient pam_permit.so
-password  sufficient pam_permit.so
-session   sufficient pam_permit.so
-auth      include   common-auth
-account   include   common-account
-EOF_PAM
-
-    success "Staged all QML assets, brand logos, and PAM configs."
-
-    if [ -f "$ROOTFS_DIR/usr/bin/tinexus-serviced" ]; then
-        ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
-    else
-        warn "tinexus-serviced not found in rootfs! System may not boot properly."
-    fi
-
-    # Ensure dynamic linker cache is populated for all staged binaries and libraries
-    mkdir -p "$ROOTFS_DIR/etc"
-    cat > "$ROOTFS_DIR/etc/ld.so.conf" << 'EOF_LD'
-/lib
-/usr/lib
-/lib/x86_64-linux-gnu
-/usr/lib/x86_64-linux-gnu
-/usr/local/lib
-EOF_LD
+    # Run ldconfig to cache all shared libraries
     if command -v ldconfig >/dev/null 2>&1; then
         ldconfig -r "$ROOTFS_DIR" 2>/dev/null || true
     fi
@@ -1237,8 +640,8 @@ build_initramfs() {
     else
         warn "tinexus-splash binary not found!"
     fi
-    if [ -f "$PROJECT_DIR/Temp/tinexus-logo.png" ]; then
-        cp -L "$PROJECT_DIR/Temp/tinexus-logo.png" "$init_staging/"
+    if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ]; then
+        cp -L "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$init_staging/tinexus-logo.png"
     fi
 
     local bb_bin="$(command -v busybox || command -v sh || echo /bin/sh)"
@@ -1281,13 +684,12 @@ build_initramfs() {
         done
     fi
 
-    # Stage modprobe priority configuration in initramfs (prevents snd_hda_intel winning race during coldplug)
+    # Stage modprobe priority configuration in initramfs (auto-detect dsp_driver=0)
     info "Staging audio driver priority configuration into initramfs (/etc/modprobe.d/sof-priority.conf)..."
     mkdir -p "$init_staging/etc/modprobe.d"
     cat << 'EOF' > "$init_staging/etc/modprobe.d/sof-priority.conf"
-# Force Sound Open Firmware (SOF) on DSP-capable Intel hardware platforms
-# dsp_driver: Force the DSP driver for Intel DSP (0=auto, 1=legacy, 2=SST, 3=SOF, 4=AVS)
-options snd-intel-dspcfg dsp_driver=3
+# Universal DSP driver configuration for Intel hardware platforms (0=auto-detect)
+options snd-intel-dspcfg dsp_driver=0
 
 # Ensure SOF drivers are loaded and preferred before snd_hda_intel on Intel DSP platforms
 softdep snd_hda_intel pre: snd_sof_pci_intel_cnl snd_sof_pci_intel_icl snd_sof_pci_intel_tgl snd_sof_pci_intel_mtl snd_sof_intel_hda_generic
@@ -1930,6 +1332,7 @@ validate_iso() {
     [ -f "$ISO_TREE/boot/vmlinuz" ] || fatal "vmlinuz missing."
     [ -f "$ISO_TREE/boot/grub/grub.cfg" ] || fatal "grub.cfg missing."
     [ -f "$ROOTFS_DIR/usr/share/tinexus-settings/qml/MainWindow.qml" ] || fatal "MainWindow.qml missing from rootfs."
+    [ -e "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/libtinexus_common.so.0" ] || [ -e "$ROOTFS_DIR/usr/lib/libtinexus_common.so.0" ] || fatal "CRITICAL ERROR: libtinexus_common.so.0 missing from rootfs in validate_iso!"
 
     # Validate ISO vmlinuz version synchronization with rootfs modules
     local actual_iso_kver
@@ -1966,8 +1369,8 @@ validate_iso() {
     # Verify audio driver modprobe priority configuration
     info "Verifying audio driver modprobe.d priority configuration in rootfs..."
     [ -f "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf" ] || fatal "CRITICAL ERROR: $ROOTFS_DIR/etc/modprobe.d/sof-priority.conf is missing!"
-    grep -q "dsp_driver=3" "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf" || fatal "CRITICAL ERROR: dsp_driver=3 missing in rootfs sof-priority.conf!"
-    success "Verified /etc/modprobe.d/sof-priority.conf is correctly staged with dsp_driver=3."
+    grep -q "dsp_driver=0" "$ROOTFS_DIR/etc/modprobe.d/sof-priority.conf" || fatal "CRITICAL ERROR: dsp_driver=0 missing in rootfs sof-priority.conf!"
+    success "Verified /etc/modprobe.d/sof-priority.conf is correctly staged with dsp_driver=0 (universal auto-detect)."
 
     (cd "$BUILD_DIR" && sha256sum "$(basename "$OUTPUT_ISO")" > "$(basename "$OUTPUT_ISO").sha256")
     
