@@ -17,11 +17,12 @@ LauncherBridge::LauncherBridge(QObject* parent)
 {
     m_allApps = {
         LauncherItem{"Tinexus Terminal", "tinexus-terminal", "Default Wayland GPU Terminal", "utilities-terminal", "App", true},
-        LauncherItem{"Foot Terminal", "foot", "Wayland Lightweight Terminal Emulator", "utilities-terminal", "App", false},
+        LauncherItem{"Firefox", "env MOZ_ENABLE_WAYLAND=1 firefox", "Mozilla Firefox Web Browser", "firefox", "App", false},
         LauncherItem{"Tinexus Files", "tinexus-files", "Lightweight Miller Column File Manager", "system-file-manager", "App", false},
         LauncherItem{"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", "preferences-desktop", "App", false},
         LauncherItem{"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", "utilities-system-monitor", "App", false},
         LauncherItem{"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", "system-software-install", "App", false},
+        LauncherItem{"Foot Terminal", "foot", "Wayland Lightweight Terminal Emulator", "utilities-terminal", "App", false},
 
         // Restored System Actions (from txui LauncherWidget.cpp §get_system_actions)
         LauncherItem{"Lock Screen", "tinexus-lock", "Lock the current desktop session", "system-lock-screen", "System", false},

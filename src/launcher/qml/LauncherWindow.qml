@@ -4,15 +4,18 @@
 // ============================================================================
 import QtQuick
 import QtQuick.Window
+import QtQuick.Controls
 import "../../common/qml"
 
 Window {
     id: rootWindow
 
     width: 640
-    height: Math.min(480, (searchBox.height + resultsCol.height + 36))
+    height: Math.min(520, (searchBox.height + (resultsList.count > 0 ? resultsList.height + 20 : 0) + 36))
     color: "transparent"
-    flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+    flags: Qt.FramelessWindowHint
+
+    visible: false
 
     onVisibleChanged: {
         if (visible) {
@@ -20,8 +23,18 @@ Window {
             if (typeof bridge !== "undefined") {
                 bridge.query = ""
             }
-            searchInput.forceActiveFocus()
+            Qt.callLater(function() {
+                rootWindow.requestActivate();
+                searchInput.forceActiveFocus();
+            });
         }
+    }
+
+    Component.onCompleted: {
+        Qt.callLater(function() {
+            rootWindow.requestActivate();
+            searchInput.forceActiveFocus();
+        });
     }
 
     // Container with LiquidGlass using explicit launcher glass.background (40px blur)
@@ -63,6 +76,12 @@ Window {
                 border.color: searchInput.activeFocus ? Qt.rgba(1, 1, 1, 0.20) : Qt.rgba(1, 1, 1, 0.08)
                 border.width: 1
 
+                MouseArea {
+                    anchors.fill: parent
+                    z: -1
+                    onClicked: searchInput.forceActiveFocus()
+                }
+
                 Row {
                     anchors.fill: parent
                     anchors.leftMargin: 14
@@ -93,11 +112,11 @@ Window {
                             id: searchInput
                             anchors.fill: parent
                             verticalAlignment: TextInput.AlignVCenter
-                            text: typeof bridge !== "undefined" ? bridge.query : ""
                             color: "#FFFFFF"
                             font.pixelSize: 17
                             focus: true
                             selectByMouse: true
+                            activeFocusOnTab: true
 
                             onTextChanged: {
                                 if (typeof bridge !== "undefined" && bridge.query !== text) {
@@ -120,7 +139,7 @@ Window {
                                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                                     bridge.launchSelected();
                                     event.accepted = true;
-                                } else if (event.key === Qt.Key_Escape) {
+                                } else if (event.key === Qt.Key_Escape || ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_K)) {
                                     bridge.closeLauncher();
                                     event.accepted = true;
                                 } else if ((event.modifiers & Qt.ControlModifier) && event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
@@ -150,116 +169,136 @@ Window {
                 visible: typeof bridge !== "undefined" && bridge.hasResults
             }
 
-            // ── Search Results List ─────────────────────────────────
-            Column {
-                id: resultsCol
+            // ── Search Results List (Scrollable ListView) ───────────
+            ListView {
+                id: resultsList
                 width: parent.width
+                height: Math.min(380, count * 56)
+                clip: true
                 spacing: 4
+                model: typeof bridge !== "undefined" ? bridge.results : []
+                currentIndex: typeof bridge !== "undefined" ? bridge.selectedIndex : 0
 
-                Repeater {
-                    model: typeof bridge !== "undefined" ? bridge.results : []
+                ScrollBar.vertical: ScrollBar {
+                    policy: resultsList.contentHeight > resultsList.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                }
 
-                    delegate: Rectangle {
-                        id: resultRow
-                        readonly property bool isSelected: (typeof bridge !== "undefined" && bridge.selectedIndex === index)
+                Connections {
+                    target: typeof bridge !== "undefined" ? bridge : null
+                    function onSelectedIndexChanged() {
+                        if (typeof bridge !== "undefined") {
+                            resultsList.positionViewAtIndex(bridge.selectedIndex, ListView.Contain)
+                        }
+                    }
+                    function onQueryChanged() {
+                        if (typeof bridge !== "undefined" && searchInput.text !== bridge.query) {
+                            searchInput.text = bridge.query
+                        }
+                    }
+                }
 
-                        width: parent.width
-                        height: 52
-                        radius: 10
-                        color: isSelected ? "#0A84FF" : (rowMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : "transparent")
+                delegate: Rectangle {
+                    id: resultRow
+                    readonly property bool isSelected: (typeof bridge !== "undefined" && bridge.selectedIndex === index)
 
-                        Row {
-                            anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 12
-                            spacing: 12
+                    width: resultsList.width
+                    height: 52
+                    radius: 10
+                    color: isSelected ? "#0A84FF" : (rowMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : "transparent")
 
-                            // Icon Glyph
-                            Rectangle {
-                                width: 32
-                                height: 32
-                                radius: 8
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: {
-                                    if (modelData.kind === "Calculator") return "#FF9F0A";
-                                    if (modelData.kind === "Store") return "#30B0C7";
-                                    return isSelected ? Qt.rgba(1, 1, 1, 0.25) : "#252834";
-                                }
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        spacing: 12
 
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: {
-                                        if (modelData.kind === "Calculator") return "=";
-                                        if (modelData.kind === "Store") return "🛒";
-                                        if (modelData.name.indexOf("Terminal") !== -1) return ">_";
-                                        if (modelData.name.indexOf("Files") !== -1) return "📁";
-                                        if (modelData.name.indexOf("Settings") !== -1) return "⚙";
-                                        if (modelData.name.indexOf("Monitor") !== -1) return "📊";
-                                        return "📦";
-                                    }
-                                    color: "#FFFFFF"
-                                    font.bold: true
-                                    font.pixelSize: 14
-                                }
+                        // Icon Glyph
+                        Rectangle {
+                            width: 32
+                            height: 32
+                            radius: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: {
+                                if (modelData.kind === "Calculator") return "#FF9F0A";
+                                if (modelData.kind === "Store") return "#30B0C7";
+                                if (modelData.name.indexOf("Firefox") !== -1) return "#EA580C";
+                                return isSelected ? Qt.rgba(1, 1, 1, 0.25) : "#252834";
                             }
 
-                            // Text Column
-                            Column {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: parent.width - 120
-                                spacing: 2
-
-                                Text {
-                                    text: modelData.name
-                                    color: "#FFFFFF"
-                                    font.pixelSize: 14
-                                    font.bold: true
-                                    elide: Text.ElideRight
-                                    width: parent.width
+                            Text {
+                                anchors.centerIn: parent
+                                text: {
+                                    if (modelData.kind === "Calculator") return "=";
+                                    if (modelData.kind === "Store") return "🛒";
+                                    if (modelData.name.indexOf("Firefox") !== -1) return "🌐";
+                                    if (modelData.name.indexOf("Terminal") !== -1) return ">_";
+                                    if (modelData.name.indexOf("Files") !== -1) return "📁";
+                                    if (modelData.name.indexOf("Settings") !== -1) return "⚙";
+                                    if (modelData.name.indexOf("Monitor") !== -1) return "📊";
+                                    return "📦";
                                 }
-
-                                Text {
-                                    text: modelData.description
-                                    color: isSelected ? Qt.rgba(1, 1, 1, 0.85) : Qt.rgba(1, 1, 1, 0.50)
-                                    font.pixelSize: 11
-                                    elide: Text.ElideRight
-                                    width: parent.width
-                                }
-                            }
-
-                            // Right Badges (⌘1..9 or Action badge)
-                            Item {
-                                width: 50
-                                height: parent.height
-
-                                Rectangle {
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: index < 9 ? 24 : 48
-                                    height: 20
-                                    radius: 4
-                                    color: isSelected ? Qt.rgba(1, 1, 1, 0.22) : Qt.rgba(1, 1, 1, 0.08)
-
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: index < 9 ? ("⌘" + (index + 1)) : "Enter"
-                                        color: isSelected ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.60)
-                                        font.pixelSize: 10
-                                        font.bold: true
-                                    }
-                                }
+                                color: "#FFFFFF"
+                                font.bold: true
+                                font.pixelSize: 14
                             }
                         }
 
-                        MouseArea {
-                            id: rowMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (typeof bridge !== "undefined") {
-                                    bridge.launchIndex(index);
+                        // Text Column
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 120
+                            spacing: 2
+
+                            Text {
+                                text: modelData.name
+                                color: "#FFFFFF"
+                                font.pixelSize: 14
+                                font.bold: true
+                                elide: Text.ElideRight
+                                width: parent.width
+                            }
+
+                            Text {
+                                text: modelData.description
+                                color: isSelected ? Qt.rgba(1, 1, 1, 0.85) : Qt.rgba(1, 1, 1, 0.50)
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                                width: parent.width
+                            }
+                        }
+
+                        // Right Badges (⌘1..9 or Action badge)
+                        Item {
+                            width: 50
+                            height: parent.height
+
+                            Rectangle {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: index < 9 ? 24 : 48
+                                height: 20
+                                radius: 4
+                                color: isSelected ? Qt.rgba(1, 1, 1, 0.22) : Qt.rgba(1, 1, 1, 0.08)
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: index < 9 ? ("⌘" + (index + 1)) : "Enter"
+                                    color: isSelected ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.60)
+                                    font.pixelSize: 10
+                                    font.bold: true
                                 }
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof bridge !== "undefined") {
+                                bridge.launchIndex(index);
                             }
                         }
                     }

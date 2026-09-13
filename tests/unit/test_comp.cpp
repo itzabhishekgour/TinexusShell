@@ -83,22 +83,104 @@ void test_frame_scheduler() {
 
 void test_shortcut_engine() {
     auto& engine = tinexus::comp::ShortcutEngine::instance();
-    bool triggered = false;
+    std::string last_shortcut;
 
-    engine.set_shortcut_callback([&triggered](const std::string& shortcut) {
-        if (shortcut == "launcher_toggle") {
-            triggered = true;
-        }
+    engine.set_shortcut_callback([&last_shortcut](const std::string& shortcut) {
+        last_shortcut = shortcut;
     });
 
-    constexpr uint32_t MOD_CTRL = (1 << 2);
-    constexpr uint32_t KEY_K = 37;
+    constexpr uint32_t MOD_NONE  = 0;
+    constexpr uint32_t MOD_CTRL  = (1 << 2);
+    constexpr uint32_t MOD_ALT   = (1 << 3);
+    constexpr uint32_t MOD_LOGO  = (1 << 6);
 
-    // Test Ctrl+K press
-    assert(engine.process_key_event(MOD_CTRL, KEY_K, true) == true);
-    assert(triggered == true);
+    constexpr uint32_t KEY_K          = 37;
+    constexpr uint32_t KEY_A          = 30;
+    constexpr uint32_t KEY_SPACE      = 57;
+    constexpr uint32_t KEY_LEFTMETA   = 125;
+    constexpr uint32_t KEY_RIGHTMETA  = 126;
+    constexpr uint32_t KEY_L          = 38;
+    constexpr uint32_t KEY_TAB        = 15;
+    constexpr uint32_t KEY_LEFT       = 105;
+    constexpr uint32_t KEY_RIGHT      = 106;
+    constexpr uint32_t KEY_UP         = 103;
+    constexpr uint32_t KEY_DOWN       = 108;
+    constexpr uint32_t KEY_VOLUMEUP   = 115;
+    constexpr uint32_t KEY_VOLUMEDOWN = 114;
+    constexpr uint32_t KEY_MUTE       = 113;
 
-    std::cout << "[PASS] test_shortcut_engine\n";
+    // 1. Phase G: Ctrl+K opens launcher and returns true (swallowed)
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_CTRL, KEY_K, true, 0x006b) == true);
+    assert(last_shortcut == "launcher_toggle");
+
+    // 2. Phase G: Key release (is_pressed=false) must NEVER be swallowed
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_CTRL, KEY_K, false, 0x006b) == false);
+    assert(last_shortcut.empty());
+
+    // 3. Phase G: Ordinary key press (e.g. typing 'k' or 'a' without Ctrl) must NEVER be swallowed
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_NONE, KEY_K, true, 0x006b) == false);
+    assert(last_shortcut.empty());
+    assert(engine.process_key_event(MOD_NONE, KEY_A, true, 0x0061) == false);
+    assert(last_shortcut.empty());
+
+    // 4. Phase G: Alternative launcher triggers
+    // Ctrl+Space
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_CTRL, KEY_SPACE, true, 0x0020) == true);
+    assert(last_shortcut == "launcher_toggle");
+
+    // Bare Super/Meta key
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_NONE, KEY_LEFTMETA, true, 0) == true);
+    assert(last_shortcut == "launcher_toggle");
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_NONE, KEY_RIGHTMETA, true, 0) == true);
+    assert(last_shortcut == "launcher_toggle");
+
+    // 5. Phase G: Lock screen shortcut (Super+L)
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_LOGO, KEY_L, true, 0x006c) == true);
+    assert(last_shortcut == "lock_screen");
+
+    // 6. Phase G: Window snapping shortcuts (Super+Arrows)
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_LOGO, KEY_LEFT, true, 0) == true);
+    assert(last_shortcut == "snap_left");
+
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_LOGO, KEY_RIGHT, true, 0) == true);
+    assert(last_shortcut == "snap_right");
+
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_LOGO, KEY_UP, true, 0) == true);
+    assert(last_shortcut == "maximize");
+
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_LOGO, KEY_DOWN, true, 0) == true);
+    assert(last_shortcut == "restore");
+
+    // 7. Phase G: Window switcher (Alt+Tab)
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_ALT, KEY_TAB, true, 0) == true);
+    assert(last_shortcut == "alttab_next");
+
+    // 8. Phase G: Multimedia audio keys
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_NONE, KEY_VOLUMEUP, true, 0x1008ff13) == true);
+    assert(last_shortcut == "volume_up");
+
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_NONE, KEY_VOLUMEDOWN, true, 0x1008ff11) == true);
+    assert(last_shortcut == "volume_down");
+
+    last_shortcut.clear();
+    assert(engine.process_key_event(MOD_NONE, KEY_MUTE, true, 0x1008ff12) == true);
+    assert(last_shortcut == "volume_mute");
+
+    std::cout << "[PASS] test_shortcut_engine (Phase G: Ctrl+K & Input Swallowing Verified)\n";
 }
 
 int main() {

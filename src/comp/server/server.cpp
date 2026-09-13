@@ -52,6 +52,22 @@ static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
                 tinexus::log::info("[Server] Simulating pointer click via FIFO");
                 tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 1);
                 tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 0);
+            } else if (cmd.starts_with("screenshot ")) {
+                std::string path = cmd.substr(11);
+                while (!path.empty() && (path.back() == '\n' || path.back() == '\r' || path.back() == ' ')) {
+                    path.pop_back();
+                }
+                tinexus::log::info("[Server] Requested screenshot to '{}'", path);
+                backend->dump_screenshot(path);
+            } else if (cmd.starts_with("warp ")) {
+                double x = 0, y = 0;
+                if (sscanf(cmd.c_str() + 5, "%lf %lf", &x, &y) == 2) {
+                    backend->warp_cursor(x, y);
+                }
+            } else if (cmd.starts_with("click_ssd")) {
+                tinexus::log::info("[Server] Simulating click at cursor position via FIFO");
+                backend->simulate_click(0x110, 1);
+                backend->simulate_click(0x110, 0);
             }
         }
     }
@@ -164,7 +180,7 @@ bool TinexusServer::initialize() {
                     return;
                 }
                 if (m_backend->toggle_launcher()) {
-                    log::info("[Server] Ctrl+K: Closed active launcher");
+                    log::info("[Server] Ctrl+K: Toggled active launcher");
                     return;
                 }
                 log::info("[Server] Ctrl+K: Spawning tinexus-launcher directly");
@@ -175,6 +191,22 @@ bool TinexusServer::initialize() {
                     if (grandchild < 0) { _exit(1); }
                     if (grandchild == 0) {
                         setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
+                        setenv("QT_QPA_PLATFORM", "wayland", 1);
+                        setenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell", 1);
+                        setenv("QT_PLUGIN_PATH", "/usr/lib/x86_64-linux-gnu/qt6/plugins", 0);
+                        setenv("QML_IMPORT_PATH", "/usr/lib/x86_64-linux-gnu/qt6/qml:/usr/share/tinexus", 0);
+                        setenv("QML2_IMPORT_PATH", "/usr/lib/x86_64-linux-gnu/qt6/qml:/usr/share/tinexus", 0);
+                        const char* home = std::getenv("HOME");
+                        if (home) {
+                            std::string lib_path = std::string(home) + "/tinexus/build/debug/src/common";
+                            const char* old_ld = std::getenv("LD_LIBRARY_PATH");
+                            std::string new_ld = old_ld ? lib_path + ":" + old_ld : lib_path;
+                            setenv("LD_LIBRARY_PATH", new_ld.c_str(), 0);
+                        }
+                        const char* rundir = getenv("XDG_RUNTIME_DIR");
+                        if (!rundir || !*rundir) {
+                            setenv("XDG_RUNTIME_DIR", "/run/user/0", 1);
+                        }
                         setsid();
                         execlp("tinexus-launcher", "tinexus-launcher", nullptr);
                         execl("/usr/bin/tinexus-launcher", "tinexus-launcher", nullptr);
