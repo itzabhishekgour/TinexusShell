@@ -68,24 +68,50 @@ void signal_handler(int sig) {
 }
 
 static std::string get_active_wallpaper_path() {
-    // 1. Check /run/user/<uid>/tinexus/current_wallpaper
+    auto check_path = [](std::string p) -> std::string {
+        p.erase(0, p.find_first_not_of(" \t\r\n\"'"));
+        p.erase(p.find_last_not_of(" \t\r\n\"'") + 1);
+        if (p.empty()) return "";
+        if (fs::exists(p)) return p;
+        // Check /usr/share/backgrounds/ fallback with basename
+        std::string fname = fs::path(p).filename().string();
+        std::string bg_candidate = "/usr/share/backgrounds/" + fname;
+        if (fs::exists(bg_candidate)) return bg_candidate;
+        return "";
+    };
+
+    // 1. Check /tmp/current_wallpaper (universal IPC across users)
+    if (fs::exists("/tmp/current_wallpaper")) {
+        std::ifstream f("/tmp/current_wallpaper");
+        std::string p;
+        if (std::getline(f, p)) {
+            std::string valid = check_path(p);
+            if (!valid.empty()) return valid;
+        }
+    }
+
+    // 2. Check XDG_RUNTIME_DIR and standard user runtime dirs
     const char* xdg_run = std::getenv("XDG_RUNTIME_DIR");
     std::string run_path = xdg_run ? (std::string(xdg_run) + "/tinexus/current_wallpaper") : "";
     if (!run_path.empty() && fs::exists(run_path)) {
         std::ifstream f(run_path);
         std::string p;
-        if (std::getline(f, p) && !p.empty() && fs::exists(p)) {
-            return p;
+        if (std::getline(f, p)) {
+            std::string valid = check_path(p);
+            if (!valid.empty()) return valid;
         }
     }
-    // 2. Check /tmp/current_wallpaper
-    if (fs::exists("/tmp/current_wallpaper")) {
-        std::ifstream f("/tmp/current_wallpaper");
-        std::string p;
-        if (std::getline(f, p) && !p.empty() && fs::exists(p)) {
-            return p;
+    for (const auto& rdir : {"/run/user/1000/tinexus/current_wallpaper", "/run/user/0/tinexus/current_wallpaper"}) {
+        if (fs::exists(rdir)) {
+            std::ifstream f(rdir);
+            std::string p;
+            if (std::getline(f, p)) {
+                std::string valid = check_path(p);
+                if (!valid.empty()) return valid;
+            }
         }
     }
+
     // 3. Check ~/.config/tinexus/settings.toml for wallpaper_path
     const char* home = std::getenv("HOME");
     std::string cfg_path = home ? (std::string(home) + "/.config/tinexus/settings.toml") : "";
@@ -97,18 +123,18 @@ static std::string get_active_wallpaper_path() {
                 auto pos = line.find('=');
                 if (pos != std::string::npos) {
                     std::string p = line.substr(pos + 1);
-                    p.erase(0, p.find_first_not_of(" \t\""));
-                    p.erase(p.find_last_not_of(" \t\"") + 1);
-                    if (!p.empty() && fs::exists(p)) {
-                        return p;
-                    }
+                    std::string valid = check_path(p);
+                    if (!valid.empty()) return valid;
                 }
             }
         }
     }
+
     // 4. Default candidates
     for (const auto& c : {"/usr/share/backgrounds/tinexus-default.jpg",
                          "/usr/share/backgrounds/tinexus-os-primary.jpg",
+                         "/usr/share/backgrounds/sunset-gradient.png",
+                         "/usr/share/backgrounds/emerald-matrix.png",
                          "/home/tinexus/Pictures/tinexus-default.jpg",
                          "assets/wallpaper/tinexus-default.jpg"}) {
         if (fs::exists(c)) return c;
@@ -203,9 +229,13 @@ int main() {
 
         wallpaper::WallpaperBuffer buf = provider.render_buffer(width, height);
         if (render_target->data() && !buf.pixels.empty()) {
+            // Synchronize both double-buffers in the swapchain
+            std::copy(buf.pixels.begin(), buf.pixels.end(), render_target->data());
+            render_target->present();
             std::copy(buf.pixels.begin(), buf.pixels.end(), render_target->data());
             render_target->present();
             connection.flush();
+            connection.roundtrip();
             log::info("[Wallpaper] Wallpaper committed to BACKGROUND layer surface successfully.");
         }
     };
@@ -214,7 +244,7 @@ int main() {
     render_and_commit(w, h);
     std::string last_loaded_path = get_active_wallpaper_path();
 
-    // Resilient Wayland event loop: non-blocking poll with 1000ms timeout
+    // Resilient Wayland event loop: non-blocking poll with 250ms timeout for instant response
     while (g_running) {
         std::string current_path = get_active_wallpaper_path();
         if (g_reload_requested || (!current_path.empty() && current_path != last_loaded_path)) {
@@ -232,7 +262,7 @@ int main() {
         struct pollfd pfd{};
         pfd.fd = wl_display_get_fd(connection.display());
         pfd.events = POLLIN;
-        int ret = poll(&pfd, 1, 1000); // 1-second timeout
+        int ret = poll(&pfd, 1, 250); // 250ms responsive timeout
         if (ret > 0) {
             wl_display_read_events(connection.display());
             wl_display_dispatch_pending(connection.display());

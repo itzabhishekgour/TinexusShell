@@ -5,7 +5,7 @@ Row {
     id: root
     spacing: 8
 
-    property var targetWindow: (typeof window !== "undefined" ? window : (typeof rootWindow !== "undefined" ? rootWindow : null))
+    property var targetWindow: (typeof window !== "undefined" ? window : (typeof rootWindow !== "undefined" ? rootWindow : root.Window.window))
     property bool isHovered: trafficHoverArea.containsMouse
 
     MouseArea {
@@ -42,8 +42,13 @@ Row {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (root.targetWindow) {
-                            root.targetWindow.close()
+                        var win = root.targetWindow ? root.targetWindow : root.Window.window
+                        if (win) {
+                            if (typeof win.close === "function") {
+                                win.close()
+                            } else {
+                                win.visible = false
+                            }
                         } else {
                             Qt.quit()
                         }
@@ -74,8 +79,13 @@ Row {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (root.targetWindow) {
-                            root.targetWindow.showMinimized()
+                        var win = root.targetWindow ? root.targetWindow : root.Window.window
+                        if (win) {
+                            if (typeof win.showMinimized === "function") {
+                                win.showMinimized()
+                            } else {
+                                win.visibility = Window.Minimized
+                            }
                         }
                     }
                 }
@@ -104,11 +114,12 @@ Row {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (root.targetWindow) {
-                            if (root.targetWindow.visibility === Window.Maximized) {
-                                root.targetWindow.showNormal()
+                        var win = root.targetWindow ? root.targetWindow : root.Window.window
+                        if (win) {
+                            if (win.visibility === Window.Maximized) {
+                                win.showNormal()
                             } else {
-                                root.targetWindow.showMaximized()
+                                win.showMaximized()
                             }
                         }
                     }

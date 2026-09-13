@@ -49,9 +49,16 @@ public:
      */
     static inline bool ensure_runtime_dir() noexcept {
         std::string dir = get_runtime_dir();
+        const char* xdg = ::getenv("XDG_RUNTIME_DIR");
+        if (xdg && *xdg != '\0') {
+            struct stat st_xdg{};
+            if (::stat(xdg, &st_xdg) != 0) {
+                ::mkdir(xdg, 0755);
+            }
+        }
         struct stat st{};
         if (::stat(dir.c_str(), &st) != 0) {
-            if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
+            if (::mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
                 return false;
             }
         }

@@ -83,6 +83,8 @@ int main(int argc, char* argv[]) {
             appDir + QStringLiteral("/../src/settings-ui/qml/MainWindow.qml"),
             appDir + QStringLiteral("/qml/MainWindow.qml"),
             QStringLiteral("/usr/share/tinexus-settings/qml/MainWindow.qml"),
+            QStringLiteral("/usr/share/tinexus/settings-ui/qml/MainWindow.qml"),
+            QStringLiteral("/usr/share/tinexus-settings-ui/qml/MainWindow.qml"),
             QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/settings-ui/qml/MainWindow.qml")
         };
         for (const auto& cand : candidates) {

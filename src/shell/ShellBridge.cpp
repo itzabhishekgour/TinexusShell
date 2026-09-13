@@ -64,6 +64,8 @@ ShellBridge::ShellBridge(QObject* parent)
 void ShellBridge::resolveLogoUrl() {
     const QStringList candidates = {
         QStringLiteral("/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png"),
+        QStringLiteral("/usr/share/tinexus/tinexus-logo.png"),
+        QStringLiteral("/usr/share/pixmaps/tinexus-logo.png"),
         QStringLiteral("assets/logo/tinexus-logo-32.png"),
         QStringLiteral("../assets/logo/tinexus-logo-32.png"),
         QStringLiteral("../../assets/logo/tinexus-logo-32.png"),
@@ -158,6 +160,29 @@ void ShellBridge::scanApplications() {
         } catch (...) {}
     }
 
+    // Ensure Firefox is always present if installed
+    bool has_firefox = false;
+    for (const auto& existing : m_applicationsList) {
+        if (existing.toMap().value(QStringLiteral("name")).toString().contains(QStringLiteral("Firefox"), Qt::CaseInsensitive)) {
+            has_firefox = true;
+            break;
+        }
+    }
+    if (!has_firefox && (fs::exists("/usr/bin/firefox") || fs::exists("/usr/share/applications/firefox.desktop"))) {
+        QVariantMap ff;
+        ff[QStringLiteral("name")] = QStringLiteral("Firefox");
+        ff[QStringLiteral("exec")] = QStringLiteral("env MOZ_ENABLE_WAYLAND=1 firefox");
+        ff[QStringLiteral("icon")] = QStringLiteral("firefox");
+        ff[QStringLiteral("comment")] = QStringLiteral("Mozilla Firefox Web Browser");
+        m_applicationsList.append(ff);
+    }
+
+    // Alphabetically sort applications for quick, intuitive navigation
+    std::sort(m_applicationsList.begin(), m_applicationsList.end(), [](const QVariant& a, const QVariant& b) {
+        return a.toMap().value(QStringLiteral("name")).toString().toLower() <
+               b.toMap().value(QStringLiteral("name")).toString().toLower();
+    });
+
     emit applicationsListChanged();
 }
 
@@ -213,6 +238,16 @@ void ShellBridge::pollBattery() {
     }
 }
 
+void ShellBridge::syncAudioState() {
+    int cur_vol = hardware::AudioUtils::get_volume_percent();
+    bool cur_muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
+    if (m_volume != cur_vol || m_soundMuted != cur_muted) {
+        m_volume = cur_vol;
+        m_soundMuted = cur_muted;
+        emit volumeChanged();
+    }
+}
+
 void ShellBridge::updateClock() {
     const QDateTime now = QDateTime::currentDateTime();
     const QString newTime = now.toString(QStringLiteral("h:mm AP"));
@@ -225,6 +260,7 @@ void ShellBridge::updateClock() {
     }
 
     pollBattery();
+    syncAudioState();
 }
 
 void ShellBridge::setVolume(int vol) {
@@ -300,7 +336,16 @@ void ShellBridge::setNotificationsOpen(bool open) {
 }
 
 void ShellBridge::setVolumeFlyoutOpen(bool open) {
-    if (open) closeAllFlyouts();
+    if (open) {
+        closeAllFlyouts();
+        int cur_vol = hardware::AudioUtils::get_volume_percent();
+        bool cur_muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
+        if (m_volume != cur_vol || m_soundMuted != cur_muted) {
+            m_volume = cur_vol;
+            m_soundMuted = cur_muted;
+            emit volumeChanged();
+        }
+    }
     m_volumeFlyoutOpen = open;
     emit flyoutStateChanged();
 }
@@ -375,7 +420,13 @@ void ShellBridge::launchApp(const QString& execCmd) {
     QStringList parts = QProcess::splitCommand(execCmd);
     if (parts.isEmpty()) return;
     QString prog = parts.takeFirst();
-    QProcess::startDetached(prog, parts);
+    QProcess proc;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    proc.setProcessEnvironment(env);
+    proc.setProgram(prog);
+    proc.setArguments(parts);
+    proc.startDetached();
 }
 
 void ShellBridge::openWifiSettings() {

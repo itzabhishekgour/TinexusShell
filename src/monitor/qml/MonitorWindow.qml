@@ -22,6 +22,15 @@ Window {
 
     property int activeTab: 0 // 0: Processes, 1: Performance, 2: Services
 
+    // Strict fixed-column geometry for Activity Monitor table
+    readonly property int colWidthName: 230
+    readonly property int colWidthPid: 65
+    readonly property int colWidthUser: 80
+    readonly property int colWidthCpu: 75
+    readonly property int colWidthMem: 85
+    readonly property int colWidthDisk: 95
+    readonly property int colSpacing: 8
+
     onActiveTabChanged: {
         if (activeTab === 1) {
             Qt.callLater(function() {
@@ -59,115 +68,116 @@ Window {
                 onPressed: rootWindow.startSystemMove()
             }
 
-            RowLayout {
-                anchors.fill: parent
+            // Left: Traffic lights and title
+            Row {
+                anchors.left: parent.left
                 anchors.leftMargin: 14
-                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
                 spacing: 12
 
                 MacTrafficLights {
                     targetWindow: rootWindow
-                    Layout.alignment: Qt.AlignVCenter
+                    anchors.verticalCenter: parent.verticalCenter
                 }
 
-                Item { Layout.preferredWidth: 8 }
+                Item { width: 4; height: 1 }
 
                 Text {
                     text: "Activity Monitor"
                     color: "#F3F4F6"
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
-                    Layout.alignment: Qt.AlignVCenter
+                    anchors.verticalCenter: parent.verticalCenter
                 }
+            }
 
-                Item { Layout.fillWidth: true }
+            // Center: Segmented Tab Switcher (Mathematically centered, zero collision)
+            Rectangle {
+                anchors.centerIn: parent
+                height: 30
+                width: 320
+                radius: 7
+                color: Qt.rgba(0, 0, 0, 0.4)
+                border.color: Qt.rgba(1, 1, 1, 0.08)
+                border.width: 1
 
-                // Segmented Tab Switcher
-                Rectangle {
-                    height: 30
-                    width: 320
-                    radius: 7
-                    color: Qt.rgba(0, 0, 0, 0.4)
-                    border.color: Qt.rgba(1, 1, 1, 0.08)
-                    border.width: 1
-                    Layout.alignment: Qt.AlignVCenter
+                Row {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    spacing: 2
 
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 2
-                        spacing: 2
+                    Repeater {
+                        model: [
+                            { label: "Processes", tab: 0 },
+                            { label: "Performance", tab: 1 },
+                            { label: "Services", tab: 2 }
+                        ]
 
-                        Repeater {
-                            model: [
-                                { label: "Processes", tab: 0 },
-                                { label: "Performance", tab: 1 },
-                                { label: "Services", tab: 2 }
-                            ]
+                        Rectangle {
+                            width: (parent.width - 4) / 3
+                            height: parent.height
+                            radius: 5
+                            color: rootWindow.activeTab === modelData.tab ? Qt.rgba(1, 1, 1, 0.15) : "transparent"
 
-                            Rectangle {
-                                width: (parent.width - 4) / 3
-                                height: parent.height
-                                radius: 5
-                                color: rootWindow.activeTab === modelData.tab ? Qt.rgba(1, 1, 1, 0.15) : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: rootWindow.activeTab === modelData.tab ? "#FFFFFF" : "#9CA3AF"
+                                font.pixelSize: 12
+                                font.weight: rootWindow.activeTab === modelData.tab ? Font.Medium : Font.Normal
+                            }
 
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: modelData.label
-                                    color: rootWindow.activeTab === modelData.tab ? "#FFFFFF" : "#9CA3AF"
-                                    font.pixelSize: 12
-                                    font.weight: rootWindow.activeTab === modelData.tab ? Font.Medium : Font.Normal
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: rootWindow.activeTab = modelData.tab
-                                }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: rootWindow.activeTab = modelData.tab
                             }
                         }
                     }
                 }
+            }
 
-                Item { Layout.fillWidth: true }
+            // Right: Live Pulse Indicator & Manual Refresh
+            Row {
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
 
-                // Live Pulse Indicator & Manual Refresh
-                RowLayout {
-                    spacing: 8
-                    Layout.alignment: Qt.AlignVCenter
+                Rectangle {
+                    width: 8
+                    height: 8
+                    radius: 4
+                    color: "#10B981"
+                    anchors.verticalCenter: parent.verticalCenter
 
-                    Rectangle {
-                        width: 8
-                        height: 8
-                        radius: 4
-                        color: "#10B981"
+                    SequentialAnimation on opacity {
+                        loops: Animation.Infinite
+                        PropertyAnimation { from: 0.4; to: 1.0; duration: 800; easing.type: Easing.InOutQuad }
+                        PropertyAnimation { from: 1.0; to: 0.4; duration: 800; easing.type: Easing.InOutQuad }
+                    }
+                }
 
-                        SequentialAnimation on opacity {
-                            loops: Animation.Infinite
-                            PropertyAnimation { from: 0.4; to: 1.0; duration: 800; easing.type: Easing.InOutQuad }
-                            PropertyAnimation { from: 1.0; to: 0.4; duration: 800; easing.type: Easing.InOutQuad }
-                        }
+                Rectangle {
+                    width: 26
+                    height: 26
+                    radius: 6
+                    color: refreshMa.containsMouse ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "↻"
+                        color: "#9CA3AF"
+                        font.pixelSize: 14
                     }
 
-                    Rectangle {
-                        width: 26
-                        height: 26
-                        radius: 6
-                        color: refreshMa.containsMouse ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "↻"
-                            color: "#9CA3AF"
-                            font.pixelSize: 14
-                        }
-
-                        MouseArea {
-                            id: refreshMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: monitorBridge.refresh()
-                        }
+                    MouseArea {
+                        id: refreshMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: monitorBridge.refresh()
                     }
                 }
             }
@@ -380,11 +390,11 @@ Window {
                             border.color: Qt.rgba(1, 1, 1, 0.06)
                             border.width: 1
 
-                            RowLayout {
+                            Row {
                                 anchors.fill: parent
                                 anchors.leftMargin: 12
                                 anchors.rightMargin: 12
-                                spacing: 8
+                                spacing: rootWindow.colSpacing
 
                                 // Helper function for sort header click
                                 Component {
@@ -392,13 +402,11 @@ Window {
                                     Item {
                                         property string title
                                         property string colKey
-                                        property int prefWidth
-                                        property bool isNum: false
+                                        property int fixedWidth
+                                        width: fixedWidth
+                                        height: parent.height
 
-                                        Layout.preferredWidth: prefWidth
-                                        Layout.fillHeight: true
-
-                                        RowLayout {
+                                        Row {
                                             anchors.fill: parent
                                             spacing: 4
 
@@ -407,18 +415,16 @@ Window {
                                                 color: monitorBridge.sortColumn === colKey ? "#38BDF8" : "#9CA3AF"
                                                 font.pixelSize: 11
                                                 font.weight: Font.DemiBold
-                                                verticalAlignment: Text.AlignVCenter
+                                                anchors.verticalCenter: parent.verticalCenter
                                             }
 
                                             Text {
                                                 text: monitorBridge.sortColumn === colKey ? (monitorBridge.sortAscending ? "▲" : "▼") : ""
                                                 color: "#38BDF8"
                                                 font.pixelSize: 9
-                                                verticalAlignment: Text.AlignVCenter
+                                                anchors.verticalCenter: parent.verticalCenter
                                                 visible: monitorBridge.sortColumn === colKey
                                             }
-
-                                            Item { Layout.fillWidth: true }
                                         }
 
                                         MouseArea {
@@ -430,39 +436,40 @@ Window {
                                 }
 
                                 Loader {
-                                    Layout.preferredWidth: 220; Layout.fillHeight: true
+                                    width: rootWindow.colWidthName; height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "Process Name"; item.colKey = "name"; item.prefWidth = 220; }
+                                    onLoaded: { item.title = "Process Name"; item.colKey = "name"; item.fixedWidth = rootWindow.colWidthName; }
                                 }
                                 Loader {
-                                    Layout.preferredWidth: 70; Layout.fillHeight: true
+                                    width: rootWindow.colWidthPid; height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "PID"; item.colKey = "pid"; item.prefWidth = 70; }
+                                    onLoaded: { item.title = "PID"; item.colKey = "pid"; item.fixedWidth = rootWindow.colWidthPid; }
                                 }
                                 Loader {
-                                    Layout.preferredWidth: 90; Layout.fillHeight: true
+                                    width: rootWindow.colWidthUser; height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "User"; item.colKey = "user"; item.prefWidth = 90; }
+                                    onLoaded: { item.title = "User"; item.colKey = "user"; item.fixedWidth = rootWindow.colWidthUser; }
                                 }
                                 Loader {
-                                    Layout.preferredWidth: 80; Layout.fillHeight: true
+                                    width: rootWindow.colWidthCpu; height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "% CPU"; item.colKey = "cpu"; item.prefWidth = 80; }
+                                    onLoaded: { item.title = "% CPU"; item.colKey = "cpu"; item.fixedWidth = rootWindow.colWidthCpu; }
                                 }
                                 Loader {
-                                    Layout.preferredWidth: 90; Layout.fillHeight: true
+                                    width: rootWindow.colWidthMem; height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "Memory"; item.colKey = "memory"; item.prefWidth = 90; }
+                                    onLoaded: { item.title = "Memory"; item.colKey = "memory"; item.fixedWidth = rootWindow.colWidthMem; }
                                 }
                                 Loader {
-                                    Layout.preferredWidth: 100; Layout.fillHeight: true
+                                    width: rootWindow.colWidthDisk; height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "Disk I/O"; item.colKey = "disk"; item.prefWidth = 100; }
+                                    onLoaded: { item.title = "Disk I/O"; item.colKey = "disk"; item.fixedWidth = rootWindow.colWidthDisk; }
                                 }
                                 Loader {
-                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    width: Math.max(50, parent.width - (rootWindow.colWidthName + rootWindow.colWidthPid + rootWindow.colWidthUser + rootWindow.colWidthCpu + rootWindow.colWidthMem + rootWindow.colWidthDisk + rootWindow.colSpacing * 6))
+                                    height: parent.height
                                     sourceComponent: headerColComp
-                                    onLoaded: { item.title = "State"; item.colKey = "state"; item.prefWidth = 80; }
+                                    onLoaded: { item.title = "State"; item.colKey = "state"; item.fixedWidth = parent.width; }
                                 }
                             }
                         }
@@ -515,98 +522,104 @@ Window {
                                     onDoubleClicked: monitorBridge.openKillDialog(false)
                                 }
 
-                                RowLayout {
+                                Row {
                                     anchors.fill: parent
                                     anchors.leftMargin: 12
                                     anchors.rightMargin: 12
-                                    spacing: 8
+                                    spacing: rootWindow.colSpacing
 
                                     // Process Name + Protected Vector Badge
-                                    RowLayout {
-                                        Layout.preferredWidth: 220
-                                        spacing: 6
+                                    Item {
+                                        width: rootWindow.colWidthName
+                                        height: parent.height
+                                        clip: true
 
-                                        Rectangle {
-                                            width: 14; height: 14; radius: 3
-                                            color: modelData.isProtected ? "#F59E0B" : (modelData.isSystem ? "#6366F1" : "#0A84FF")
-                                            opacity: 0.9
-                                            Layout.alignment: Qt.AlignVCenter
+                                        Row {
+                                            anchors.fill: parent
+                                            spacing: 6
+
+                                            Rectangle {
+                                                width: 14; height: 14; radius: 3
+                                                color: modelData.isProtected ? "#F59E0B" : (modelData.isSystem ? "#6366F1" : "#0A84FF")
+                                                opacity: 0.9
+                                                anchors.verticalCenter: parent.verticalCenter
+
+                                                Text {
+                                                    anchors.centerIn: parent
+                                                    text: modelData.isProtected ? "P" : (modelData.isSystem ? "S" : "A")
+                                                    color: "#FFFFFF"
+                                                    font.pixelSize: 9
+                                                    font.bold: true
+                                                }
+                                            }
 
                                             Text {
-                                                anchors.centerIn: parent
-                                                text: modelData.isProtected ? "P" : (modelData.isSystem ? "S" : "A")
-                                                color: "#FFFFFF"
-                                                font.pixelSize: 9
-                                                font.bold: true
+                                                width: parent.width - 24
+                                                text: modelData.name
+                                                color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#F3F4F6"
+                                                font.pixelSize: 12
+                                                font.weight: modelData.pid === monitorBridge.selectedPid ? Font.Medium : Font.Normal
+                                                elide: Text.ElideRight
+                                                anchors.verticalCenter: parent.verticalCenter
                                             }
-                                        }
-
-                                        Text {
-                                            text: modelData.name
-                                            color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#F3F4F6"
-                                            font.pixelSize: 12
-                                            font.weight: modelData.pid === monitorBridge.selectedPid ? Font.Medium : Font.Normal
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
-                                            Layout.alignment: Qt.AlignVCenter
                                         }
                                     }
 
                                     // PID
                                     Text {
-                                        Layout.preferredWidth: 70
+                                        width: rootWindow.colWidthPid
                                         text: modelData.pid
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#9CA3AF"
                                         font.pixelSize: 11
-                                        Layout.alignment: Qt.AlignVCenter
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
 
                                     // User
                                     Text {
-                                        Layout.preferredWidth: 90
+                                        width: rootWindow.colWidthUser
                                         text: modelData.user
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#9CA3AF"
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
-                                        Layout.alignment: Qt.AlignVCenter
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
 
                                     // CPU %
                                     Text {
-                                        Layout.preferredWidth: 80
+                                        width: rootWindow.colWidthCpu
                                         text: modelData.cpuStr
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : (modelData.cpu > 10.0 ? "#F87171" : "#E5E7EB")
                                         font.pixelSize: 11
                                         font.weight: modelData.cpu > 5.0 ? Font.Medium : Font.Normal
-                                        Layout.alignment: Qt.AlignVCenter
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
 
                                     // Memory
                                     Text {
-                                        Layout.preferredWidth: 90
+                                        width: rootWindow.colWidthMem
                                         text: modelData.rssStr
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#E5E7EB"
                                         font.pixelSize: 11
-                                        Layout.alignment: Qt.AlignVCenter
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
 
                                     // Disk I/O
                                     Text {
-                                        Layout.preferredWidth: 100
+                                        width: rootWindow.colWidthDisk
                                         text: modelData.diskStr
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#9CA3AF"
                                         font.pixelSize: 11
-                                        Layout.alignment: Qt.AlignVCenter
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
 
                                     // State
                                     Text {
-                                        Layout.fillWidth: true
+                                        width: Math.max(50, parent.width - (rootWindow.colWidthName + rootWindow.colWidthPid + rootWindow.colWidthUser + rootWindow.colWidthCpu + rootWindow.colWidthMem + rootWindow.colWidthDisk + rootWindow.colSpacing * 6))
                                         text: modelData.state
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#9CA3AF"
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
-                                        Layout.alignment: Qt.AlignVCenter
+                                        anchors.verticalCenter: parent.verticalCenter
                                     }
                                 }
                             }

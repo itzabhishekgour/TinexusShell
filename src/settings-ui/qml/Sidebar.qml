@@ -37,18 +37,34 @@ Rectangle {
         anchors.rightMargin: 10
         spacing: 10
 
-        // ── Top Header: Traffic Lights ────────────────────────────────────
-        RowLayout {
+        // ── Top Header: Traffic Lights & Drag Area ───────────────────────
+        Item {
             Layout.fillWidth: true
+            height: 24
             Layout.leftMargin: 4
             Layout.bottomMargin: 2
-            spacing: 8
 
-            MacTrafficLights {
-                id: trafficLights
+            MouseArea {
+                anchors.fill: parent
+                onPressed: {
+                    var win = root.Window.window
+                    if (win && typeof win.startSystemMove === "function") {
+                        win.startSystemMove()
+                    }
+                }
             }
 
-            Item { Layout.fillWidth: true }
+            RowLayout {
+                anchors.fill: parent
+                spacing: 8
+
+                MacTrafficLights {
+                    id: trafficLights
+                    targetWindow: root.Window.window
+                }
+
+                Item { Layout.fillWidth: true }
+            }
         }
 
         // ── Search Bar (Compact macOS style) ──────────────────────────────

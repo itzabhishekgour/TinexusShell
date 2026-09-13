@@ -21,6 +21,7 @@ int main(int argc, char* argv[]) {
 
     qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
     QGuiApplication app(argc, argv);
+    qunsetenv("QT_WAYLAND_SHELL_INTEGRATION");
     app.setApplicationName(QStringLiteral("tinexus-shell"));
     app.setDesktopFileName(QStringLiteral("io.tinexus.shell.TopBar"));
 

@@ -29,7 +29,7 @@ DockBridge::DockBridge(QObject* parent)
         DockIconItem{"tinexus-files",     "Files",     "tinexus-files",       "folder",   DockIconAppState::NotRunning},
         DockIconItem{"tinexus-settings",  "Settings",  "tinexus-settings-ui", "gear",     DockIconAppState::NotRunning},
         DockIconItem{"tinexus-monitor",   "Monitor",   "tinexus-monitor",     "barchart", DockIconAppState::NotRunning},
-        DockIconItem{"tinexus-store",     "App Store", "tinexus-store",       "package",  DockIconAppState::NotRunning}
+        DockIconItem{"firefox",           "Firefox",   "env MOZ_ENABLE_WAYLAND=1 firefox", "firefox",  DockIconAppState::NotRunning}
     };
 
     for (auto& icon : m_icons) {
@@ -228,7 +228,13 @@ void DockBridge::spawnApp(const QString& execCmd) {
     QStringList parts = QProcess::splitCommand(execCmd);
     if (parts.isEmpty()) return;
     QString prog = parts.takeFirst();
-    bool started = QProcess::startDetached(prog, parts);
+    QProcess proc;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    proc.setProcessEnvironment(env);
+    proc.setProgram(prog);
+    proc.setArguments(parts);
+    bool started = proc.startDetached();
     tinexus::log::info("[DockBridge] App '{}' startDetached result: {}", prog.toStdString(), started);
 }
 

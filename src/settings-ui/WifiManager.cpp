@@ -703,24 +703,71 @@ void WifiManager::connect_worker(std::string ssid, std::string password) {
 
     if (connected) {
         tinexus::log::info("[WifiManager] Successfully associated with '{}'. Requesting DHCP lease on '{}'...", ssid, iface);
-        
-        // Run udhcpc via default script across all standard binary paths with hostname Option 12
+
+        // ── Kill any stale dhclient on this interface before acquiring lease ──────
+        // /run is a world-writable tmpfs. Per-interface pid/lease files live here.
+        // dhclient carries cap_net_admin,cap_net_raw,cap_net_bind_service via setcap
+        // applied during ISO build — no sudo required at runtime.
+        std::string pid_file   = "/run/dhclient." + iface + ".pid";
+        std::string lease_file = "/run/dhclient." + iface + ".leases";
+        {
+            std::ifstream pf(pid_file);
+            if (pf.good()) {
+                pid_t old_pid = 0;
+                pf >> old_pid;
+                if (old_pid > 1) {
+                    ::kill(old_pid, SIGTERM);
+                    usleep(150000); // 150ms graceful exit
+                    ::kill(old_pid, SIGKILL);
+                }
+            }
+        }
+        ::unlink(pid_file.c_str());
+
+        // ── Execute DHCP client (setcap-granted capabilities, UID 1000 is fine) ──
         pid_t dhcp_p = fork();
         if (dhcp_p == 0) {
+            // Prefer isc-dhcp-client with explicit -lf/-pf paths to world-writable /run/
+            execl("/sbin/dhclient", "dhclient",
+                  "-4", "-v",
+                  "-lf", lease_file.c_str(),
+                  "-pf", pid_file.c_str(),
+                  iface.c_str(), nullptr);
+            execl("/usr/sbin/dhclient", "dhclient",
+                  "-4", "-v",
+                  "-lf", lease_file.c_str(),
+                  "-pf", pid_file.c_str(),
+                  iface.c_str(), nullptr);
+            execlp("dhclient", "dhclient",
+                   "-4", "-v",
+                   "-lf", lease_file.c_str(),
+                   "-pf", pid_file.c_str(),
+                   iface.c_str(), nullptr);
+
+            // busybox / udhcpc fallback (also setcap'd during ISO build)
             execl("/usr/bin/udhcpc", "udhcpc", "-i", iface.c_str(),
-                  "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+                  "-s", "/usr/share/udhcpc/default.script",
+                  "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
             execl("/bin/udhcpc", "udhcpc", "-i", iface.c_str(),
-                  "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+                  "-s", "/usr/share/udhcpc/default.script",
+                  "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
             execl("/sbin/udhcpc", "udhcpc", "-i", iface.c_str(),
-                  "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+                  "-s", "/usr/share/udhcpc/default.script",
+                  "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
             execl("/bin/busybox", "busybox", "udhcpc", "-i", iface.c_str(),
-                  "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+                  "-s", "/usr/share/udhcpc/default.script",
+                  "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
             execlp("udhcpc", "udhcpc", "-i", iface.c_str(),
-                   "-s", "/usr/share/udhcpc/default.script", "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
-            _exit(0);
+                   "-s", "/usr/share/udhcpc/default.script",
+                   "-x", "hostname:Tinexus-Desktop", "-q", "-n", nullptr);
+            _exit(127); // no DHCP binary found on this system
         }
         if (dhcp_p > 0) {
-            waitpid(dhcp_p, nullptr, 0);
+            int wstatus = 0;
+            waitpid(dhcp_p, &wstatus, 0);
+            if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 127) {
+                tinexus::log::warn("[WifiManager] No DHCP client binary found — lease not acquired for '{}'.", iface);
+            }
         }
 
         send_wpa_command("SAVE_CONFIG");
@@ -731,7 +778,19 @@ void WifiManager::connect_worker(std::string ssid, std::string password) {
             m_status_message = "Connected";
             m_is_connecting.store(false);
         }
-        refresh_status_internal();
+
+        // Poll for IPv4 lease acquisition for up to 10 seconds
+        for (int ip_wait = 0; ip_wait < 20; ++ip_wait) {
+            refresh_status_internal();
+            if (!get_ip_address().empty()) {
+                tinexus::log::info("[WifiManager] Acquired IPv4 lease: {}", get_ip_address());
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        if (get_ip_address().empty()) {
+            tinexus::log::warn("[WifiManager] DHCP lease not acquired within 10s for interface '{}'.", iface);
+        }
     } else {
         tinexus::log::warn("[WifiManager] Association with '{}' timed out or failed.", ssid);
         std::lock_guard<std::mutex> lock(m_mutex);

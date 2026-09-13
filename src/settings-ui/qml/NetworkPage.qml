@@ -32,7 +32,7 @@ ScrollView {
                     iconSize: 36
                     glyphSize: 18
                     iconColor: "#0A84FF"
-                    iconText: "📶"
+                    iconId: "wifi"
                 }
 
                 ColumnLayout {
@@ -112,16 +112,43 @@ ScrollView {
                         }
                     }
 
-                    Text {
-                        text: "🔒"
-                        color: "#86868b"
-                        font.pixelSize: 12
+                    // Lock icon (vector)
+                    Item {
+                        width: 12; height: 14
+                        Rectangle {
+                            x: 2; y: 6; width: 8; height: 8; radius: 1.5
+                            color: "#86868b"
+                        }
+                        Rectangle {
+                            x: 4; y: 1; width: 4; height: 6; radius: 2
+                            color: "transparent"
+                            border.color: "#86868b"; border.width: 1.5
+                        }
                     }
 
-                    Text {
-                        text: "📶"
-                        color: "#f5f5f7"
-                        font.pixelSize: 13
+                    // Wi-Fi signal bars (vector)
+                    Canvas {
+                        width: 18; height: 14
+                        property int bars: bridge.connectedSignalBars > 0 ? bridge.connectedSignalBars : 4
+                        onBarsChanged: requestPaint()
+                        Component.onCompleted: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var cx = width / 2, cy = height - 2
+                            var radii = [4, 6.5, 9, 11.5]
+                            for (var i = 0; i < 4; i++) {
+                                ctx.beginPath()
+                                ctx.strokeStyle = i < bars ? "#f5f5f7" : "#48484c"
+                                ctx.lineWidth = 1.5
+                                ctx.arc(cx, cy, radii[i], Math.PI * 1.25, Math.PI * 1.75, false)
+                                ctx.stroke()
+                            }
+                            ctx.beginPath()
+                            ctx.fillStyle = "#f5f5f7"
+                            ctx.arc(cx, cy, 1.5, 0, 2 * Math.PI)
+                            ctx.fill()
+                        }
                     }
 
                     MacButton {
@@ -176,16 +203,43 @@ ScrollView {
                         Layout.fillWidth: true
                     }
 
-                    Text {
-                        text: "🔒"
-                        color: "#86868b"
-                        font.pixelSize: 12
+                    // Lock icon (vector)
+                    Item {
+                        width: 12; height: 14
+                        Rectangle {
+                            x: 2; y: 6; width: 8; height: 8; radius: 1.5
+                            color: "#86868b"
+                        }
+                        Rectangle {
+                            x: 4; y: 1; width: 4; height: 6; radius: 2
+                            color: "transparent"
+                            border.color: "#86868b"; border.width: 1.5
+                        }
                     }
 
-                    Text {
-                        text: "📶"
-                        color: "#f5f5f7"
-                        font.pixelSize: 13
+                    // Wi-Fi signal bars (vector)
+                    Canvas {
+                        width: 18; height: 14
+                        property int bars: bridge.connectedSignalBars > 0 ? bridge.connectedSignalBars : 4
+                        onBarsChanged: requestPaint()
+                        Component.onCompleted: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var cx = width / 2, cy = height - 2
+                            var radii = [4, 6.5, 9, 11.5]
+                            for (var i = 0; i < 4; i++) {
+                                ctx.beginPath()
+                                ctx.strokeStyle = i < bars ? "#f5f5f7" : "#48484c"
+                                ctx.lineWidth = 1.5
+                                ctx.arc(cx, cy, radii[i], Math.PI * 1.25, Math.PI * 1.75, false)
+                                ctx.stroke()
+                            }
+                            ctx.beginPath()
+                            ctx.fillStyle = "#f5f5f7"
+                            ctx.arc(cx, cy, 1.5, 0, 2 * Math.PI)
+                            ctx.fill()
+                        }
                     }
 
                     Rectangle {
@@ -302,11 +356,19 @@ ScrollView {
                                         }
                                     }
 
-                                    Text {
-                                        text: modelData.secured ? "🔒" : ""
-                                        color: "#86868b"
-                                        font.pixelSize: 11
+                                    // Lock icon (vector) — shown for secured networks
+                                    Item {
+                                        width: 11; height: 13
                                         visible: modelData.secured
+                                        Rectangle {
+                                            x: 2; y: 5; width: 7; height: 7; radius: 1.5
+                                            color: "#86868b"
+                                        }
+                                        Rectangle {
+                                            x: 3.5; y: 0.5; width: 4; height: 5.5; radius: 2
+                                            color: "transparent"
+                                            border.color: "#86868b"; border.width: 1.5
+                                        }
                                     }
 
                                     Row {
@@ -567,14 +629,24 @@ ScrollView {
                 Layout.fillWidth: true
                 Text { text: "IPv4 Address:"; color: "#86868b"; font.pixelSize: 12 }
                 Item { Layout.fillWidth: true }
-                Text { text: bridge.ipAddress.length > 0 ? bridge.ipAddress : "192.168.1.100"; color: "#f5f5f7"; font.pixelSize: 12; font.family: "monospace" }
+                Text {
+                    text: bridge.ipAddress.length > 0 ? bridge.ipAddress : (bridge.connectedSsid.length > 0 ? "Acquiring IPv4..." : "Not Connected")
+                    color: "#f5f5f7"
+                    font.pixelSize: 12
+                    font.family: "monospace"
+                }
             }
 
             RowLayout {
                 Layout.fillWidth: true
                 Text { text: "Hardware Interface:"; color: "#86868b"; font.pixelSize: 12 }
                 Item { Layout.fillWidth: true }
-                Text { text: "wlan0"; color: "#f5f5f7"; font.pixelSize: 12; font.family: "monospace" }
+                Text {
+                    text: (bridge.activeInterface && bridge.activeInterface.length > 0) ? bridge.activeInterface : "Disconnected"
+                    color: "#f5f5f7"
+                    font.pixelSize: 12
+                    font.family: "monospace"
+                }
             }
 
             Item { Layout.fillHeight: true }

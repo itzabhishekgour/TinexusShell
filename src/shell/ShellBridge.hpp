@@ -74,6 +74,7 @@ public:
     void setSoundMuted(bool muted);
     void setBrightness(int bri);
     void setActiveAppName(const QString& name);
+    void syncAudioState();
 
     void setLogoMenuOpen(bool open);
     void setAppMenuOpen(bool open);

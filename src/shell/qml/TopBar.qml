@@ -269,7 +269,7 @@ Item {
             }
         }
 
-        // Wi-Fi (Vector arcs)
+        // Wi-Fi (Vector arcs — dynamic signal strength)
         Item {
             id: wifiTrigger
             width: 20
@@ -277,26 +277,44 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
 
             Canvas {
+                id: wifiCanvas
                 anchors.fill: parent
+
+                // Read live signal state from ShellBridge
+                readonly property bool connected: typeof bridge !== "undefined" ? bridge.networkConnected : false
+                readonly property int bars: typeof bridge !== "undefined" ? bridge.networkBars : 0
+
+                // Repaint whenever signal state changes
+                onConnectedChanged: requestPaint()
+                onBarsChanged: requestPaint()
+                Component.onCompleted: requestPaint()
+
                 onPaint: {
                     var ctx = getContext("2d");
                     ctx.reset();
-                    ctx.strokeStyle = "#FFFFFF";
-                    ctx.lineWidth = 1.6;
                     var cx = 10, cy = 15;
-                    ctx.fillStyle = "#FFFFFF";
+                    var arcRadii  = [4.5, 8.0, 11.5];  // 3 arcs = 3 bar levels beyond center dot
+                    var barThresh = [1, 2, 3];           // bar count required to light each arc
+
+                    var activeColor = Qt.rgba(1, 1, 1, 0.90).toString();
+                    var dimColor    = Qt.rgba(1, 1, 1, 0.25).toString();
+
+                    ctx.lineWidth = 1.6;
+                    ctx.lineCap = "round";
+
+                    // Center dot (always visible)
+                    ctx.fillStyle = connected ? activeColor : dimColor;
                     ctx.beginPath();
                     ctx.arc(cx, cy, 1.6, 0, 2 * Math.PI);
                     ctx.fill();
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 4.5, -Math.PI * 0.75, -Math.PI * 0.25);
-                    ctx.stroke();
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 8.0, -Math.PI * 0.75, -Math.PI * 0.25);
-                    ctx.stroke();
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 11.5, -Math.PI * 0.75, -Math.PI * 0.25);
-                    ctx.stroke();
+
+                    // Arcs: light up based on signal bar count
+                    for (var i = 0; i < 3; i++) {
+                        ctx.strokeStyle = (connected && bars >= barThresh[i]) ? activeColor : dimColor;
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, arcRadii[i], -Math.PI * 0.75, -Math.PI * 0.25);
+                        ctx.stroke();
+                    }
                 }
             }
 

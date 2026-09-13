@@ -51,6 +51,7 @@ Item {
                     if (root.iconType === "folder")   return "#2F80ED";
                     if (root.iconType === "gear")     return "#8E8E93";
                     if (root.iconType === "barchart") return "#1C1C24";
+                    if (root.iconType === "firefox")  return "#FF5436";
                     if (root.iconType === "package")  return "#0A84FF";
                     return "#1A1B26"; // terminal default
                 }
@@ -61,6 +62,7 @@ Item {
                     if (root.iconType === "folder")   return "#0056C6";
                     if (root.iconType === "gear")     return "#636366";
                     if (root.iconType === "barchart") return "#101018";
+                    if (root.iconType === "firefox")  return "#7C3AED";
                     if (root.iconType === "package")  return "#0062D2";
                     return "#0D0E15";
                 }
@@ -143,6 +145,51 @@ Item {
             color: "#FFFFFF"
             font.bold: true
             font.pixelSize: Math.round(22 * root.scaleFactor)
+        }
+
+        // 6. Firefox: Vector Browser Glyph
+        Item {
+            anchors.centerIn: parent
+            width: 24 * root.scaleFactor
+            height: 24 * root.scaleFactor
+            visible: root.iconType === "firefox"
+
+            Canvas {
+                anchors.fill: parent
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.reset();
+                    var w = width;
+                    var h = height;
+                    var s = w / 24.0;
+
+                    // Inner purple-blue globe
+                    ctx.fillStyle = "#2563EB";
+                    ctx.beginPath();
+                    ctx.arc(12 * s, 12 * s, 7.5 * s, 0, 2 * Math.PI);
+                    ctx.fill();
+
+                    // Latitude/longitude lines
+                    ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.45);
+                    ctx.lineWidth = 1 * s;
+                    ctx.beginPath();
+                    ctx.arc(12 * s, 12 * s, 7.5 * s, 0, Math.PI);
+                    ctx.stroke();
+
+                    // Flame swoosh around the globe
+                    ctx.strokeStyle = "#FF9F0A";
+                    ctx.lineWidth = 2.5 * s;
+                    ctx.beginPath();
+                    ctx.arc(12 * s, 12 * s, 9 * s, -0.6 * Math.PI, 0.8 * Math.PI, false);
+                    ctx.stroke();
+
+                    // Fiery tail tip
+                    ctx.fillStyle = "#FFD60A";
+                    ctx.beginPath();
+                    ctx.arc(14 * s, 3.5 * s, 2 * s, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
         }
     }
 

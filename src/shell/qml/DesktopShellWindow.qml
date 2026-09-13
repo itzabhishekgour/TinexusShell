@@ -17,7 +17,7 @@ Window {
         bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen
     )
 
-    height: anyFlyoutOpen ? 380 : 46
+    height: anyFlyoutOpen ? 420 : 46
 
     Item {
         id: container

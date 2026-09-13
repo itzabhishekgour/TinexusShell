@@ -241,6 +241,7 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
     if (!win->m_render_target) {
         // Offline / Headless fallback for automated CI testing
         win->m_render_target = std::make_unique<CanvasRenderTarget>(width, height);
+        win->m_configured = true;
     }
 
     if (win->m_connection.has_value() && win->m_connection->is_valid()) {
@@ -590,17 +591,24 @@ void Window::resize(uint32_t width, uint32_t height) noexcept {
     m_needs_repaint = true;
 
     if (m_render_target) {
-        auto* wayland_target = static_cast<WaylandRenderTarget*>(m_render_target.get());
-        if (wayland_target->resize(width, height)) {
-            if (m_layer_surface) {
-                uint32_t req_w = ((m_anchors & LayerAnchor::Left) && (m_anchors & LayerAnchor::Right)) ? 0 : width;
-                uint32_t req_h = ((m_anchors & LayerAnchor::Top) && (m_anchors & LayerAnchor::Bottom)) ? 0 : height;
-                zwlr_layer_surface_v1_set_size(m_layer_surface, req_w, req_h);
-                if (m_has_custom_margins) {
-                    zwlr_layer_surface_v1_set_margin(m_layer_surface, m_margin_top, m_margin_right, m_margin_bottom, m_margin_left);
+        auto* wayland_target = dynamic_cast<WaylandRenderTarget*>(m_render_target.get());
+        if (wayland_target != nullptr) {
+            if (wayland_target->resize(width, height)) {
+                if (m_layer_surface) {
+                    uint32_t req_w = ((m_anchors & LayerAnchor::Left) && (m_anchors & LayerAnchor::Right)) ? 0 : width;
+                    uint32_t req_h = ((m_anchors & LayerAnchor::Top) && (m_anchors & LayerAnchor::Bottom)) ? 0 : height;
+                    zwlr_layer_surface_v1_set_size(m_layer_surface, req_w, req_h);
+                    if (m_has_custom_margins) {
+                        zwlr_layer_surface_v1_set_margin(m_layer_surface, m_margin_top, m_margin_right, m_margin_bottom, m_margin_left);
+                    }
                 }
             }
             // xdg_toplevel resize is driven by compositor configure events, not client commits.
+        } else {
+            auto* canvas_target = dynamic_cast<CanvasRenderTarget*>(m_render_target.get());
+            if (canvas_target != nullptr) {
+                *canvas_target = CanvasRenderTarget(width, height);
+            }
         }
     }
     // Trigger full measure+layout+paint so widget tree adapts to new bounds.

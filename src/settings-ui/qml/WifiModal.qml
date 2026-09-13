@@ -45,7 +45,7 @@ Rectangle {
                     iconSize: 34
                     glyphSize: 18
                     iconColor: "#0A84FF"
-                    iconText: "📶"
+                    iconId: "wifi"
                 }
 
                 ColumnLayout {
