@@ -53,4 +53,9 @@ artifacts/
 Temp/
 qemu_out.txt
 *.deb
-scratch/
+scratch/
+__pycache__/
+*.pyc
+*.ppm
+*.bak
+*.sha256
