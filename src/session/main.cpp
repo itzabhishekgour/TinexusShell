@@ -1,5 +1,6 @@
 #include "common/logger.hpp"
 #include <iostream>
+#include <fstream>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -25,6 +26,24 @@ struct ComponentState {
 
 static std::unordered_map<pid_t, ComponentState> g_managed_components;
 
+static bool is_live_boot() {
+    if (const char* env = std::getenv("TINEXUS_LIVE"); env && std::string_view(env) == "1") {
+        return true;
+    }
+    if (fs::exists("/proc/cmdline")) {
+        std::ifstream ifs("/proc/cmdline");
+        std::string cmdline;
+        if (std::getline(ifs, cmdline)) {
+            if (cmdline.find("boot=live") != std::string::npos ||
+                cmdline.find("rd.live.image") != std::string::npos ||
+                cmdline.find("tinexus.live") != std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static pid_t launch_component(const std::string& name) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -36,6 +55,11 @@ static pid_t launch_component(const std::string& name) {
         setenv("WAYLAND_DISPLAY", wayland_disp, 1);
         setenv("XDG_RUNTIME_DIR", runtime_dir, 1);
 
+        // Propagate Qt6 Wayland platform plugin and QML search paths
+        setenv("QT_PLUGIN_PATH", "/usr/lib/x86_64-linux-gnu/qt6/plugins", 0);
+        setenv("QML_IMPORT_PATH", "/usr/lib/x86_64-linux-gnu/qt6/qml:/usr/share/tinexus", 0);
+        setenv("QML2_IMPORT_PATH", "/usr/lib/x86_64-linux-gnu/qt6/qml:/usr/share/tinexus", 0);
+
         std::vector<std::string> search_paths = {
             "/usr/bin/tinexus-" + name,
             std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/tinexus/build/debug/src/" + name + "/tinexus-" + name
@@ -43,12 +67,20 @@ static pid_t launch_component(const std::string& name) {
         
         for (const auto& path : search_paths) {
             if (fs::exists(path)) {
-                execl(path.c_str(), ("tinexus-" + name).c_str(), nullptr);
+                if (name == "launcher") {
+                    execl(path.c_str(), ("tinexus-" + name).c_str(), "--daemon", nullptr);
+                } else {
+                    execl(path.c_str(), ("tinexus-" + name).c_str(), nullptr);
+                }
             }
         }
         
         // Fallback to PATH
-        execlp(("tinexus-" + name).c_str(), ("tinexus-" + name).c_str(), nullptr);
+        if (name == "launcher") {
+            execlp(("tinexus-" + name).c_str(), ("tinexus-" + name).c_str(), "--daemon", nullptr);
+        } else {
+            execlp(("tinexus-" + name).c_str(), ("tinexus-" + name).c_str(), nullptr);
+        }
         _exit(127);
     }
     log::info("[Session] Spawned component 'tinexus-{}' (PID={})", name, pid);
@@ -118,11 +150,7 @@ int main(int argc, char* argv[]) {
         log::error("[Session] Timeout waiting for Wayland socket '{}'!", socket_path.string());
     }
 
-    // 2. Launch tinexus-lock FIRST immediately once Wayland socket is ready
-    log::info("[Session] Launching tinexus-lock FIRST immediately upon Wayland readiness...");
-    pid_t lock_pid = launch_component("lock");
-
-    // 3. Launch background infrastructure daemons while lockscreen is presented
+    // 2. Launch background infrastructure daemons
     fs::path session_bus_sock = runtime_dir / "bus";
     std::string dbus_addr = "unix:path=" + session_bus_sock.string();
     log::info("[Session] Starting D-Bus Session Bus...");
@@ -149,34 +177,101 @@ int main(int argc, char* argv[]) {
     // Launch Search Daemon
     launch_component("searchd");
 
-    // 4. Gate UI spawning: Block until tinexus-lock reports clean exit (WIFEXITED && WEXITSTATUS == 0)
-    log::info("[Session] Gating desktop UI launch on tinexus-lock clean exit...");
-    while (true) {
-        int status = 0;
-        pid_t p = waitpid(lock_pid, &status, 0);
-        if (p == lock_pid) {
-            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-                log::info("[Session] Component 'lock' exited cleanly (session unlocked). Not restarting.");
-                g_managed_components.erase(lock_pid);
-                break;
-            } else {
-                log::warn("[Session] Component 'lock' exited abnormally (PID={}, status={}). Respawning lock...",
-                          p, WEXITSTATUS(status));
-                g_managed_components.erase(lock_pid);
-                lock_pid = launch_component("lock");
+    // Launch Universal PipeWire / WirePlumber Audio Daemons (if present)
+    if (fs::exists("/usr/bin/pipewire")) {
+        log::info("[Session] Starting PipeWire daemon...");
+        pid_t pw_pid = fork();
+        if (pw_pid == 0) {
+            execl("/usr/bin/pipewire", "pipewire", nullptr);
+            _exit(127);
+        }
+        if (pw_pid > 0) {
+            g_managed_components[pw_pid] = {"pipewire", 0, 0, {}};
+        }
+
+        if (fs::exists("/usr/bin/pipewire-pulse")) {
+            pid_t pwp_pid = fork();
+            if (pwp_pid == 0) {
+                execl("/usr/bin/pipewire-pulse", "pipewire-pulse", nullptr);
+                _exit(127);
             }
-        } else if (p == -1 && errno == ECHILD) {
-            log::warn("[Session] Lock process already reaped or missing.");
-            break;
+            if (pwp_pid > 0) {
+                g_managed_components[pwp_pid] = {"pipewire-pulse", 0, 0, {}};
+            }
+        }
+
+        if (fs::exists("/usr/bin/wireplumber")) {
+            pid_t wp_pid = fork();
+            if (wp_pid == 0) {
+                execl("/usr/bin/wireplumber", "wireplumber", nullptr);
+                _exit(127);
+            }
+            if (wp_pid > 0) {
+                g_managed_components[wp_pid] = {"wireplumber", 0, 0, {}};
+            }
         }
     }
 
-    // 5. Spawn desktop UI components without arbitrary sleep delays
-    log::info("[Session] Lock screen unlocked. Spawning desktop components...");
+    // 3. Present lock screen on startup (with 3-attempt exponential backoff retry loop)
+    log::info("[Session] Presenting tinexus-lock...");
+    pid_t lock_pid = launch_component("lock");
+
+    // Bounded gating on tinexus-lock with exponential backoff & retry limit
+    constexpr int kMaxLockRetries = 3;
+    int lock_retries = 0;
+    int backoff_ms = 500;
+
+    while (lock_retries < kMaxLockRetries) {
+            int status = 0;
+            pid_t p = waitpid(lock_pid, &status, 0);
+            if (p == lock_pid) {
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                    log::info("[Session] Component 'lock' exited cleanly (session unlocked). Not restarting.");
+                    g_managed_components.erase(lock_pid);
+                    break;
+                } else {
+                    lock_retries++;
+                    g_managed_components.erase(lock_pid);
+
+                    if (WIFSIGNALED(status)) {
+                        log::warn("[Session] Component 'lock' killed by signal {} (attempt {}/{})",
+                                  WTERMSIG(status), lock_retries, kMaxLockRetries);
+                    } else {
+                        log::warn("[Session] Component 'lock' exited abnormally with code {} (attempt {}/{})",
+                                  WEXITSTATUS(status), lock_retries, kMaxLockRetries);
+                    }
+
+                    if (lock_retries >= kMaxLockRetries) {
+                        log::error("[Session] CRITICAL: tinexus-lock failed {} consecutive times. "
+                                   "Bypassing lock screen to prevent session lockout. Falling back to unlocked desktop.",
+                                   lock_retries);
+                        try {
+                            fs::create_directories(runtime_dir / "tinexus");
+                            std::ofstream warn_file(runtime_dir / "tinexus" / "lock_failure.warning");
+                            warn_file << "Lock screen failed to start after 3 attempts. Session started unlocked.\n";
+                        } catch (...) {}
+                        break;
+                    }
+
+                    log::info("[Session] Waiting {} ms before respawning lock (attempt {}/{})...",
+                              backoff_ms, lock_retries + 1, kMaxLockRetries);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+                    backoff_ms *= 2;
+                    lock_pid = launch_component("lock");
+                }
+            } else if (p == -1 && errno == ECHILD) {
+                log::warn("[Session] Lock process already reaped or missing.");
+                break;
+            }
+        }
+
+    // 4. Spawn desktop UI components without delay
+    log::info("[Session] Spawning desktop components...");
     launch_component("wallpaper");
     launch_component("dock");
     launch_component("shell");
     launch_component("notifications");
+    launch_component("launcher");
 
     log::info("[Session] All desktop shell components launched.");
 
@@ -205,6 +300,8 @@ int main(int argc, char* argv[]) {
                 
                 if (state.name == "lock" && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                     log::info("[Session] Component 'lock' exited cleanly (session unlocked). Not restarting.");
+                } else if (state.name == "lock" && state.restart_count >= 3) {
+                    log::error("[Session] Component 'lock' crashed {} times rapidly. ABORTING RESTART to prevent session lockout.", state.restart_count);
                 } else if (state.restart_count > 5) {
                     log::error("[Session] Component '{}' crashed {} times rapidly. ABORTING RESTART to prevent crash loop.", state.name, state.restart_count);
                 } else {

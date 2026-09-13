@@ -17,6 +17,9 @@
 #include <cstdlib>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/mount.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <pwd.h>
 #include <vector>
@@ -274,6 +277,16 @@ void setup_default_audio_routing() {
         tinexus::log::info("Generated /etc/asound.conf with defaults.pcm.card = {}", card_id);
     }
 
+    // Initialize ALSA hardware codecs and power amplifiers across vendors
+    if (std::filesystem::exists("/usr/sbin/alsactl")) {
+        pid_t ap = fork();
+        if (ap == 0) {
+            execl("/usr/sbin/alsactl", "alsactl", "init", "-q", nullptr);
+            _exit(0);
+        }
+        if (ap > 0) waitpid(ap, nullptr, 0);
+    }
+
     auto run_amixer = [](const std::vector<const char*>& args) {
         pid_t p = fork();
         if (p == 0) {
@@ -361,6 +374,24 @@ void signal_handler(int signal) {
 int main(int argc, char** argv) {
     tinexus::log::set_component_name("tinexus-serviced");
     tinexus::log::info("Starting Platform Runtime Manager v{} (PID 1 Service Authority)...", tinexus::VERSION_STRING);
+
+    // ── PID 1 Virtual Filesystem Mounting ──
+    if (::getpid() == 1) {
+        ::mkdir("/proc", 0755);
+        ::mkdir("/sys", 0755);
+        ::mkdir("/dev", 0755);
+        ::mkdir("/dev/pts", 0755);
+        ::mkdir("/run", 0755);
+        ::mkdir("/tmp", 01777);
+        ::mount("proc", "/proc", "proc", 0, nullptr);
+        ::mount("sysfs", "/sys", "sysfs", 0, nullptr);
+        ::mount("devpts", "/dev/pts", "devpts", 0, nullptr);
+        ::mount("tmpfs", "/run", "tmpfs", 0, nullptr);
+        ::mount("tmpfs", "/tmp", "tmpfs", 0, nullptr);
+        if (!std::filesystem::exists("/etc/mtab")) {
+            ::symlink("/proc/self/mounts", "/etc/mtab");
+        }
+    }
 
     // ── Boot-Time UID Validation (PID 1 Panic Prevention) ──
     struct passwd* pw = getpwuid(1000);
@@ -561,6 +592,30 @@ int main(int argc, char** argv) {
 
             _exit(0);
         }
+    }
+
+    // ── Serial Console for Headless Automation & Diagnosis ──
+    if (std::filesystem::exists("/dev/ttyS0")) {
+        pid_t serial_pid = fork();
+        if (serial_pid == 0) {
+            int fd = ::open("/dev/ttyS0", O_RDWR);
+            if (fd >= 0) {
+                ::dup2(fd, STDIN_FILENO);
+                ::dup2(fd, STDOUT_FILENO);
+                ::dup2(fd, STDERR_FILENO);
+                if (fd > STDERR_FILENO) ::close(fd);
+                ::setsid();
+                ::ioctl(0, TIOCSCTTY, 1);
+                setenv("TERM", "linux", 1);
+                setenv("HOME", "/root", 1);
+                setenv("USER", "root", 1);
+                setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+                execl("/bin/bash", "bash", "-l", nullptr);
+                execl("/bin/sh", "sh", "-l", nullptr);
+            }
+            _exit(127);
+        }
+        tinexus::log::info("Spawned serial root shell on /dev/ttyS0 (PID={})", serial_pid);
     }
 
     // ── Launch splash screen immediately — fills the framebuffer before Wayland ──
