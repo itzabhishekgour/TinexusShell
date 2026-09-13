@@ -29,6 +29,99 @@ void test_workspace_manager() {
     std::cout << "[PASS] test_workspace_manager\n";
 }
 
+void test_workspace_gestures() {
+    auto& mgr = tinexus::comp::WorkspaceManager::instance();
+    mgr.initialize_default_workspaces(4);
+    mgr.set_viewport_width(1000);
+
+    assert(mgr.active_workspace_id() == 1);
+    assert(!mgr.in_gesture());
+    assert(mgr.current_slide_offset() == 0.0);
+
+    // Case 1: Swipe Begin halts animation and initiates gesture mode
+    mgr.begin_gesture_swipe();
+    assert(mgr.in_gesture());
+
+    // Case 2: Update gesture with 1:1 mapping (dx = -100 means swiping left -> slide offset increases to +100)
+    mgr.update_gesture_swipe(-100.0, 100);
+    assert(mgr.current_slide_offset() == 100.0);
+
+    // Case 3: Distance threshold test (viewport = 1000, 25% threshold = 250px)
+    // Drag further to 300px (dx = -200, cumulative = +300)
+    mgr.update_gesture_swipe(-200.0, 1500); // long time, low velocity
+    assert(mgr.current_slide_offset() == 300.0);
+
+    // End gesture -> exceeded 25% threshold, should switch to Workspace 2!
+    mgr.end_gesture_swipe(false);
+    assert(!mgr.in_gesture());
+    assert(mgr.active_workspace_id() == 2);
+    assert(mgr.has_active_animation());
+
+    // Step animation until settled
+    for (int i = 0; i < 100 && mgr.has_active_animation(); ++i) {
+        mgr.tick_animation(0.016);
+    }
+    assert(!mgr.has_active_animation());
+    assert(std::abs(mgr.current_slide_offset() - 1000.0) < 1.0);
+
+    // Case 4: Flick velocity test (macOS flick)
+    // From Workspace 2 (offset 1000), flick towards Workspace 3 (dx = -50 in 20ms -> high velocity)
+    mgr.begin_gesture_swipe();
+    mgr.update_gesture_swipe(-10.0, 10);
+    mgr.update_gesture_swipe(-50.0, 30); // 50px in 20ms = 2500 px/s velocity!
+    mgr.end_gesture_swipe(false); // Even though travel is only 60px (< 250px), flick switches to WS 3!
+    assert(mgr.active_workspace_id() == 3);
+
+    for (int i = 0; i < 100 && mgr.has_active_animation(); ++i) {
+        mgr.tick_animation(0.016);
+    }
+    assert(!mgr.has_active_animation());
+    assert(std::abs(mgr.current_slide_offset() - 2000.0) < 1.0);
+
+    // Case 5: Short drag + low velocity -> Snap back to original workspace
+    // From Workspace 3 (offset 2000), drag only 50px towards WS 4 with low velocity
+    mgr.begin_gesture_swipe();
+    mgr.update_gesture_swipe(-50.0, 1000);
+    mgr.end_gesture_swipe(false);
+    // Travel was 50px (< 250px) and velocity was near 0 -> snaps back to WS 3!
+    assert(mgr.active_workspace_id() == 3);
+
+    for (int i = 0; i < 100 && mgr.has_active_animation(); ++i) {
+        mgr.tick_animation(0.016);
+    }
+    assert(!mgr.has_active_animation());
+    assert(std::abs(mgr.current_slide_offset() - 2000.0) < 1.0);
+
+    // Case 6: Cancelled gesture -> Snap back to original workspace
+    mgr.begin_gesture_swipe();
+    mgr.update_gesture_swipe(-400.0, 100); // dragged past threshold
+    mgr.end_gesture_swipe(true); // cancelled!
+    assert(mgr.active_workspace_id() == 3); // Snaps back to 3!
+
+    for (int i = 0; i < 100 && mgr.has_active_animation(); ++i) {
+        mgr.tick_animation(0.016);
+    }
+    assert(!mgr.has_active_animation());
+    assert(std::abs(mgr.current_slide_offset() - 2000.0) < 1.0);
+
+    // Case 7: Boundary resistance (rubber banding)
+    mgr.switch_workspace(1);
+    for (int i = 0; i < 100 && mgr.has_active_animation(); ++i) {
+        mgr.tick_animation(0.016);
+    }
+    // Now at WS 1 (offset 0), swipe fingers to the right (dx = +100 -> delta_offset = -100)
+    mgr.begin_gesture_swipe();
+    mgr.update_gesture_swipe(100.0, 100);
+    // Resistance factor 0.35 applied since value < 0
+    // Elastic limit clamp: 25% of viewport width (-250px)
+    assert(mgr.current_slide_offset() < 0.0);
+    assert(mgr.current_slide_offset() >= -250.0);
+    mgr.end_gesture_swipe(false);
+    assert(mgr.active_workspace_id() == 1); // Snaps back to 1
+
+    std::cout << "[PASS] test_workspace_gestures (1:1 Tracking, Flick, Threshold & Rubber-banding Verified)\n";
+}
+
 void test_window_focus_manager() {
     auto& win_mgr = tinexus::comp::WindowManager::instance();
     auto& focus_mgr = tinexus::comp::FocusManager::instance();
@@ -132,13 +225,13 @@ void test_shortcut_engine() {
     assert(engine.process_key_event(MOD_CTRL, KEY_SPACE, true, 0x0020) == true);
     assert(last_shortcut == "launcher_toggle");
 
-    // Bare Super/Meta key
+    // Bare Super/Meta key is passed through to allow Super+1..9 modifier combinations
     last_shortcut.clear();
-    assert(engine.process_key_event(MOD_NONE, KEY_LEFTMETA, true, 0) == true);
-    assert(last_shortcut == "launcher_toggle");
+    assert(engine.process_key_event(MOD_NONE, KEY_LEFTMETA, true, 0) == false);
+    assert(last_shortcut.empty());
     last_shortcut.clear();
-    assert(engine.process_key_event(MOD_NONE, KEY_RIGHTMETA, true, 0) == true);
-    assert(last_shortcut == "launcher_toggle");
+    assert(engine.process_key_event(MOD_NONE, KEY_RIGHTMETA, true, 0) == false);
+    assert(last_shortcut.empty());
 
     // 5. Phase G: Lock screen shortcut (Super+L)
     last_shortcut.clear();
@@ -188,6 +281,7 @@ int main() {
     tinexus::log::info("Running unit tests for Compositor...");
 
     test_workspace_manager();
+    test_workspace_gestures();
     test_window_focus_manager();
     test_shell_state();
     test_frame_scheduler();

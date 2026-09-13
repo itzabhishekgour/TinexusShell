@@ -3,6 +3,7 @@
 #include "comp/output/output_manager.hpp"
 #include "comp/render/frame_scheduler.hpp"
 #include "comp/window/window_manager.hpp"
+#include "comp/workspace/workspace_manager.hpp"
 #include "common/RuntimePaths.hpp"
 #include "common/logger.hpp"
 #include <ctime>
@@ -100,6 +101,9 @@ bool TinexusOutput::initialize() {
     cfg.scale = m_output->scale;
     cfg.enabled = true;
     OutputManager::instance().add_output(cfg);
+    if (mode_w > 0) {
+        WorkspaceManager::instance().set_viewport_width(static_cast<uint32_t>(mode_w));
+    }
 
     // Authoritative runtime state publication for Settings and About UI
     try {
@@ -160,7 +164,8 @@ void TinexusOutput::frame() {
     }
 
     bool has_anims = AnimationManager::instance().has_active_animations() ||
-                     WindowManager::instance().has_active_animations();
+                     WindowManager::instance().has_active_animations() ||
+                     WorkspaceManager::instance().has_active_animation();
     if (!has_anims && !wlr_scene_output_needs_frame(scene_output)) {
         return;
     }
@@ -177,6 +182,9 @@ void TinexusOutput::frame() {
             }
             if (WindowManager::instance().has_active_animations()) {
                 WindowManager::instance().tick_animations(dt);
+            }
+            if (WorkspaceManager::instance().has_active_animation()) {
+                WorkspaceManager::instance().tick_animation(dt);
             }
         }
     }
@@ -195,7 +203,8 @@ void TinexusOutput::frame() {
     wlr_scene_output_send_frame_done(scene_output, &now);
 
     if (AnimationManager::instance().has_active_animations() ||
-        WindowManager::instance().has_active_animations()) {
+        WindowManager::instance().has_active_animations() ||
+        WorkspaceManager::instance().has_active_animation()) {
         wlr_output_schedule_frame(m_output);
     }
 }

@@ -25,6 +25,7 @@ extern "C" {
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
@@ -49,6 +50,7 @@ extern "C" {
 #include "comp/window/window_state.hpp"
 #include "comp/window/decoration_manager.hpp"
 #include "comp/animation/animation_manager.hpp"
+#include "comp/workspace/workspace_manager.hpp"
 #include "common/AppId.hpp"
 #include <unistd.h>
 #include <cstdlib>
@@ -213,6 +215,34 @@ public:
         m_scene_tree_top        = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_overlay    = wlr_scene_tree_create(&m_scene->tree);
 
+        // Initialize per-workspace scene trees under m_scene_tree_normal
+        auto& ws_mgr = WorkspaceManager::instance();
+        const auto& workspaces = ws_mgr.get_all_workspaces();
+        uint32_t screen_w = 1920;
+        ws_mgr.set_viewport_width(screen_w);
+
+        for (const auto& ws : workspaces) {
+            struct wlr_scene_tree* ws_tree = wlr_scene_tree_create(m_scene_tree_normal);
+            ws_mgr.set_workspace_scene_tree(ws.id, ws_tree);
+
+            int32_t initial_x = static_cast<int32_t>(ws.id - 1) * static_cast<int32_t>(screen_w);
+            wlr_scene_node_set_position(&ws_tree->node, initial_x, 0);
+
+            // Off-screen workspaces are initially disabled to eliminate redundant damage & cursor checks
+            if (!ws.is_active) {
+                wlr_scene_node_set_enabled(&ws_tree->node, false);
+            }
+        }
+
+        // Connect WorkspaceManager frame scheduler to wlroots outputs
+        ws_mgr.set_frame_scheduler([this]() {
+            for (auto& out : m_outputs) {
+                if (out && out->get_wlr_output()) {
+                    wlr_output_schedule_frame(out->get_wlr_output());
+                }
+            }
+        });
+
         // Bind FocusManager — scene + seat must both exist before this call.
         // (seat is created just below; bind_focus() call placed after seat init)
         // Actual bind happens after m_seat is assigned (see below).
@@ -264,6 +294,21 @@ public:
 
         m_cursor_frame_listener.notify = handle_cursor_frame;
         wl_signal_add(&m_cursor->events.frame, &m_cursor_frame_listener);
+
+        // Trackpad multi-finger gesture listeners (3-finger / 4-finger macOS-style Spaces)
+        m_cursor_swipe_begin_listener.notify = handle_cursor_swipe_begin;
+        wl_signal_add(&m_cursor->events.swipe_begin, &m_cursor_swipe_begin_listener);
+
+        m_cursor_swipe_update_listener.notify = handle_cursor_swipe_update;
+        wl_signal_add(&m_cursor->events.swipe_update, &m_cursor_swipe_update_listener);
+
+        m_cursor_swipe_end_listener.notify = handle_cursor_swipe_end;
+        wl_signal_add(&m_cursor->events.swipe_end, &m_cursor_swipe_end_listener);
+
+        m_pointer_gestures = wlr_pointer_gestures_v1_create(m_display);
+        if (m_pointer_gestures) {
+            log::info("[Backend] wlr_pointer_gestures_v1 protocol initialized.");
+        }
 
         // Create wl_data_device_manager so Wayland clients (foot, etc.) can bind
         // clipboard / drag-and-drop protocol. Without this, clients report
@@ -324,6 +369,9 @@ public:
             if (m_cursor_button_listener.link.next) { wl_list_remove(&m_cursor_button_listener.link); m_cursor_button_listener.link.next = nullptr; }
             if (m_cursor_axis_listener.link.next) { wl_list_remove(&m_cursor_axis_listener.link); m_cursor_axis_listener.link.next = nullptr; }
             if (m_cursor_frame_listener.link.next) { wl_list_remove(&m_cursor_frame_listener.link); m_cursor_frame_listener.link.next = nullptr; }
+            if (m_cursor_swipe_begin_listener.link.next) { wl_list_remove(&m_cursor_swipe_begin_listener.link); m_cursor_swipe_begin_listener.link.next = nullptr; }
+            if (m_cursor_swipe_update_listener.link.next) { wl_list_remove(&m_cursor_swipe_update_listener.link); m_cursor_swipe_update_listener.link.next = nullptr; }
+            if (m_cursor_swipe_end_listener.link.next) { wl_list_remove(&m_cursor_swipe_end_listener.link); m_cursor_swipe_end_listener.link.next = nullptr; }
             if (m_new_layer_surface_listener.link.next) { wl_list_remove(&m_new_layer_surface_listener.link); m_new_layer_surface_listener.link.next = nullptr; }
             if (m_new_xdg_surface_listener.link.next) { wl_list_remove(&m_new_xdg_surface_listener.link); m_new_xdg_surface_listener.link.next = nullptr; }
             if (m_new_xdg_popup_listener.link.next) { wl_list_remove(&m_new_xdg_popup_listener.link); m_new_xdg_popup_listener.link.next = nullptr; }
@@ -403,6 +451,11 @@ private:
     struct wl_listener m_cursor_button_listener;
     struct wl_listener m_cursor_axis_listener;
     struct wl_listener m_cursor_frame_listener;
+    struct wl_listener m_cursor_swipe_begin_listener;
+    struct wl_listener m_cursor_swipe_update_listener;
+    struct wl_listener m_cursor_swipe_end_listener;
+    struct wlr_pointer_gestures_v1* m_pointer_gestures{nullptr};
+    bool m_active_swipe_gesture{false};
     struct wl_listener m_new_layer_surface_listener;
     struct wl_listener m_new_xdg_surface_listener;
     struct wl_listener m_new_xdg_popup_listener;
@@ -469,6 +522,7 @@ private:
         struct wl_listener set_app_id;
         WlrootsBackend* backend{nullptr};
         TinexusWindowFrame* frame{nullptr};
+        uint32_t workspace_id{1};
 
         // Window states
         bool is_maximized{false};
@@ -690,13 +744,11 @@ private:
 
     ToplevelWrapper* find_toplevel_from_node(struct wlr_scene_node* node) {
         if (!node) return nullptr;
-        struct wlr_scene_node* current = node;
-        while (current->parent != nullptr && current->parent != m_scene_tree_normal) {
-            current = &current->parent->node;
-        }
-        for (const auto& w : m_toplevels) {
-            if (w->scene_tree && &w->scene_tree->node == current) {
-                return w.get();
+        for (struct wlr_scene_node* cur = node; cur != nullptr; cur = (cur->parent ? &cur->parent->node : nullptr)) {
+            for (const auto& w : m_toplevels) {
+                if (w->scene_tree && &w->scene_tree->node == cur) {
+                    return w.get();
+                }
             }
         }
         return nullptr;
@@ -1736,7 +1788,13 @@ private:
         if (!wrapper || wrapper->frame || !wrapper->toplevel || !wrapper->scene_tree) return;
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
 
-        TinexusWindowFrame* frame = TinexusDecorationManager::instance().create_frame(toplevel);
+        struct wlr_scene_tree* parent_tree = nullptr;
+        if (wrapper->workspace_id > 0) {
+            parent_tree = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+        }
+        if (!parent_tree) parent_tree = m_scene_tree_normal;
+
+        TinexusWindowFrame* frame = TinexusDecorationManager::instance().create_frame(toplevel, parent_tree);
         if (!frame || !frame->frame_tree || !frame->client_tree) return;
 
         // Position root frame tree at current window position
@@ -1772,7 +1830,13 @@ private:
         if (client_scene) {
             int cur_x = wrapper->frame->frame_tree->node.x;
             int cur_y = wrapper->frame->frame_tree->node.y;
-            wlr_scene_node_reparent(&client_scene->node, m_scene_tree_normal);
+            struct wlr_scene_tree* parent_tree = nullptr;
+            if (wrapper->workspace_id > 0) {
+                parent_tree = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+            }
+            if (!parent_tree) parent_tree = m_scene_tree_normal;
+
+            wlr_scene_node_reparent(&client_scene->node, parent_tree);
             wlr_scene_node_set_position(&client_scene->node, cur_x, cur_y);
             wrapper->scene_tree = client_scene;
         }
@@ -1829,11 +1893,19 @@ private:
         wrapper->toplevel = xdg_toplevel;
         wrapper->backend  = self;
 
-        // Policy: Initially keep toplevel in normal scene tree without SSD frame.
-        // Decoration decision is made only after sufficient client state is available (commit / negotiation).
-        wrapper->scene_tree = wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
+        // Assign to currently active workspace
+        auto& ws_mgr = WorkspaceManager::instance();
+        wrapper->workspace_id = ws_mgr.active_workspace_id();
+        struct wlr_scene_tree* parent_tree = ws_mgr.get_workspace_scene_tree(wrapper->workspace_id);
+        if (!parent_tree) {
+            parent_tree = self->m_scene_tree_normal;
+        }
+
+        wrapper->scene_tree = wlr_scene_xdg_surface_create(parent_tree, xdg_toplevel->base);
         xdg_toplevel->base->data = wrapper->scene_tree;
         wrapper->frame = nullptr;
+
+        ws_mgr.add_window_to_workspace(wrapper->workspace_id, reinterpret_cast<uint64_t>(wrapper.get()));
 
         // Position window with cascade offset
         int32_t offset_x = 50 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
@@ -2217,6 +2289,7 @@ private:
         if (wrapper->request_resize.link.next != nullptr) { wl_list_remove(&wrapper->request_resize.link); wrapper->request_resize.link.next = nullptr; }
 
         // 5. Remove from list (destroys wrapper and its scene resources via unique_ptr)
+        WorkspaceManager::instance().remove_window_from_workspace(reinterpret_cast<uint64_t>(wrapper));
         std::string dead_app_id = (wrapper->toplevel && wrapper->toplevel->app_id) ?
                                   get_canonical_app_id(wrapper->toplevel->app_id) : "";
         for (auto it = backend->m_toplevels.begin(); it != backend->m_toplevels.end(); ++it) {
@@ -2675,6 +2748,56 @@ private:
 
     static void handle_cursor_frame(struct wl_listener* listener, void* data) {
         SeatManager::instance().notify_frame();
+    }
+
+    static void handle_cursor_swipe_begin(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_swipe_begin_listener);
+        auto* event = static_cast<struct wlr_pointer_swipe_begin_event*>(data);
+
+        log::info("[Gesture] Swipe begin: fingers={}", event->fingers);
+
+        // Intercept 3-finger (or 4-finger) horizontal swipe for macOS-style Spaces navigation
+        if (event->fingers >= 3) {
+            self->m_active_swipe_gesture = true;
+            WorkspaceManager::instance().begin_gesture_swipe();
+        } else {
+            self->m_active_swipe_gesture = false;
+            if (self->m_pointer_gestures && self->m_seat) {
+                wlr_pointer_gestures_v1_send_swipe_begin(self->m_pointer_gestures, self->m_seat,
+                                                         event->time_msec, event->fingers);
+            }
+        }
+    }
+
+    static void handle_cursor_swipe_update(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_swipe_update_listener);
+        auto* event = static_cast<struct wlr_pointer_swipe_update_event*>(data);
+
+        if (self->m_active_swipe_gesture) {
+            WorkspaceManager::instance().update_gesture_swipe(event->dx, event->time_msec);
+        } else {
+            if (self->m_pointer_gestures && self->m_seat) {
+                wlr_pointer_gestures_v1_send_swipe_update(self->m_pointer_gestures, self->m_seat,
+                                                          event->time_msec, event->dx, event->dy);
+            }
+        }
+    }
+
+    static void handle_cursor_swipe_end(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_swipe_end_listener);
+        auto* event = static_cast<struct wlr_pointer_swipe_end_event*>(data);
+
+        log::info("[Gesture] Swipe end: cancelled={}", event->cancelled);
+
+        if (self->m_active_swipe_gesture) {
+            WorkspaceManager::instance().end_gesture_swipe(event->cancelled);
+            self->m_active_swipe_gesture = false;
+        } else {
+            if (self->m_pointer_gestures && self->m_seat) {
+                wlr_pointer_gestures_v1_send_swipe_end(self->m_pointer_gestures, self->m_seat,
+                                                       event->time_msec, event->cancelled);
+            }
+        }
     }
 
     static void handle_request_set_selection(struct wl_listener* listener, void* data) {

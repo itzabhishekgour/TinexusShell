@@ -281,13 +281,14 @@ bool TinexusDecorationManager::client_wants_ssd(struct wlr_xdg_toplevel* topleve
     return false;
 }
 
-TinexusWindowFrame* TinexusDecorationManager::create_frame(struct wlr_xdg_toplevel* toplevel) {
-    if (!toplevel || !m_scene_tree_normal) return nullptr;
+TinexusWindowFrame* TinexusDecorationManager::create_frame(struct wlr_xdg_toplevel* toplevel, struct wlr_scene_tree* parent) {
+    struct wlr_scene_tree* root_tree = parent ? parent : m_scene_tree_normal;
+    if (!toplevel || !root_tree) return nullptr;
 
     auto frame = std::make_unique<TinexusWindowFrame>();
 
-    // 1. Root frame tree under normal scene tree
-    frame->frame_tree = wlr_scene_tree_create(m_scene_tree_normal);
+    // 1. Root frame tree under parent workspace scene tree (or normal scene tree)
+    frame->frame_tree = wlr_scene_tree_create(root_tree);
     if (!frame->frame_tree) return nullptr;
 
     // 2. Titlebar background (28px)

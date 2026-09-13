@@ -86,14 +86,13 @@ bool ShortcutEngine::process_key_event(uint32_t modifiers, uint32_t keycode, boo
         return true;
     }
 
-    // ── Launcher: Ctrl+K, Ctrl+Space, Alt+Space, bare Super key ──────────────
+    // ── Launcher: Ctrl+K, Ctrl+Space, Alt+Space ─────────────────────────────
     bool is_k = (keycode == KEY_K || keysym == SYM_k || keysym == SYM_K);
     bool is_space = (keycode == KEY_SPACE || keysym == SYM_space);
 
     if ((has_ctrl && is_k) ||
         (has_ctrl && is_space) ||
-        (has_alt  && is_space) ||
-        is_super_key) {
+        (has_alt  && is_space)) {
         log::info("ShortcutEngine: launcher_toggle (keycode={}, keysym=0x{:x}, mods={})", keycode, keysym, modifiers);
         m_callback("launcher_toggle");
         return true;

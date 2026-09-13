@@ -117,14 +117,17 @@ bool TinexusServer::initialize() {
         return false;
     }
 
-    // 1. Create Backend (Wlroots by default)
+    // 1. Initialize workspaces before backend so per-workspace scene trees are created
+    WorkspaceManager::instance().initialize_default_workspaces(9);
+
+    // 2. Create Backend (Wlroots by default)
     m_backend = create_wlroots_backend(m_wl_display);
     if (!m_backend) {
         log::error("TinexusServer: Failed to instantiate backend.");
         return false;
     }
 
-    // 2. Initialize backend (this creates wlr_backend, renderer, allocator, etc)
+    // 3. Initialize backend (this creates wlr_backend, renderer, allocator, etc)
     if (!m_backend->initialize()) {
         log::error("TinexusServer: Failed to initialize backend.");
         return false;
@@ -165,9 +168,6 @@ bool TinexusServer::initialize() {
 
     // Setup cursor theme
     CursorManager::instance().set_theme("Adwaita", 24);
-
-    // Setup workspace manager with 9 workspaces (Super+1–9)
-    WorkspaceManager::instance().initialize_default_workspaces(9);
 
     // ── Global shortcut handler ───────────────────────────────────────────────
     ShortcutEngine::instance().set_shortcut_callback(

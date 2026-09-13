@@ -84,7 +84,7 @@ public:
     [[nodiscard]] bool client_wants_ssd(struct wlr_xdg_toplevel* toplevel) const;
 
     // Frame lifecycle
-    TinexusWindowFrame* create_frame(struct wlr_xdg_toplevel* toplevel);
+    TinexusWindowFrame* create_frame(struct wlr_xdg_toplevel* toplevel, struct wlr_scene_tree* parent = nullptr);
     void destroy_frame(struct wlr_xdg_toplevel* toplevel);
     [[nodiscard]] TinexusWindowFrame* get_frame(struct wlr_xdg_toplevel* toplevel) const;
 
