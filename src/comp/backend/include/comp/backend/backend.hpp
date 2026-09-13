@@ -39,6 +39,11 @@ public:
     // Session lock state — must be implemented by concrete backends
     virtual void set_locked(bool locked) noexcept = 0;
     [[nodiscard]] virtual bool is_locked() const noexcept = 0;
+
+    // Test environment screendump & cursor automation
+    virtual bool dump_screenshot(const std::string& path) { return false; }
+    virtual void warp_cursor(double x, double y) {}
+    virtual void simulate_click(uint32_t button, uint32_t state) {}
 };
 
 

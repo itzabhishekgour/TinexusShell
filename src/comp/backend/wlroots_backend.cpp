@@ -26,6 +26,9 @@ extern "C" {
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_data_control_v1.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_primary_selection.h>
 #define namespace wl_namespace
 #include <wlr/types/wlr_layer_shell_v1.h>
 #define static
@@ -44,6 +47,7 @@ extern "C" {
 #include "comp/focus/focus_manager.hpp"
 #include "comp/server/server.hpp"
 #include "comp/window/window_state.hpp"
+#include "comp/window/decoration_manager.hpp"
 #include "comp/animation/animation_manager.hpp"
 #include "common/AppId.hpp"
 #include <unistd.h>
@@ -52,6 +56,8 @@ extern "C" {
 #include <cstring>
 #include <filesystem>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 namespace tinexus::comp {
 
@@ -89,7 +95,7 @@ void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, v
 }
 } // namespace
 
-class WlrootsBackend : public Backend {
+class WlrootsBackend : public Backend, public IWindowActionHandler {
 public:
     explicit WlrootsBackend(struct wl_display* display) : m_display(display) {}
 
@@ -238,6 +244,9 @@ public:
         m_new_output_listener.notify = handle_new_output;
         wl_signal_add(&m_wlr_backend->events.new_output, &m_new_output_listener);
 
+        // Initialize Tinexus Server-Side Decoration Manager (zxdg_decoration_manager_v1)
+        TinexusDecorationManager::instance().init(m_display, this, m_scene_tree_normal);
+
         m_new_input_listener.notify = handle_new_input;
         wl_signal_add(&m_wlr_backend->events.new_input, &m_new_input_listener);
 
@@ -265,6 +274,22 @@ public:
         } else {
             log::info("[Backend] wl_data_device_manager created (clipboard enabled).");
         }
+
+        m_data_control_manager = wlr_data_control_manager_v1_create(m_display);
+        if (m_data_control_manager) {
+            log::info("[Backend] wlr_data_control_manager_v1 created.");
+        }
+
+        m_primary_selection_manager = wlr_primary_selection_v1_device_manager_create(m_display);
+        if (m_primary_selection_manager) {
+            log::info("[Backend] wlr_primary_selection_v1_device_manager created.");
+        }
+
+        m_request_set_selection_listener.notify = handle_request_set_selection;
+        wl_signal_add(&m_seat->events.request_set_selection, &m_request_set_selection_listener);
+
+        m_request_set_primary_selection_listener.notify = handle_request_set_primary_selection;
+        wl_signal_add(&m_seat->events.request_set_primary_selection, &m_request_set_primary_selection_listener);
 
         return true;
     }
@@ -302,6 +327,8 @@ public:
             if (m_new_layer_surface_listener.link.next) { wl_list_remove(&m_new_layer_surface_listener.link); m_new_layer_surface_listener.link.next = nullptr; }
             if (m_new_xdg_surface_listener.link.next) { wl_list_remove(&m_new_xdg_surface_listener.link); m_new_xdg_surface_listener.link.next = nullptr; }
             if (m_new_xdg_popup_listener.link.next) { wl_list_remove(&m_new_xdg_popup_listener.link); m_new_xdg_popup_listener.link.next = nullptr; }
+            if (m_request_set_selection_listener.link.next) { wl_list_remove(&m_request_set_selection_listener.link); m_request_set_selection_listener.link.next = nullptr; }
+            if (m_request_set_primary_selection_listener.link.next) { wl_list_remove(&m_request_set_primary_selection_listener.link); m_request_set_primary_selection_listener.link.next = nullptr; }
 
             for (auto* p : m_popups) {
                 if (p->commit.link.next) { wl_list_remove(&p->commit.link); p->commit.link.next = nullptr; }
@@ -310,6 +337,8 @@ public:
                 delete p;
             }
             m_popups.clear();
+
+            TinexusDecorationManager::instance().shutdown();
 
             if (m_scene) {
                 wlr_scene_node_destroy(&m_scene->tree.node);
@@ -350,6 +379,8 @@ private:
     struct wlr_compositor* m_wlr_compositor{nullptr};
     struct wlr_shm* m_wlr_shm{nullptr};
     struct wlr_data_device_manager* m_data_device_manager{nullptr};
+    struct wlr_data_control_manager_v1* m_data_control_manager{nullptr};
+    struct wlr_primary_selection_v1_device_manager* m_primary_selection_manager{nullptr};
 
     struct wlr_output_layout* m_output_layout{nullptr};
     struct wlr_seat* m_seat{nullptr};
@@ -375,6 +406,8 @@ private:
     struct wl_listener m_new_layer_surface_listener;
     struct wl_listener m_new_xdg_surface_listener;
     struct wl_listener m_new_xdg_popup_listener;
+    struct wl_listener m_request_set_selection_listener;
+    struct wl_listener m_request_set_primary_selection_listener;
 
     std::vector<std::unique_ptr<TinexusOutput>> m_outputs;
     ToplevelWrapper* m_active_toplevel{nullptr};
@@ -418,6 +451,7 @@ private:
         struct wlr_scene_layer_surface_v1* scene_layer{nullptr};
         struct wl_listener destroy;
         struct wl_listener commit;
+        struct wl_listener unmap;
         WlrootsBackend* backend{nullptr};
     };
 
@@ -432,7 +466,9 @@ private:
         struct wl_listener request_minimize;
         struct wl_listener request_move;
         struct wl_listener request_resize;
+        struct wl_listener set_app_id;
         WlrootsBackend* backend{nullptr};
+        TinexusWindowFrame* frame{nullptr};
 
         // Window states
         bool is_maximized{false};
@@ -536,6 +572,10 @@ private:
 
             wl_list_remove(&w->destroy.link);
             wl_list_remove(&w->commit.link);
+            if (w->unmap.link.next) {
+                wl_list_remove(&w->unmap.link);
+                w->unmap.link.next = nullptr;
+            }
             delete w;
 
             // Only restore other surfaces AFTER w is deleted and erased from m_layer_surfaces!
@@ -544,6 +584,20 @@ private:
             }
         };
         wl_signal_add(&layer_surface->events.destroy, &wrapper->destroy);
+
+        wrapper->unmap.notify = [](struct wl_listener* l, void* d) {
+            LayerSurfaceWrapper* w = wl_container_of(l, w, unmap);
+            if (w && w->layer_surface && w->layer_surface->surface) {
+                if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
+                    if (w->backend && w->backend->m_active_toplevel && w->backend->m_active_toplevel->toplevel) {
+                        FocusManager::instance().set_keyboard_focus(w->backend->m_active_toplevel->toplevel->base->surface);
+                    } else {
+                        FocusManager::instance().set_keyboard_focus(nullptr);
+                    }
+                }
+            }
+        };
+        wl_signal_add(&layer_surface->surface->events.unmap, &wrapper->unmap);
 
         wrapper->commit.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, commit);
@@ -572,7 +626,8 @@ private:
             // Check if this layer surface is tinexus-lock or exclusive overlay lock
             const char* ns = w->layer_surface->wl_namespace;
             bool is_lock = (ns && (std::string(ns) == "tinexus-lock" || std::string(ns) == "lock"));
-            if (!is_lock && w->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY &&
+            bool is_launcher = (ns && (std::string(ns) == "launcher" || std::string(ns) == "tinexus-launcher"));
+            if (!is_lock && !is_launcher && w->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY &&
                 w->layer_surface->current.keyboard_interactive == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
                 is_lock = true;
             }
@@ -594,6 +649,13 @@ private:
                     FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
                 }
                 return;
+            }
+
+            if (is_launcher) {
+                if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
+                    log::info("[LayerShell] Granting keyboard focus to Launcher");
+                    FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                }
             }
 
             // Auto-focus heuristic for the unified shell
@@ -672,6 +734,9 @@ private:
         }
         if (m_active_toplevel != nullptr && m_active_toplevel != wrapper) {
             wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
+            if (m_active_toplevel->frame && m_active_toplevel->toplevel) {
+                TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
+            }
         }
         m_active_toplevel = wrapper;
         if (wrapper != nullptr) {
@@ -681,6 +746,9 @@ private:
             wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
             wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
             wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
+            if (wrapper->frame && wrapper->toplevel) {
+                TinexusDecorationManager::instance().set_toplevel_active(wrapper->toplevel, true);
+            }
             FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
 
             std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
@@ -775,15 +843,169 @@ private:
     }
 
     bool toggle_launcher() noexcept override {
+        // 1. First attempt to signal running launcher instance via local socket
+        const char* rundir = getenv("XDG_RUNTIME_DIR");
+        std::vector<std::string> candidates;
+        if (rundir && *rundir) {
+            candidates.push_back(std::string(rundir) + "/tinexus-launcher-single");
+        }
+        candidates.push_back("/run/user/0/tinexus-launcher-single");
+        candidates.push_back("/run/user/1000/tinexus-launcher-single");
+        candidates.push_back("/tmp/tinexus-launcher-single");
+
+        for (const auto& sock_path : candidates) {
+            int s = ::socket(AF_UNIX, SOCK_STREAM, 0);
+            if (s < 0) continue;
+            struct sockaddr_un addr{};
+            addr.sun_family = AF_UNIX;
+            std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+            if (::connect(s, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
+                const char* msg = "toggle\n";
+                ssize_t wres = ::write(s, msg, std::strlen(msg));
+                (void)wres;
+                ::shutdown(s, SHUT_WR);
+                struct timeval tv{ .tv_sec = 0, .tv_usec = 50000 };
+                setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                char ack[16];
+                ssize_t rres = ::read(s, ack, sizeof(ack));
+                (void)rres;
+                ::close(s);
+                log::info("[Backend] Sent toggle to running launcher via socket at {}", sock_path);
+                return true;
+            }
+            ::close(s);
+        }
+
+        // 2. Check toplevels
         for (const auto& w : m_toplevels) {
-            if (w->toplevel->app_id && (std::string(w->toplevel->app_id) == "tinexus-launcher" ||
-                                        std::string(w->toplevel->app_id) == "io.tinexus.shell.Launcher")) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == "tinexus-launcher" ||
+                 std::string(w->toplevel->app_id) == "io.tinexus.shell.Launcher")) {
                 log::info("[Backend] Closing existing launcher instance via XDG close");
                 wlr_xdg_toplevel_send_close(w->toplevel);
                 return true;
             }
         }
         return false;
+    }
+
+    void warp_cursor(double x, double y) override {
+        if (m_cursor) {
+            wlr_cursor_warp(m_cursor, nullptr, x, y);
+            log::info("[Cursor] Warped cursor to ({}, {})", x, y);
+        }
+    }
+
+    void simulate_click(uint32_t button, uint32_t state) override {
+        if (m_cursor) {
+            struct wlr_pointer_button_event ev{};
+            ev.time_msec = 0;
+            ev.button = button;
+            ev.state = static_cast<enum wl_pointer_button_state>(state);
+            handle_cursor_button(&m_cursor_button_listener, &ev);
+        }
+    }
+
+    bool dump_screenshot(const std::string& path) override {
+        if (m_outputs.empty()) {
+            log::error("[Backend] No outputs available for screenshot");
+            return false;
+        }
+        auto* out = m_outputs.front()->get_wlr_output();
+        if (!out) {
+            log::error("[Backend] Output pointer is null");
+            return false;
+        }
+
+        struct wlr_scene_output* scene_output = wlr_scene_get_scene_output(m_scene, out);
+        if (!scene_output) {
+            log::error("[Backend] Scene output pointer is null");
+            return false;
+        }
+
+        struct wlr_output_state state;
+        wlr_output_state_init(&state);
+        if (!wlr_scene_output_build_state(scene_output, &state, nullptr)) {
+            log::error("[Backend] Failed to build scene output state");
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        if (!state.buffer) {
+            log::error("[Backend] Output state buffer is null after build_state");
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        int w = out->width;
+        int h = out->height;
+        const uint8_t* raw_pixels = nullptr;
+        size_t stride_bytes = 0;
+        bool need_end_access = false;
+
+        if (m_wlr_renderer && wlr_renderer_is_pixman(m_wlr_renderer)) {
+            pixman_image_t* img = wlr_pixman_renderer_get_buffer_image(m_wlr_renderer, state.buffer);
+            if (img) {
+                raw_pixels = reinterpret_cast<const uint8_t*>(pixman_image_get_data(img));
+                w = pixman_image_get_width(img);
+                h = pixman_image_get_height(img);
+                stride_bytes = static_cast<size_t>(pixman_image_get_stride(img));
+                log::info("[Backend] Captured screenshot via pixman image: {}x{}, stride={}", w, h, stride_bytes);
+            }
+        }
+
+        if (!raw_pixels) {
+            void* data = nullptr;
+            uint32_t fmt = 0;
+            size_t s = 0;
+            if (wlr_buffer_begin_data_ptr_access(state.buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &fmt, &s)) {
+                raw_pixels = static_cast<const uint8_t*>(data);
+                stride_bytes = s;
+                w = state.buffer->width;
+                h = state.buffer->height;
+                need_end_access = true;
+                log::info("[Backend] Captured screenshot via data ptr: {}x{}, stride={}", w, h, stride_bytes);
+            }
+        }
+
+        if (!raw_pixels) {
+            log::error("[Backend] Failed to obtain raw pixel pointer for screenshot");
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        std::ofstream ppm(path, std::ios::binary);
+        if (!ppm.is_open()) {
+            log::error("[Backend] Failed to open '{}' for writing screenshot", path);
+            if (need_end_access) wlr_buffer_end_data_ptr_access(state.buffer);
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        ppm << "P6\n" << w << " " << h << "\n255\n";
+        for (int y = 0; y < h; ++y) {
+            const uint32_t* row = reinterpret_cast<const uint32_t*>(raw_pixels + (y * stride_bytes));
+            for (int x = 0; x < w; ++x) {
+                uint32_t px = row[x];
+                uint8_t r = static_cast<uint8_t>((px >> 16) & 0xFF);
+                uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
+                uint8_t b = static_cast<uint8_t>(px & 0xFF);
+                ppm.put(static_cast<char>(r));
+                ppm.put(static_cast<char>(g));
+                ppm.put(static_cast<char>(b));
+            }
+        }
+        ppm.close();
+
+        if (need_end_access) {
+            wlr_buffer_end_data_ptr_access(state.buffer);
+        }
+
+        wlr_output_commit_state(out, &state);
+        wlr_output_state_finish(&state);
+
+        log::info("[Backend] Successfully saved screenshot to '{}' ({}x{})", path, w, h);
+        return true;
     }
 
     using OutputWorkAreaInfo = WorkArea;
@@ -907,7 +1129,7 @@ private:
     }
 
     void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
-        if (!wrapper || !wrapper->toplevel || !wrapper->scene_tree) return;
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->initialized || !wrapper->scene_tree) return;
 
         if (maximize) {
             if (wrapper->state_machine.state() == WindowState::Maximized) {
@@ -1374,6 +1596,7 @@ private:
     }
 
     void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->initialized || !wrapper->scene_tree) return;
         if (wrapper->is_fullscreen == fullscreen) {
             if (fullscreen && wrapper->scene_tree) {
                 struct wlr_output* out = get_output_for_toplevel(wrapper);
@@ -1414,6 +1637,9 @@ private:
                 wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, false);
                 wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
             }
+        }
+        if (wrapper->frame && wrapper->toplevel) {
+            TinexusDecorationManager::instance().set_toplevel_fullscreen(wrapper->toplevel, fullscreen);
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
@@ -1464,18 +1690,150 @@ private:
         wrapper->backend->begin_interactive_resize(wrapper, event->edges);
     }
 
+    // IWindowActionHandler implementation for TinexusDecorationManager
+    void request_move(void* wrapper) override {
+        auto* w = static_cast<ToplevelWrapper*>(wrapper);
+        if (w) begin_interactive_move(w);
+    }
+
+    void request_resize(void* wrapper, uint32_t edges) override {
+        auto* w = static_cast<ToplevelWrapper*>(wrapper);
+        if (w) begin_interactive_resize(w, edges);
+    }
+
+    void request_maximize(void* wrapper, bool maximize) override {
+        auto* w = static_cast<ToplevelWrapper*>(wrapper);
+        if (w) toplevel_set_maximized(w, maximize);
+    }
+
+    void request_minimize(void* wrapper, bool minimize) override {
+        auto* w = static_cast<ToplevelWrapper*>(wrapper);
+        if (w) toplevel_set_minimized(w, minimize);
+    }
+
+    void request_close(void* wrapper) override {
+        auto* w = static_cast<ToplevelWrapper*>(wrapper);
+        if (w && w->toplevel) {
+            wlr_xdg_toplevel_send_close(w->toplevel);
+        }
+    }
+
+    bool is_window_maximized(void* wrapper) const override {
+        auto* w = static_cast<ToplevelWrapper*>(wrapper);
+        return w ? w->is_maximized : false;
+    }
+
+    void on_decoration_mode_changed(struct wlr_xdg_toplevel* toplevel) override {
+        for (const auto& w : m_toplevels) {
+            if (w && w->toplevel == toplevel) {
+                ensure_decoration_mode(w.get());
+                break;
+            }
+        }
+    }
+
+    void attach_ssd_frame(ToplevelWrapper* wrapper) {
+        if (!wrapper || wrapper->frame || !wrapper->toplevel || !wrapper->scene_tree) return;
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+
+        TinexusWindowFrame* frame = TinexusDecorationManager::instance().create_frame(toplevel);
+        if (!frame || !frame->frame_tree || !frame->client_tree) return;
+
+        // Position root frame tree at current window position
+        int cur_x = wrapper->scene_tree->node.x;
+        int cur_y = wrapper->scene_tree->node.y;
+        wlr_scene_node_set_position(&frame->frame_tree->node, cur_x, cur_y);
+
+        // Reparent client surface scene tree to frame->client_tree
+        auto* client_scene = static_cast<struct wlr_scene_tree*>(toplevel->base->data);
+        if (client_scene) {
+            wlr_scene_node_reparent(&client_scene->node, frame->client_tree);
+            wlr_scene_node_set_position(&client_scene->node, 0, 0);
+        }
+
+        wrapper->frame = frame;
+        wrapper->scene_tree = frame->frame_tree;
+
+        int32_t w = toplevel->base->current.geometry.width;
+        int32_t h = toplevel->base->current.geometry.height;
+        if (w > 0 && h > 0) {
+            frame->update_geometry(w, h);
+        }
+
+        log::info("[Decoration] Attached Tinexus SSD frame to toplevel {} (app_id='{}')",
+                  static_cast<void*>(toplevel), toplevel->app_id ? toplevel->app_id : "unknown");
+    }
+
+    void detach_ssd_frame(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->frame || !wrapper->toplevel) return;
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+
+        auto* client_scene = static_cast<struct wlr_scene_tree*>(toplevel->base->data);
+        if (client_scene) {
+            int cur_x = wrapper->frame->frame_tree->node.x;
+            int cur_y = wrapper->frame->frame_tree->node.y;
+            wlr_scene_node_reparent(&client_scene->node, m_scene_tree_normal);
+            wlr_scene_node_set_position(&client_scene->node, cur_x, cur_y);
+            wrapper->scene_tree = client_scene;
+        }
+
+        TinexusDecorationManager::instance().destroy_frame(toplevel);
+        wrapper->frame = nullptr;
+
+        log::info("[Decoration] Detached Tinexus SSD frame from toplevel {} (app_id='{}')",
+                  static_cast<void*>(toplevel), toplevel->app_id ? toplevel->app_id : "unknown");
+    }
+
+    void ensure_decoration_mode(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base) return;
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+        const char* app_id = toplevel->app_id;
+
+        bool is_native = TinexusDecorationManager::is_native_csd_app(app_id);
+        bool client_wants_csd = TinexusDecorationManager::instance().client_wants_csd(toplevel);
+        bool client_wants_ssd = TinexusDecorationManager::instance().client_wants_ssd(toplevel);
+
+        bool should_have_ssd = false;
+        if (is_native || client_wants_csd) {
+            should_have_ssd = false;
+        } else if (client_wants_ssd) {
+            should_have_ssd = true;
+        } else if (app_id && *app_id != '\0') {
+            should_have_ssd = true;
+        } else {
+            should_have_ssd = false;
+        }
+
+        if (should_have_ssd && !wrapper->frame) {
+            attach_ssd_frame(wrapper);
+        } else if (!should_have_ssd && wrapper->frame) {
+            detach_ssd_frame(wrapper);
+        }
+    }
+
+    static void handle_toplevel_set_app_id(struct wl_listener* listener, void* /*data*/) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, set_app_id);
+        log::info("[XDGShell] toplevel set_app_id: app_id='{}'",
+                  wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown");
+        wrapper->backend->ensure_decoration_mode(wrapper);
+    }
+
     static void handle_new_xdg_toplevel(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_xdg_surface_listener);
         auto* xdg_toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
 
-        log::info("[XDGShell] New XDG toplevel surface created");
-        struct wlr_scene_tree* scene_tree = wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
-        xdg_toplevel->base->data = scene_tree;
+        log::info("[XDGShell] New XDG toplevel surface created (app_id='{}')",
+                  xdg_toplevel->app_id ? xdg_toplevel->app_id : "unknown");
 
         auto wrapper = std::make_unique<ToplevelWrapper>();
         wrapper->toplevel = xdg_toplevel;
-        wrapper->scene_tree = scene_tree;
         wrapper->backend  = self;
+
+        // Policy: Initially keep toplevel in normal scene tree without SSD frame.
+        // Decoration decision is made only after sufficient client state is available (commit / negotiation).
+        wrapper->scene_tree = wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
+        xdg_toplevel->base->data = wrapper->scene_tree;
+        wrapper->frame = nullptr;
 
         // Position window with cascade offset
         int32_t offset_x = 50 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
@@ -1492,7 +1850,7 @@ private:
             offset_x = (screen_w - 640) / 2;
             offset_y = std::max(60, (screen_h - 480) / 3);
         }
-        wlr_scene_node_set_position(&scene_tree->node, offset_x, offset_y);
+        wlr_scene_node_set_position(&wrapper->scene_tree->node, offset_x, offset_y);
 
         // map fires when the surface first attaches a buffer (i.e. is ready to show)
         wrapper->map.notify = handle_toplevel_map;
@@ -1501,6 +1859,10 @@ private:
         // commit fires on client commits (needed to send configure on initial_commit)
         wrapper->commit.notify = handle_toplevel_commit;
         wl_signal_add(&xdg_toplevel->base->surface->events.commit, &wrapper->commit);
+
+        // set_app_id fires when the client updates or initializes its app_id
+        wrapper->set_app_id.notify = handle_toplevel_set_app_id;
+        wl_signal_add(&xdg_toplevel->events.set_app_id, &wrapper->set_app_id);
 
         // destroy — clean up our wrapper
         wrapper->destroy.notify = handle_toplevel_destroy;
@@ -1734,8 +2096,22 @@ private:
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, commit);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         if (toplevel->base->initial_commit) {
-            log::info("[XDGShell] Initial commit for toplevel — scheduling initial configure");
-            wlr_xdg_surface_schedule_configure(toplevel->base);
+            log::info("[XDGShell] Initial commit for toplevel — configuring initial geometry and states");
+            wrapper->backend->ensure_decoration_mode(wrapper);
+            if (wrapper->is_maximized || toplevel->requested.maximized) {
+                wrapper->backend->toplevel_set_maximized(wrapper, true);
+            } else if (wrapper->is_fullscreen || toplevel->requested.fullscreen) {
+                wrapper->backend->toplevel_set_fullscreen(wrapper, true);
+            } else {
+                wlr_xdg_surface_schedule_configure(toplevel->base);
+            }
+        }
+        if (wrapper->frame && toplevel && toplevel->base) {
+            int32_t cur_w = toplevel->base->current.geometry.width;
+            int32_t cur_h = toplevel->base->current.geometry.height;
+            if (cur_w > 0 && cur_h > 0) {
+                wrapper->frame->update_geometry(cur_w, cur_h);
+            }
         }
     }
 
@@ -1743,6 +2119,11 @@ private:
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_maximize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request maximize state={}", toplevel->requested.maximized);
+        if (!toplevel->base->initialized) {
+            log::info("[XDGShell] Surface not initialized yet — deferring maximize to initial commit");
+            wrapper->is_maximized = toplevel->requested.maximized;
+            return;
+        }
         wrapper->backend->toplevel_set_maximized(wrapper, toplevel->requested.maximized);
     }
 
@@ -1750,6 +2131,11 @@ private:
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request fullscreen state={}", toplevel->requested.fullscreen);
+        if (!toplevel->base->initialized) {
+            log::info("[XDGShell] Surface not initialized yet — deferring fullscreen to initial commit");
+            wrapper->is_fullscreen = toplevel->requested.fullscreen;
+            return;
+        }
         wrapper->backend->toplevel_set_fullscreen(wrapper, toplevel->requested.fullscreen);
     }
 
@@ -1757,6 +2143,9 @@ private:
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request minimize for toplevel");
+        if (!toplevel->base->initialized) {
+            return;
+        }
         wrapper->backend->toplevel_set_minimized(wrapper, true);
         wlr_xdg_surface_schedule_configure(toplevel->base);
     }
@@ -1770,6 +2159,11 @@ private:
 
         // 0. Cancel active animations immediately to prevent any callback or dereference
         AnimationManager::instance().cancel_animation(reinterpret_cast<uint64_t>(wrapper));
+
+        // Clean up SSD frame if present
+        if (wrapper->frame && wrapper->toplevel) {
+            backend->detach_ssd_frame(wrapper);
+        }
 
         // 1. Cancel/disarm timers (F-03 safety)
         if (wrapper->fade_timer != nullptr) {
@@ -1814,6 +2208,7 @@ private:
         // Remove wl_listeners safely and idempotently
         if (wrapper->map.link.next != nullptr) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
         if (wrapper->commit.link.next != nullptr) { wl_list_remove(&wrapper->commit.link); wrapper->commit.link.next = nullptr; }
+        if (wrapper->set_app_id.link.next != nullptr) { wl_list_remove(&wrapper->set_app_id.link); wrapper->set_app_id.link.next = nullptr; }
         if (wrapper->destroy.link.next != nullptr) { wl_list_remove(&wrapper->destroy.link); wrapper->destroy.link.next = nullptr; }
         if (wrapper->request_maximize.link.next != nullptr) { wl_list_remove(&wrapper->request_maximize.link); wrapper->request_maximize.link.next = nullptr; }
         if (wrapper->request_fullscreen.link.next != nullptr) { wl_list_remove(&wrapper->request_fullscreen.link); wrapper->request_fullscreen.link.next = nullptr; }
@@ -2200,9 +2595,41 @@ private:
                                   self->m_cursor->x, self->m_cursor->y,
                                   app_name, static_cast<void*>(clicked_wrapper));
                         self->focus_toplevel(clicked_wrapper);
-                    } else if (self->m_cursor->y <= 60.0) {
-                        log::debug("[Window] Click at ({:.1f}, {:.1f}) hit non-toplevel node {}",
-                                   self->m_cursor->x, self->m_cursor->y, static_cast<void*>(node));
+
+                        // If clicked window has an SSD frame, check if titlebar/traffic lights consume the event
+                        if (clicked_wrapper->frame != nullptr) {
+                            bool handled = TinexusDecorationManager::instance().handle_cursor_button(
+                                node, self->m_cursor->x, self->m_cursor->y,
+                                event->button, event->state, clicked_wrapper);
+                            if (handled) {
+                                return; // Consumed by Tinexus SSD titlebar or traffic lights!
+                            }
+                        }
+                    } else {
+                        // Check if click hit a layer-shell surface with keyboard interactivity (e.g. Launcher)
+                        bool found_layer = false;
+                        for (auto* ls : self->m_layer_surfaces) {
+                            if (ls && ls->layer_surface && ls->layer_surface->surface && ls->scene_layer) {
+                                struct wlr_scene_node* cur = node;
+                                while (cur) {
+                                    if (cur == &ls->scene_layer->tree->node) {
+                                        if (ls->layer_surface->current.keyboard_interactive != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) {
+                                            log::info("[LayerShell] Click focused layer surface '{}'",
+                                                      ls->layer_surface->wl_namespace ? ls->layer_surface->wl_namespace : "unnamed");
+                                            FocusManager::instance().set_keyboard_focus(ls->layer_surface->surface);
+                                        }
+                                        found_layer = true;
+                                        break;
+                                    }
+                                    cur = cur->parent ? &cur->parent->node : nullptr;
+                                }
+                                if (found_layer) break;
+                            }
+                        }
+                        if (!found_layer && self->m_cursor->y <= 60.0) {
+                            log::debug("[Window] Click at ({:.1f}, {:.1f}) hit non-toplevel node {}",
+                                       self->m_cursor->x, self->m_cursor->y, static_cast<void*>(node));
+                        }
                     }
                 }
             }
@@ -2248,6 +2675,22 @@ private:
 
     static void handle_cursor_frame(struct wl_listener* listener, void* data) {
         SeatManager::instance().notify_frame();
+    }
+
+    static void handle_request_set_selection(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_request_set_selection_listener);
+        auto* event = static_cast<struct wlr_seat_request_set_selection_event*>(data);
+        wlr_seat_set_selection(self->m_seat, event->source, event->serial);
+        log::info("[Clipboard] Selection set on seat0 (source={}, serial={})",
+                  static_cast<void*>(event->source), event->serial);
+    }
+
+    static void handle_request_set_primary_selection(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_request_set_primary_selection_listener);
+        auto* event = static_cast<struct wlr_seat_request_set_primary_selection_event*>(data);
+        wlr_seat_set_primary_selection(self->m_seat, event->source, event->serial);
+        log::info("[Clipboard] Primary selection set on seat0 (source={}, serial={})",
+                  static_cast<void*>(event->source), event->serial);
     }
 };
 

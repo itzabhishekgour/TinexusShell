@@ -28,6 +28,7 @@ add_executable(tinexus-comp
     window/window_node.cpp
     window/xdg_toplevel_node.cpp
     window/scene_graph.cpp
+    window/decoration_manager.cpp
     window/window_manager.cpp
     window/MinimizeAnimation.cpp
     window/RestoreAnimation.cpp
