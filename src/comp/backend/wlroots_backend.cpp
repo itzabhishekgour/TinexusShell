@@ -623,6 +623,7 @@ private:
 
             // Defend against memory reuse bug: clear focus if this was the focused surface
             if (w->layer_surface && w->layer_surface->surface) {
+                BlurManager::instance().unregister_surface_blur(w->layer_surface->surface);
                 if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
                     FocusManager::instance().set_keyboard_focus(nullptr);
                 }
@@ -690,7 +691,9 @@ private:
                     wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
                 }
                 struct wlr_box usable_area = full_area;
-                wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+                if (w->layer_surface->output && full_area.width > 0 && full_area.height > 0) {
+                    wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+                }
             }
 
             log::debug("[LayerShell] commit.notify! namespace={}, actual_height={}",
@@ -725,7 +728,7 @@ private:
                 return;
             }
 
-            if (is_launcher) {
+            if (is_launcher && w->layer_surface->surface && w->layer_surface->surface->mapped) {
                 if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
                     log::info("[LayerShell] Granting keyboard focus to Launcher");
                     FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
@@ -926,14 +929,21 @@ private:
         candidates.push_back("/tmp/tinexus-launcher-single");
 
         for (const auto& sock_path : candidates) {
-            int s = ::socket(AF_UNIX, SOCK_STREAM, 0);
+            int s = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
             if (s < 0) continue;
+
+            struct timeval tv{};
+            tv.tv_sec = 0;
+            tv.tv_usec = 100000; // 100ms timeout
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
             struct sockaddr_un addr{};
             addr.sun_family = AF_UNIX;
             std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
             if (::connect(s, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
                 const char* msg = "toggle\n";
-                ssize_t wres = ::write(s, msg, std::strlen(msg));
+                ssize_t wres = ::send(s, msg, std::strlen(msg), MSG_NOSIGNAL);
                 (void)wres;
                 ::close(s);
                 log::info("[Backend] Sent toggle to running launcher via socket at {}", sock_path);
@@ -942,7 +952,21 @@ private:
             ::close(s);
         }
 
-        // 2. Check toplevels
+        // 2. Check layer surfaces (if launcher is running as a layer-surface)
+        for (const auto* w : m_layer_surfaces) {
+            if (w && w->layer_surface) {
+                const char* ns = w->layer_surface->wl_namespace;
+                if (ns && (std::string(ns) == "launcher" || std::string(ns) == "tinexus-launcher")) {
+                    if (w->layer_surface->surface && w->layer_surface->surface->mapped) {
+                        log::info("[Backend] Found mapped launcher layer-surface; asserting keyboard focus");
+                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 3. Check toplevels
         for (const auto& w : m_toplevels) {
             if (w && w->toplevel && w->toplevel->app_id) {
                 std::string aid(w->toplevel->app_id);

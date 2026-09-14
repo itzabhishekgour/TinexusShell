@@ -190,6 +190,15 @@ bool TinexusServer::initialize() {
                     pid_t grandchild = fork();
                     if (grandchild < 0) { _exit(1); }
                     if (grandchild == 0) {
+                        // Close inherited file descriptors (3..255) to prevent socket/DRM leaks
+                        for (int fd = 3; fd < 256; ++fd) {
+                            ::close(fd);
+                        }
+                        const char* rundir = getenv("XDG_RUNTIME_DIR");
+                        if (!rundir || !*rundir) {
+                            rundir = "/run/user/0";
+                        }
+                        setenv("XDG_RUNTIME_DIR", rundir, 1);
                         setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
                         setenv("QT_QPA_PLATFORM", "wayland", 1);
                         setenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell", 1);
@@ -202,10 +211,6 @@ bool TinexusServer::initialize() {
                             const char* old_ld = std::getenv("LD_LIBRARY_PATH");
                             std::string new_ld = old_ld ? lib_path + ":" + old_ld : lib_path;
                             setenv("LD_LIBRARY_PATH", new_ld.c_str(), 0);
-                        }
-                        const char* rundir = getenv("XDG_RUNTIME_DIR");
-                        if (!rundir || !*rundir) {
-                            setenv("XDG_RUNTIME_DIR", "/run/user/0", 1);
                         }
                         setsid();
                         execlp("tinexus-launcher", "tinexus-launcher", nullptr);

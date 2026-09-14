@@ -144,10 +144,14 @@ void BlurManager::register_surface_blur(struct wlr_surface* surface, struct wl_r
         };
         wl_signal_add(&surface->events.destroy, &state->destroy_listener);
 
-        wl_resource_set_implementation(blur_resource, &blur_implementation, state.get(), blur_resource_destroy);
+        if (blur_resource) {
+            wl_resource_set_implementation(blur_resource, &blur_implementation, state.get(), blur_resource_destroy);
+        }
         m_surfaces[surface] = std::move(state);
     } else {
-        wl_resource_set_implementation(blur_resource, &blur_implementation, it->second.get(), blur_resource_destroy);
+        if (blur_resource) {
+            wl_resource_set_implementation(blur_resource, &blur_implementation, it->second.get(), blur_resource_destroy);
+        }
     }
 
     log::info("[BlurManager] Registered blur request for surface {:p}", static_cast<void*>(surface));
@@ -166,7 +170,11 @@ void BlurManager::unregister_surface_blur(struct wlr_surface* surface) {
     if (!surface) return;
     auto it = m_surfaces.find(surface);
     if (it != m_surfaces.end()) {
-        wl_list_remove(&it->second->destroy_listener.link);
+        if (it->second->destroy_listener.link.next) {
+            wl_list_remove(&it->second->destroy_listener.link);
+            it->second->destroy_listener.link.next = nullptr;
+            it->second->destroy_listener.link.prev = nullptr;
+        }
         pixman_region32_fini(&it->second->region);
         m_surfaces.erase(it);
         log::info("[BlurManager] Unregistered blur for surface {:p}", static_cast<void*>(surface));

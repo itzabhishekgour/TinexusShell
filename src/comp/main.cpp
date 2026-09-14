@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGHUP, signal_handler);
+    std::signal(SIGPIPE, SIG_IGN);
 
     tinexus::comp::TinexusServer server;
     g_server = &server;
