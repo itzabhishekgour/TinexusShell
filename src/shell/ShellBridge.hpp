@@ -38,6 +38,13 @@ class ShellBridge : public QObject {
     Q_PROPERTY(bool rebootConfirmationOpen READ rebootConfirmationOpen WRITE setRebootConfirmationOpen NOTIFY flyoutStateChanged)
     Q_PROPERTY(bool shutdownConfirmationOpen READ shutdownConfirmationOpen WRITE setShutdownConfirmationOpen NOTIFY flyoutStateChanged)
 
+    Q_PROPERTY(bool notchExpanded READ notchExpanded WRITE setNotchExpanded NOTIFY notchExpandedChanged)
+    Q_PROPERTY(bool mediaPlaying READ mediaPlaying NOTIFY mediaStateChanged)
+    Q_PROPERTY(QString mediaTitle READ mediaTitle NOTIFY mediaStateChanged)
+    Q_PROPERTY(QString mediaArtist READ mediaArtist NOTIFY mediaStateChanged)
+    Q_PROPERTY(qreal mediaProgress READ mediaProgress NOTIFY mediaStateChanged)
+    Q_PROPERTY(QString mediaTimeStr READ mediaTimeStr NOTIFY mediaStateChanged)
+
     Q_PROPERTY(QVariantList notifications READ notifications NOTIFY notificationsChanged)
     Q_PROPERTY(QVariantList applicationsList READ applicationsList NOTIFY applicationsListChanged)
 
@@ -66,6 +73,13 @@ public:
     bool rebootConfirmationOpen() const { return m_rebootConfirmationOpen; }
     bool shutdownConfirmationOpen() const { return m_shutdownConfirmationOpen; }
 
+    bool notchExpanded() const { return m_notchExpanded; }
+    bool mediaPlaying() const { return m_mediaPlaying; }
+    QString mediaTitle() const { return m_mediaTitle; }
+    QString mediaArtist() const { return m_mediaArtist; }
+    qreal mediaProgress() const { return m_mediaProgress; }
+    QString mediaTimeStr() const { return m_mediaTimeStr; }
+
     QVariantList notifications() const { return m_notifications; }
     QVariantList applicationsList() const { return m_applicationsList; }
 
@@ -76,6 +90,7 @@ public:
     void setActiveAppName(const QString& name);
     void syncAudioState();
 
+    void setNotchExpanded(bool exp);
     void setLogoMenuOpen(bool open);
     void setAppMenuOpen(bool open);
     void setCalendarOpen(bool open);
@@ -94,6 +109,10 @@ public:
     Q_INVOKABLE void toggleVolume();
     Q_INVOKABLE void toggleBrightness();
     Q_INVOKABLE void clearNotifications();
+    Q_INVOKABLE void dismissNotification(int index);
+    Q_INVOKABLE void toggleMediaPlayback();
+    Q_INVOKABLE void nextMediaTrack();
+    Q_INVOKABLE void prevMediaTrack();
     Q_INVOKABLE void launchApp(const QString& execCmd);
     Q_INVOKABLE void openWifiSettings();
     Q_INVOKABLE void onNotchCenterClicked();
@@ -116,6 +135,8 @@ signals:
     void flyoutStateChanged();
     void notificationsChanged();
     void applicationsListChanged();
+    void notchExpandedChanged();
+    void mediaStateChanged();
 
 private slots:
     void updateClock();
@@ -135,6 +156,13 @@ private:
     int     m_brightness{80};
     QString m_activeAppName{"Applications"};
     QString m_logoUrl;
+
+    bool    m_notchExpanded{false};
+    bool    m_mediaPlaying{true};
+    QString m_mediaTitle{"Stargazing"};
+    QString m_mediaArtist{"Tinexus Sound System"};
+    qreal   m_mediaProgress{0.48};
+    QString m_mediaTimeStr{"1:42 / 3:30"};
 
     bool    m_logoMenuOpen{false};
     bool    m_appMenuOpen{false};

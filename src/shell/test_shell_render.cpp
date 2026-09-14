@@ -105,7 +105,14 @@ int main(int argc, char* argv[]) {
 
     // ── 1. Idle Top Bar (1920 x 46) ──────────────────────────────────────────
     bridge.closeAllFlyouts();
+    bridge.setNotchExpanded(false);
     if (!save_frame(1920, 46, "desktop_topbar_idle.png")) return 1;
+
+    // ── 2. Dynamic Island / Aura Notch Expanded (1920 x 84) ──────────────────
+    bridge.closeAllFlyouts();
+    bridge.setNotchExpanded(true);
+    if (!save_frame(1920, 84, "desktop_notch_media_open.png")) return 1;
+    bridge.setNotchExpanded(false);
 
     // ── 2. Logo Menu Open (1920 x 290) ───────────────────────────────────────
     bridge.setLogoMenuOpen(true);

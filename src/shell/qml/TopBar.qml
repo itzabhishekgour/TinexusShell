@@ -9,6 +9,7 @@ Item {
     id: root
     width: parent ? parent.width : 1920
     height: 32
+    readonly property bool notchExpanded: centerNotch.expanded
 
     LiquidGlass {
         id: barBg
@@ -115,10 +116,12 @@ Item {
         }
     }
 
-    // ── Center: Dynamic Sloped Trapezoid Notch ──────────────────
+    // ── Center: Reactive Dynamic Island Aura Notch ───────────────
     AuraNotch {
+        id: centerNotch
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
+        anchors.topMargin: 1
     }
 
     // ── Right: Control Center & Status Tray ─────────────────────

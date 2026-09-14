@@ -43,18 +43,28 @@ ShellBridge::ShellBridge(QObject* parent)
     // Populate standard notifications for desktop notification flyout
     QVariantMap n1;
     n1[QStringLiteral("title")]   = QStringLiteral("System Update");
-    n1[QStringLiteral("message")] = QStringLiteral("Tinexus Desktop v1.1.0 update is available.");
+    n1[QStringLiteral("message")] = QStringLiteral("Tinexus Platform v1.1 update ready to install.");
     n1[QStringLiteral("time")]    = QStringLiteral("10m ago");
     n1[QStringLiteral("appId")]   = QStringLiteral("tinexus-settings");
+    n1[QStringLiteral("icon")]    = QStringLiteral("system-software-update-symbolic");
 
     QVariantMap n2;
-    n2[QStringLiteral("title")]   = QStringLiteral("Battery");
-    n2[QStringLiteral("message")] = QStringLiteral("Power adapter connected.");
+    n2[QStringLiteral("title")]   = QStringLiteral("Power & Battery");
+    n2[QStringLiteral("message")] = QStringLiteral("Fast charging enabled. Power adapter connected.");
     n2[QStringLiteral("time")]    = QStringLiteral("25m ago");
     n2[QStringLiteral("appId")]   = QStringLiteral("tinexus-monitor");
+    n2[QStringLiteral("icon")]    = QStringLiteral("battery-level-100-charged-symbolic");
+
+    QVariantMap n3;
+    n3[QStringLiteral("title")]   = QStringLiteral("Sound & Media");
+    n3[QStringLiteral("message")] = QStringLiteral("Audio output switched to High-Definition Speakers.");
+    n3[QStringLiteral("time")]    = QStringLiteral("1h ago");
+    n3[QStringLiteral("appId")]   = QStringLiteral("tinexus-media");
+    n3[QStringLiteral("icon")]    = QStringLiteral("audio-volume-high-symbolic");
 
     m_notifications.append(n1);
     m_notifications.append(n2);
+    m_notifications.append(n3);
 
     updateClock();
     connect(&m_clockTimer, &QTimer::timeout, this, &ShellBridge::updateClock);
@@ -504,6 +514,46 @@ void ShellBridge::powerSleep() {
 
 void ShellBridge::requestBlur(bool enable, int radius) {
     tinexus::log::info("[Shell] Surface requested compositor backdrop blur: enable={}, radius={}", enable, radius);
+}
+
+void ShellBridge::setNotchExpanded(bool exp) {
+    if (m_notchExpanded != exp) {
+        m_notchExpanded = exp;
+        emit notchExpandedChanged();
+    }
+}
+
+void ShellBridge::dismissNotification(int index) {
+    if (index >= 0 && index < m_notifications.size()) {
+        m_notifications.removeAt(index);
+        emit notificationsChanged();
+    }
+}
+
+void ShellBridge::toggleMediaPlayback() {
+    m_mediaPlaying = !m_mediaPlaying;
+    tinexus::log::info("[Shell] Media playback toggled: playing={}", m_mediaPlaying);
+    emit mediaStateChanged();
+}
+
+void ShellBridge::nextMediaTrack() {
+    m_mediaTitle = QStringLiteral("Solaris Echo");
+    m_mediaArtist = QStringLiteral("Tinexus Synthwave");
+    m_mediaProgress = 0.15;
+    m_mediaTimeStr = QStringLiteral("0:32 / 4:10");
+    m_mediaPlaying = true;
+    tinexus::log::info("[Shell] Next media track: {}", m_mediaTitle.toStdString());
+    emit mediaStateChanged();
+}
+
+void ShellBridge::prevMediaTrack() {
+    m_mediaTitle = QStringLiteral("Neon Horizon");
+    m_mediaArtist = QStringLiteral("Aura Collective");
+    m_mediaProgress = 0.85;
+    m_mediaTimeStr = QStringLiteral("3:15 / 3:50");
+    m_mediaPlaying = true;
+    tinexus::log::info("[Shell] Previous media track: {}", m_mediaTitle.toStdString());
+    emit mediaStateChanged();
 }
 
 } // namespace tinexus::shell

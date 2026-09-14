@@ -10,14 +10,15 @@ Window {
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
-    // Dynamically expand window height when a flyout opens so it can receive input and render
+    // Dynamically expand window height when a flyout opens or when Aura Notch expands
     readonly property bool anyFlyoutOpen: typeof bridge !== "undefined" && (
         bridge.logoMenuOpen || bridge.appMenuOpen || bridge.calendarOpen || bridge.notificationsOpen ||
         bridge.volumeFlyoutOpen || bridge.brightnessFlyoutOpen ||
         bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen
     )
+    readonly property bool notchExpanded: topBar.notchExpanded
 
-    height: anyFlyoutOpen ? 420 : 46
+    height: anyFlyoutOpen ? 420 : (notchExpanded ? 84 : 46)
 
     Item {
         id: container
