@@ -728,10 +728,15 @@ private:
                 return;
             }
 
-            if (is_launcher && w->layer_surface->surface && w->layer_surface->surface->mapped) {
-                if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
-                    log::info("[LayerShell] Granting keyboard focus to Launcher");
-                    FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+            if (is_launcher) {
+                if (w->scene_layer && w->scene_layer->tree) {
+                    wlr_scene_node_raise_to_top(&w->scene_layer->tree->node);
+                }
+                if (w->layer_surface->surface && w->layer_surface->surface->mapped) {
+                    if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
+                        log::info("[LayerShell] Granting keyboard focus to Launcher");
+                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                    }
                 }
             }
 
@@ -1932,7 +1937,7 @@ private:
             int screen_w = (out && out->width > 0) ? out->width : 1920;
             int screen_h = (out && out->height > 0) ? out->height : 1080;
             int32_t offset_x = (screen_w - 640) / 2;
-            int32_t offset_y = std::max(60, (screen_h - 480) / 3);
+            int32_t offset_y = 32;
             wlr_scene_node_set_position(&wrapper->scene_tree->node, offset_x, offset_y);
         }
     }
@@ -1989,7 +1994,7 @@ private:
             int screen_w = (out && out->width > 0) ? out->width : 1920;
             int screen_h = (out && out->height > 0) ? out->height : 1080;
             offset_x = (screen_w - 640) / 2;
-            offset_y = std::max(60, (screen_h - 480) / 3);
+            offset_y = 32;
         }
         wlr_scene_node_set_position(&wrapper->scene_tree->node, offset_x, offset_y);
 
@@ -2154,7 +2159,7 @@ private:
             int screen_w = (out && out->width > 0) ? out->width : 1920;
             int screen_h = (out && out->height > 0) ? out->height : 1080;
             int cx = (screen_w - init_w) / 2;
-            int cy = std::max(60, (screen_h - init_h) / 3);
+            int cy = 32;
             if (wrapper->scene_tree) {
                 wlr_scene_node_set_position(&wrapper->scene_tree->node, cx, cy);
                 wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);

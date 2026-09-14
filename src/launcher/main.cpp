@@ -131,9 +131,9 @@ int main(int argc, char* argv[]) {
         lsWin->setLayer(LayerShellQt::Window::LayerTop);
         lsWin->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityExclusive);
         lsWin->setScope("launcher");
-        lsWin->setAnchors(LayerShellQt::Window::Anchors{});
+        lsWin->setAnchors(LayerShellQt::Window::Anchors::fromInt(LayerShellQt::Window::AnchorTop));
         lsWin->setExclusiveZone(0);
-        tinexus::log::info("[Launcher] LayerShellQt initialized: Layer=Top, KeyboardInteractivity=Exclusive, Scope=launcher");
+        tinexus::log::info("[Launcher] LayerShellQt initialized: Layer=Top, Anchor=Top, KeyboardInteractivity=Exclusive, Scope=launcher");
     } else {
         tinexus::log::warn("[Launcher] LayerShellQt::Window::get returned nullptr; running in standard window mode.");
     }

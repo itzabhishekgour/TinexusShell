@@ -17,12 +17,26 @@ Window {
 
     visible: false
 
-    // "Drop from Notch" Animation State
+    // "Drop from Notch" Animation State & Focus Tracking
     property bool isOpen: visible
+    property bool hasBeenActive: false
+    property bool canDismiss: false
+
+    Timer {
+        id: activationGraceTimer
+        interval: 350
+        repeat: false
+        onTriggered: {
+            rootWindow.canDismiss = true;
+        }
+    }
 
     function openLauncher() {
         isOpen = true;
         visible = true;
+        hasBeenActive = false;
+        canDismiss = false;
+        activationGraceTimer.restart();
         searchInput.text = "";
         if (typeof bridge !== "undefined") {
             bridge.query = "";
@@ -35,6 +49,8 @@ Window {
 
     function dismissLauncher() {
         isOpen = false;
+        hasBeenActive = false;
+        canDismiss = false;
         dismissTimer.restart();
     }
 
@@ -55,11 +71,15 @@ Window {
             openLauncher();
         } else {
             isOpen = false;
+            hasBeenActive = false;
+            canDismiss = false;
         }
     }
 
     onActiveChanged: {
-        if (!active && visible) {
+        if (active) {
+            hasBeenActive = true;
+        } else if (visible && hasBeenActive && canDismiss) {
             dismissLauncher();
         }
     }
@@ -83,9 +103,9 @@ Window {
         anchors.fill: parent
         transformOrigin: Item.Top
 
-        // Smooth physics-based morphing out from notch center
-        scale: isOpen ? 1.0 : 0.22
-        y: isOpen ? 0 : -80
+        // Morph out from exact physical Aura Notch (width 236px / 640px = 0.37)
+        scale: isOpen ? 1.0 : 0.37
+        y: isOpen ? 0 : -32
         opacity: isOpen ? 1.0 : 0.0
 
         Behavior on scale {
