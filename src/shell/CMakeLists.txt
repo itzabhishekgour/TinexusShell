@@ -8,6 +8,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Qml
     DBus
     WaylandClient
+    Svg
 )
 
 set(CMAKE_AUTOMOC ON)
@@ -38,6 +39,7 @@ target_link_libraries(tinexus-shell PRIVATE
     Qt6::Qml
     Qt6::DBus
     Qt6::WaylandClient
+    Qt6::Svg
     tinexus_warnings
 )
 
@@ -72,6 +74,7 @@ target_link_libraries(test-shell-render PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::DBus
+    Qt6::Svg
     tinexus_warnings
 )
 
@@ -97,6 +100,7 @@ target_link_libraries(test-shell-live PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::DBus
+    Qt6::Svg
     tinexus_warnings
 )
 set_target_properties(test-shell-live PROPERTIES

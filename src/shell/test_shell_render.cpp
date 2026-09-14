@@ -2,7 +2,9 @@
 // test_shell_render.cpp — Visual Verification Harness for tinexus-shell (Qt6)
 // ============================================================================
 #include "ShellBridge.hpp"
+#include "TinexusIconProvider.hpp"
 #include <QtGui/QGuiApplication>
+#include <QtGui/QFontDatabase>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
@@ -23,11 +25,28 @@ int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("test-shell-render"));
 
+    // ── Enforce "Inter" System Typography ──────────────────────────────────────
+    QStringList fontPaths = {
+        QStringLiteral("/usr/share/fonts/truetype/inter/Inter-Regular.ttf"),
+        QStringLiteral("/usr/share/fonts/truetype/inter/Inter-Bold.ttf"),
+        QStringLiteral("/workspace/assets/fonts/Inter-Regular.ttf"),
+        QStringLiteral("/workspace/assets/fonts/Inter-Bold.ttf")
+    };
+    for (const auto& fp : fontPaths) {
+        if (QFileInfo::exists(fp)) {
+            QFontDatabase::addApplicationFont(fp);
+        }
+    }
+    QFont defaultFont(QStringLiteral("Inter"));
+    defaultFont.setPixelSize(12);
+    app.setFont(defaultFont);
+
     std::cout << "[Visual Test] Rendering Desktop Top Bar and Flyouts (Qt6)..." << std::endl;
 
     tinexus::shell::ShellBridge bridge;
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("icon"), new tinexus::shell::TinexusIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
     QString qmlPath;

@@ -2,8 +2,10 @@
 // main.cpp — tinexus-shell (Qt6 / Layer-shell)
 // ============================================================================
 #include "ShellBridge.hpp"
+#include "TinexusIconProvider.hpp"
 #include <common/logger.hpp>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QFontDatabase>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
@@ -25,9 +27,26 @@ int main(int argc, char* argv[]) {
     app.setApplicationName(QStringLiteral("tinexus-shell"));
     app.setDesktopFileName(QStringLiteral("io.tinexus.shell.TopBar"));
 
+    // ── Enforce "Inter" System Typography ──────────────────────────────────────
+    QStringList fontPaths = {
+        QStringLiteral("/usr/share/fonts/truetype/inter/Inter-Regular.ttf"),
+        QStringLiteral("/usr/share/fonts/truetype/inter/Inter-Bold.ttf"),
+        QStringLiteral("/workspace/assets/fonts/Inter-Regular.ttf"),
+        QStringLiteral("/workspace/assets/fonts/Inter-Bold.ttf")
+    };
+    for (const auto& fp : fontPaths) {
+        if (QFileInfo::exists(fp)) {
+            QFontDatabase::addApplicationFont(fp);
+        }
+    }
+    QFont defaultFont(QStringLiteral("Inter"));
+    defaultFont.setPixelSize(12);
+    app.setFont(defaultFont);
+
     tinexus::shell::ShellBridge bridge;
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("icon"), new tinexus::shell::TinexusIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
     QString qmlPath;

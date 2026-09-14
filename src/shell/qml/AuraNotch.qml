@@ -63,6 +63,7 @@ Item {
             anchors.centerIn: parent
             text: typeof bridge !== "undefined" ? bridge.currentTime : "12:00 PM"
             color: "#F5F5FA"
+            font.family: "Inter"
             font.pixelSize: 11
             font.bold: true
         }
@@ -80,12 +81,13 @@ Item {
         border.color: Qt.rgba(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.70)
         border.width: 1.2
 
-        Text {
+        Image {
             anchors.centerIn: parent
-            text: "T"
-            color: "#FFFFFF"
-            font.pixelSize: 13
-            font.bold: true
+            source: "image://icon/tinexus-logo"
+            width: 18
+            height: 18
+            fillMode: Image.PreserveAspectFit
+            smooth: true
         }
 
         MouseArea {
@@ -119,6 +121,7 @@ Item {
             anchors.centerIn: parent
             text: typeof bridge !== "undefined" ? bridge.currentDate : "Sep 10"
             color: (dateMouse.containsMouse || datePill.isOpen) ? "#38BDF8" : "#F5F5FA"
+            font.family: "Inter"
             font.pixelSize: 11
             font.bold: true
         }
