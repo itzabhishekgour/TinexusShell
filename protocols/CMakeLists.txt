@@ -11,6 +11,7 @@ set(PROTOCOL_XMLS
     tinexus-shell-helper-v1.xml
     xdg-shell.xml
     wlr-layer-shell-unstable-v1.xml
+    org-kde-kwin-blur.xml
 )
 
 foreach(xml ${PROTOCOL_XMLS})

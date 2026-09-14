@@ -51,6 +51,8 @@ extern "C" {
 #include "comp/window/decoration_manager.hpp"
 #include "comp/animation/animation_manager.hpp"
 #include "comp/workspace/workspace_manager.hpp"
+#include "comp/surface/blur_manager.hpp"
+#include "comp/renderer/blur_pass.hpp"
 #include "common/AppId.hpp"
 #include <unistd.h>
 #include <cstdlib>
@@ -276,6 +278,9 @@ public:
 
         // Initialize Tinexus Server-Side Decoration Manager (zxdg_decoration_manager_v1)
         TinexusDecorationManager::instance().init(m_display, this, m_scene_tree_normal);
+
+        // Initialize Wayland Blur Protocol Manager (org_kde_kwin_blur_manager)
+        BlurManager::instance().initialize(m_display);
 
         m_new_input_listener.notify = handle_new_input;
         wl_signal_add(&m_wlr_backend->events.new_input, &m_new_input_listener);
@@ -597,6 +602,12 @@ private:
         wrapper->scene_layer = scene_layer;
         wrapper->backend = self;
         self->m_layer_surfaces.push_back(wrapper);
+
+        const std::string ns = layer_surface->wl_namespace ? layer_surface->wl_namespace : "";
+        if (BlurManager::instance().is_namespace_blurred(ns) || BlurManager::instance().is_surface_blurred(layer_surface->surface)) {
+            log::info("[LayerShell] Enabling Dual-Kawase background blur for surface in namespace '{}'", ns);
+            BlurManager::instance().register_surface_blur(layer_surface->surface, nullptr);
+        }
 
         wrapper->destroy.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, destroy);

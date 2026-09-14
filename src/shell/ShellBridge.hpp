@@ -97,6 +97,7 @@ public:
     Q_INVOKABLE void launchApp(const QString& execCmd);
     Q_INVOKABLE void openWifiSettings();
     Q_INVOKABLE void onNotchCenterClicked();
+    Q_INVOKABLE void requestBlur(bool enable = true, int radius = 28);
 
     // Power Actions
     Q_INVOKABLE void requestReboot();

@@ -502,6 +502,10 @@ void ShellBridge::powerSleep() {
     }
 }
 
+void ShellBridge::requestBlur(bool enable, int radius) {
+    tinexus::log::info("[Shell] Surface requested compositor backdrop blur: enable={}, radius={}", enable, radius);
+}
+
 } // namespace tinexus::shell
 
 #include "moc_ShellBridge.cpp"

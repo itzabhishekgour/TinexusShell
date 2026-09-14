@@ -49,6 +49,7 @@ add_executable(tinexus-comp
     input/shortcut_engine.cpp
     surface/surface_manager.cpp
     surface/layer_shell_manager.cpp
+    surface/blur_manager.cpp
     surface/exclusive_zone_calculator.cpp
     server/protocol_dispatcher.cpp
     window/layer_manager.cpp
