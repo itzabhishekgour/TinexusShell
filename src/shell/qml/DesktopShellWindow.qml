@@ -20,9 +20,28 @@ Window {
 
     height: anyFlyoutOpen ? 420 : (notchExpanded ? 84 : 46)
 
+    // Auto-dismiss open flyouts when shell window loses focus to an application window
+    onActiveChanged: {
+        if (!active && anyFlyoutOpen && typeof bridge !== "undefined") {
+            bridge.closeAllFlyouts();
+        }
+    }
+
     Item {
         id: container
         anchors.fill: parent
+
+        // ── Backdrop Dismiss Area (Clicking outside flyouts dismisses them) ──
+        MouseArea {
+            anchors.fill: parent
+            z: -1
+            enabled: anyFlyoutOpen
+            onPressed: {
+                if (typeof bridge !== "undefined") {
+                    bridge.closeAllFlyouts();
+                }
+            }
+        }
 
         // ── Top Bar (32px baseline + notch) ─────────────────────────
         TopBar {

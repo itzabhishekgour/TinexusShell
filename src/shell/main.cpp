@@ -13,9 +13,38 @@
 #include <QtCore/QUrl>
 #include <iostream>
 
+#include <QtCore/QEvent>
+
 #if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
 #include <LayerShellQt/Window>
 #endif
+
+namespace {
+class ShellFocusFilter : public QObject {
+public:
+    ShellFocusFilter(QQuickWindow* win, tinexus::shell::ShellBridge* bridge)
+        : m_win(win), m_bridge(bridge) {}
+protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override {
+        if (ev->type() == QEvent::FocusOut || ev->type() == QEvent::ActivationChange) {
+            if (m_win && !m_win->isActive() && m_bridge) {
+                bool anyOpen = m_bridge->logoMenuOpen() || m_bridge->appMenuOpen() ||
+                               m_bridge->calendarOpen() || m_bridge->notificationsOpen() ||
+                               m_bridge->volumeFlyoutOpen() || m_bridge->brightnessFlyoutOpen() ||
+                               m_bridge->rebootConfirmationOpen() || m_bridge->shutdownConfirmationOpen();
+                if (anyOpen) {
+                    tinexus::log::debug("[shell] Focus lost — auto-dismissing active flyout");
+                    m_bridge->closeAllFlyouts();
+                }
+            }
+        }
+        return QObject::eventFilter(obj, ev);
+    }
+private:
+    QQuickWindow* m_win{nullptr};
+    tinexus::shell::ShellBridge* m_bridge{nullptr};
+};
+} // namespace
 
 int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("shell");
@@ -91,49 +120,71 @@ int main(int argc, char* argv[]) {
         std::cout << "[tinexus-shell] LayerShellQt not linked — running in fallback QWindow mode" << std::endl;
 #endif
 
-        // ── Dynamic input-region mask (Tiny-Dead-Zone fix) ──────────────────
-        // The shell window is 46px tall (to accommodate the AuraNotch protrusion)
-        // but the exclusive zone is only 32px. Without a mask, the compositor's
-        // scene-graph hit-test (wlr_scene_node_at) will intercept clicks in the
-        // y=32–46 band on the LEFT and RIGHT sides where there is no interactive
-        // content — creating a "dead zone" below the top bar.
+        // ── Dynamic input-region mask (Precise Compound Geometry) ───────────
+        // The shell window dynamically expands up to 420px height when a flyout
+        // opens. Previously, unmasking the entire window caused clicks across the
+        // entire 1920x420 screen area (including empty transparent areas) to be
+        // intercepted by the TOP layer shell window — creating an "invisible wall"
+        // that blocked application windows behind it.
         //
-        // QWindow::setMask(QRegion) translates to wl_surface_set_input_region()
-        // via the Qt Wayland platform plugin, so only the specified rects receive
-        // pointer input; all other areas are transparent to mouse events.
+        // Fix: We construct an exact compound QRegion containing ONLY:
+        //   1. The 32px baseline top bar
+        //   2. The AuraNotch area (either 272x46 idle, or 420x72 expanded)
+        //   3. The exact bounding box of whichever flyout is currently open
         //
-        // Interactive regions:
-        //   • Full-width flat bar : (0,   0,  width, 32)
-        //   • Center notch top    : (cx-136, 32, 272,  14)  — AuraNotch trapezoid
-        //
-        // When any flyout is open, the mask is cleared → full 380px height is hit-testable.
+        // All other transparent areas remain excluded from the Wayland input
+        // region mask, allowing pointer events to pass cleanly to underlying windows.
 
         constexpr int kBarH      = 32;    // flat bar height (exclusive zone)
         constexpr int kNotchH    = 46;    // total notch height
         constexpr int kNotchHalf = 136;   // half-width of notch top edge (AuraNotch.qml)
 
-        // Lambda: compute and apply the correct mask for the current flyout state.
+        // Lambda: compute and apply the exact compound mask for current state
         auto applyInputMask = [window, &bridge, kBarH, kNotchH, kNotchHalf]() {
-            bool anyOpen = bridge.logoMenuOpen()   || bridge.appMenuOpen()       ||
-                           bridge.calendarOpen()   || bridge.notificationsOpen() ||
-                           bridge.volumeFlyoutOpen()|| bridge.brightnessFlyoutOpen() ||
-                           bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen();
+            int w  = window->width();
+            int cx = w / 2;
+            QRegion mask;
 
-            if (anyOpen) {
-                // Flyout open — full window height must receive input
-                window->setMask(QRegion());
-                tinexus::log::debug("[shell] Input region: full window (flyout open)");
+            // 1. Always mask the top bar
+            mask += QRect(0, 0, w, kBarH);
+
+            // 2. Center notch geometry
+            if (bridge.notchExpanded()) {
+                mask += QRect(cx - 210, 0, 420, 72);
             } else {
-                int w  = window->width();
-                int cx = w / 2;
-                QRegion mask;
-                mask += QRect(0,               0,    w,             kBarH);       // flat bar
-                mask += QRect(cx - kNotchHalf, kBarH, kNotchHalf * 2,
-                              kNotchH - kBarH);                                   // center notch
-                window->setMask(mask);
-                tinexus::log::debug("[shell] Input region: bar+notch only (idle)");
+                mask += QRect(cx - kNotchHalf, 0, kNotchHalf * 2, kNotchH);
             }
+
+            // 3. Add precise geometry for open flyouts
+            if (bridge.logoMenuOpen()) {
+                mask += QRect(8, 36, 230, 270);
+            }
+            if (bridge.appMenuOpen()) {
+                mask += QRect(48, 36, 350, 390);
+            }
+            if (bridge.calendarOpen()) {
+                mask += QRect(cx - 90, 48, 310, 290);
+            }
+            if (bridge.notificationsOpen()) {
+                mask += QRect(w - 398, 36, 390, 370);
+            }
+            if (bridge.volumeFlyoutOpen()) {
+                mask += QRect(w - 270, 36, 230, 190);
+            }
+            if (bridge.brightnessFlyoutOpen()) {
+                mask += QRect(w - 300, 36, 230, 190);
+            }
+            if (bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen()) {
+                mask += QRect(cx - 180, 60, 360, 190);
+            }
+
+            window->setMask(mask);
+            tinexus::log::debug("[shell] Applied compound input mask (rect count={})", mask.rectCount());
         };
+
+        // Install event filter for auto-dismissing flyouts on focus loss
+        auto* focusFilter = new ShellFocusFilter(window, &bridge);
+        window->installEventFilter(focusFilter);
 
         // Apply initial idle mask
         applyInputMask();

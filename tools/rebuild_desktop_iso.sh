@@ -299,14 +299,8 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -o /workspace/build/bin/tinexus-session
 
 # 8b. tinexus-launcher
-info "Compiling tinexus-launcher..."
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/launcher/LauncherBridge.hpp -o /tmp/build_apps/moc_LauncherBridge.cpp
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/indexer/include -I/workspace/src/launcher -I/workspace/src/launcher/include \
-  /workspace/src/launcher/main.cpp \
-  /workspace/src/launcher/LauncherBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -DHAVE_LAYERSHELL=1 \
-  -o /workspace/build/bin/tinexus-launcher
+info "Compiling tinexus-launcher via compile_launcher.sh..."
+/workspace/tools/compile_launcher.sh
 
 # 8c. tinexus-settings-ui
 info "Compiling tinexus-settings-ui..."

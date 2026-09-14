@@ -592,9 +592,17 @@ private:
                 parent = self->m_scene_tree_overlay;
                 break;
         }
+        if (!parent) {
+            parent = self->m_scene_tree_top ? self->m_scene_tree_top : &self->m_scene->tree;
+        }
 
         struct wlr_scene_layer_surface_v1* scene_layer =
             wlr_scene_layer_surface_v1_create(parent, layer_surface);
+        if (!scene_layer) {
+            log::error("[LayerShell] Failed to create scene layer surface for namespace='{}'",
+                       layer_surface->wl_namespace ? layer_surface->wl_namespace : "none");
+            return;
+        }
         layer_surface->data = scene_layer->tree;
 
         auto* wrapper = new LayerSurfaceWrapper();
@@ -666,6 +674,7 @@ private:
 
         wrapper->commit.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, commit);
+            if (!w || !w->layer_surface || !w->scene_layer || !w->backend) return;
             if (w->layer_surface->initial_commit || w->layer_surface->current.committed != 0) {
                 if (!w->layer_surface->output) {
                     struct wlr_output* out = wlr_output_layout_output_at(w->backend->m_output_layout, 0, 0);
@@ -926,12 +935,6 @@ private:
                 const char* msg = "toggle\n";
                 ssize_t wres = ::write(s, msg, std::strlen(msg));
                 (void)wres;
-                ::shutdown(s, SHUT_WR);
-                struct timeval tv{ .tv_sec = 0, .tv_usec = 50000 };
-                setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-                char ack[16];
-                ssize_t rres = ::read(s, ack, sizeof(ack));
-                (void)rres;
                 ::close(s);
                 log::info("[Backend] Sent toggle to running launcher via socket at {}", sock_path);
                 return true;
@@ -941,12 +944,13 @@ private:
 
         // 2. Check toplevels
         for (const auto& w : m_toplevels) {
-            if (w->toplevel && w->toplevel->app_id &&
-                (std::string(w->toplevel->app_id) == "tinexus-launcher" ||
-                 std::string(w->toplevel->app_id) == "io.tinexus.shell.Launcher")) {
-                log::info("[Backend] Closing existing launcher instance via XDG close");
-                wlr_xdg_toplevel_send_close(w->toplevel);
-                return true;
+            if (w && w->toplevel && w->toplevel->app_id) {
+                std::string aid(w->toplevel->app_id);
+                if (aid == "tinexus-launcher" || aid == "launcher" || aid == "io.tinexus.shell.Launcher") {
+                    log::info("[Backend] Closing existing launcher instance via XDG close");
+                    wlr_xdg_toplevel_send_close(w->toplevel);
+                    return true;
+                }
             }
         }
         return false;
@@ -1888,9 +1892,25 @@ private:
 
     static void handle_toplevel_set_app_id(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, set_app_id);
-        log::info("[XDGShell] toplevel set_app_id: app_id='{}'",
-                  wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown");
+        const char* app_id = wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "";
+        log::info("[XDGShell] toplevel set_app_id: app_id='{}'", app_id);
         wrapper->backend->ensure_decoration_mode(wrapper);
+
+        bool is_launcher = (std::string(app_id) == "tinexus-launcher" ||
+                            std::string(app_id) == "launcher" ||
+                            std::string(app_id) == "io.tinexus.shell.Launcher");
+        if (is_launcher && wrapper->scene_tree && wrapper->backend && wrapper->backend->m_scene_tree_top) {
+            wlr_scene_node_reparent(&wrapper->scene_tree->node, wrapper->backend->m_scene_tree_top);
+            wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            WorkspaceManager::instance().remove_window_from_workspace(
+                reinterpret_cast<uint64_t>(wrapper));
+            struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
+            int screen_w = (out && out->width > 0) ? out->width : 1920;
+            int screen_h = (out && out->height > 0) ? out->height : 1080;
+            int32_t offset_x = (screen_w - 640) / 2;
+            int32_t offset_y = std::max(60, (screen_h - 480) / 3);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, offset_x, offset_y);
+        }
     }
 
     static void handle_new_xdg_toplevel(struct wl_listener* listener, void* data) {
@@ -1904,19 +1924,33 @@ private:
         wrapper->toplevel = xdg_toplevel;
         wrapper->backend  = self;
 
+        bool is_launcher = (xdg_toplevel->app_id &&
+            (std::string(xdg_toplevel->app_id) == "tinexus-launcher" ||
+             std::string(xdg_toplevel->app_id) == "launcher" ||
+             std::string(xdg_toplevel->app_id) == "io.tinexus.shell.Launcher"));
+
         // Assign to currently active workspace
         auto& ws_mgr = WorkspaceManager::instance();
         wrapper->workspace_id = ws_mgr.active_workspace_id();
-        struct wlr_scene_tree* parent_tree = ws_mgr.get_workspace_scene_tree(wrapper->workspace_id);
+        struct wlr_scene_tree* parent_tree = is_launcher ? self->m_scene_tree_top : ws_mgr.get_workspace_scene_tree(wrapper->workspace_id);
         if (!parent_tree) {
-            parent_tree = self->m_scene_tree_normal;
+            parent_tree = is_launcher ? self->m_scene_tree_top : self->m_scene_tree_normal;
+        }
+        if (!parent_tree) {
+            parent_tree = &self->m_scene->tree;
         }
 
         wrapper->scene_tree = wlr_scene_xdg_surface_create(parent_tree, xdg_toplevel->base);
+        if (!wrapper->scene_tree) {
+            log::error("[XDGShell] Failed to create scene tree node for toplevel!");
+            return;
+        }
         xdg_toplevel->base->data = wrapper->scene_tree;
         wrapper->frame = nullptr;
 
-        ws_mgr.add_window_to_workspace(wrapper->workspace_id, reinterpret_cast<uint64_t>(wrapper.get()));
+        if (!is_launcher) {
+            ws_mgr.add_window_to_workspace(wrapper->workspace_id, reinterpret_cast<uint64_t>(wrapper.get()));
+        }
 
         // Position window with cascade offset
         int32_t offset_x = 50 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
@@ -1926,7 +1960,7 @@ private:
             offset_y = 0;
             wrapper->saved_x = 0;
             wrapper->saved_y = 0;
-        } else if (xdg_toplevel->app_id && (std::string(xdg_toplevel->app_id) == "tinexus-launcher" || std::string(xdg_toplevel->app_id) == "launcher")) {
+        } else if (is_launcher) {
             struct wlr_output* out = self->get_output_for_toplevel(wrapper.get());
             int screen_w = (out && out->width > 0) ? out->width : 1920;
             int screen_h = (out && out->height > 0) ? out->height : 1080;
@@ -2083,16 +2117,25 @@ private:
         if (init_w <= 0) init_w = 800;
         if (init_h <= 0) init_h = 600;
 
-        bool is_launcher = (std::string(app_id) == "tinexus-launcher" || std::string(app_id) == "launcher");
+        bool is_launcher = (std::string(app_id) == "tinexus-launcher" ||
+                            std::string(app_id) == "launcher" ||
+                            std::string(app_id) == "io.tinexus.shell.Launcher");
         if (is_launcher) {
+            if (wrapper->scene_tree && wrapper->backend && wrapper->backend->m_scene_tree_top) {
+                wlr_scene_node_reparent(&wrapper->scene_tree->node, wrapper->backend->m_scene_tree_top);
+                WorkspaceManager::instance().remove_window_from_workspace(
+                    reinterpret_cast<uint64_t>(wrapper));
+            }
             struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
             int screen_w = (out && out->width > 0) ? out->width : 1920;
             int screen_h = (out && out->height > 0) ? out->height : 1080;
             int cx = (screen_w - init_w) / 2;
             int cy = std::max(60, (screen_h - init_h) / 3);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, cx, cy);
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, cx, cy);
+                wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            }
             wrapper->state_machine.update_floating_geometry(cx, cy, init_w, init_h);
-            wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
         } else {
             struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
             if (out) {
@@ -2710,11 +2753,18 @@ private:
                                 if (found_layer) break;
                             }
                         }
-                        if (!found_layer && self->m_cursor->y <= 60.0) {
-                            log::debug("[Window] Click at ({:.1f}, {:.1f}) hit non-toplevel node {}",
-                                       self->m_cursor->x, self->m_cursor->y, static_cast<void*>(node));
+                        if (!found_layer) {
+                            if (self->m_cursor->y <= 60.0) {
+                                log::debug("[Window] Click at ({:.1f}, {:.1f}) hit non-toplevel node {}",
+                                           self->m_cursor->x, self->m_cursor->y, static_cast<void*>(node));
+                            }
+                            // Clear keyboard focus when clicking desktop background / non-interactive layer
+                            FocusManager::instance().set_keyboard_focus(nullptr);
                         }
                     }
+                } else {
+                    // Click hit empty background area with no node
+                    FocusManager::instance().set_keyboard_focus(nullptr);
                 }
             }
         } else if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {

@@ -17,46 +17,116 @@ Window {
 
     visible: false
 
-    onVisibleChanged: {
-        if (visible) {
-            searchInput.text = ""
-            if (typeof bridge !== "undefined") {
-                bridge.query = ""
-            }
-            Qt.callLater(function() {
-                rootWindow.requestActivate();
-                searchInput.forceActiveFocus();
-            });
-        }
-    }
+    // "Drop from Notch" Animation State
+    property bool isOpen: visible
 
-    Component.onCompleted: {
+    function openLauncher() {
+        isOpen = true;
+        visible = true;
+        searchInput.text = "";
+        if (typeof bridge !== "undefined") {
+            bridge.query = "";
+        }
         Qt.callLater(function() {
             rootWindow.requestActivate();
             searchInput.forceActiveFocus();
         });
     }
 
-    // Container with LiquidGlass using explicit launcher glass.background (40px blur)
+    function dismissLauncher() {
+        isOpen = false;
+        dismissTimer.restart();
+    }
+
+    Timer {
+        id: dismissTimer
+        interval: 220
+        repeat: false
+        onTriggered: {
+            rootWindow.visible = false;
+            if (typeof bridge !== "undefined") {
+                bridge.closeLauncher();
+            }
+        }
+    }
+
+    onVisibleChanged: {
+        if (visible) {
+            openLauncher();
+        } else {
+            isOpen = false;
+        }
+    }
+
+    onActiveChanged: {
+        if (!active && visible) {
+            dismissLauncher();
+        }
+    }
+
+    Connections {
+        target: typeof bridge !== "undefined" ? bridge : null
+        function onCloseRequested() {
+            rootWindow.dismissLauncher();
+        }
+    }
+
+    Component.onCompleted: {
+        if (visible) {
+            openLauncher();
+        }
+    }
+
+    // ── Drop-from-Notch Container with LiquidGlass & Spring Physics ──────
     Item {
         id: container
         anchors.fill: parent
+        transformOrigin: Item.Top
 
-        // Outer drop shadow
+        // Smooth physics-based morphing out from notch center
+        scale: isOpen ? 1.0 : 0.22
+        y: isOpen ? 0 : -80
+        opacity: isOpen ? 1.0 : 0.0
+
+        Behavior on scale {
+            SpringAnimation {
+                spring: 3.8
+                damping: 0.28
+                epsilon: 0.005
+            }
+        }
+
+        Behavior on y {
+            SpringAnimation {
+                spring: 3.8
+                damping: 0.28
+                epsilon: 0.005
+            }
+        }
+
+        Behavior on opacity {
+            SpringAnimation {
+                spring: 3.8
+                damping: 0.28
+                epsilon: 0.005
+            }
+        }
+
+        // Outer specular drop shadow
         Rectangle {
             anchors.fill: parent
-            anchors.margins: -8
-            radius: 26
-            color: Qt.rgba(0, 0, 0, 0.55)
+            anchors.margins: -10
+            radius: 28
+            color: Qt.rgba(0, 0, 0, 0.50)
         }
 
         LiquidGlass {
             id: glassBg
             anchors.fill: parent
             materialType: "launcher"
-            cornerRadius: 18
+            cornerRadius: 20
             blurAmount: 40
-            fluidOpacity: 0.78
+            fluidOpacity: 0.82
             tintColor: "#14151B"
             fallbackColor: "#14151B"
         }
@@ -138,13 +208,15 @@ Window {
                                     event.accepted = true;
                                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                                     bridge.launchSelected();
+                                    rootWindow.dismissLauncher();
                                     event.accepted = true;
                                 } else if (event.key === Qt.Key_Escape || ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_K)) {
-                                    bridge.closeLauncher();
+                                    rootWindow.dismissLauncher();
                                     event.accepted = true;
                                 } else if ((event.modifiers & Qt.ControlModifier) && event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
                                     var idx = event.key - Qt.Key_1;
                                     bridge.launchIndex(idx);
+                                    rootWindow.dismissLauncher();
                                     event.accepted = true;
                                 }
                             }
@@ -299,6 +371,7 @@ Window {
                         onClicked: {
                             if (typeof bridge !== "undefined") {
                                 bridge.launchIndex(index);
+                                rootWindow.dismissLauncher();
                             }
                         }
                     }

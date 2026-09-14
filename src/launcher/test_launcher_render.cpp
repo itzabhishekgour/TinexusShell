@@ -50,7 +50,8 @@ int main(int argc, char* argv[]) {
         QCoreApplication::applicationDirPath() + QStringLiteral("/qml/LauncherWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/../src/launcher/qml/LauncherWindow.qml"),
         QStringLiteral("src/launcher/qml/LauncherWindow.qml"),
-        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/launcher/qml/LauncherWindow.qml")
+        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/launcher/qml/LauncherWindow.qml"),
+        QStringLiteral("/workspace/src/launcher/qml/LauncherWindow.qml")
     };
     for (const auto& cand : candidates) {
         if (QFileInfo::exists(cand)) {
