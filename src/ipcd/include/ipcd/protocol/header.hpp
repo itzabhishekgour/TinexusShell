@@ -23,6 +23,53 @@ struct Header {
 
 static_assert(sizeof(Header) == 22, "IPC Header must be exactly 22 bytes");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// WallpaperChangedPayload — wire format for WALLPAPER_CHANGED (5002)
+//
+// Sent by tinexus-settings when the user selects a new wallpaper.
+// Broadcast by tinexus-ipcd to all topic-5002 subscribers:
+//   → tinexus-wallpaper  (renders LAYER_BACKGROUND)
+//   → tinexus-lock       (renders blurred wallpaper on LAYER_LOCK)
+//
+// All fields are fixed-size. No heap allocation. No JSON. Safe to memcpy
+// directly from the raw socket receive buffer.
+//
+// Wire size: 512 + 1 + 1 + 2 + 8 = 524 bytes exactly.
+// ─────────────────────────────────────────────────────────────────────────────
+#pragma pack(push, 1)
+struct WallpaperChangedPayload {
+    // Absolute, null-terminated UTF-8 path to the wallpaper asset.
+    // An empty string (path[0] == '\0') means "use the active dynamic schedule."
+    char     path[512];
+
+    // Fit mode for how the image maps to the output surface:
+    //   0 = fill   (aspect-fill, crops edges to cover entire output — default)
+    //   1 = fit    (aspect-fit, letterbox/pillarbox to avoid any cropping)
+    //   2 = center (natural image size, centered, no scaling)
+    //   3 = tile   (tiled at 1:1 pixel size across the output)
+    //   4 = stretch (unconstrained stretch — distorts, use sparingly)
+    uint8_t  mode;
+
+    // Dynamic schedule flag:
+    //   0 = static image (path points to a single image file)
+    //   1 = dynamic (.twallpaper bundle; path points to manifest directory)
+    uint8_t  dynamic;
+
+    // Cross-fade duration when transitioning from the current wallpaper.
+    //   0     = instant swap (no animation)
+    //   500   = recommended smooth transition (500ms, 30 frames at 60fps)
+    //   65535 = maximum allowed fade (65.5 seconds)
+    uint16_t fade_ms;
+
+    // Reserved for future expansion (v2 HDR flags, per-output targeting, etc.).
+    // Sender MUST zero all 8 bytes. Receiver MUST ignore unknown bits.
+    uint8_t  reserved[8];
+};
+#pragma pack(pop)
+
+static_assert(sizeof(WallpaperChangedPayload) == 524,
+              "WallpaperChangedPayload wire size must be exactly 524 bytes");
+
 // Reserved Message IDs for Service Routing and Pub/Sub
 enum class MessageType : uint16_t {
     // 0-999: System & Broker Control
@@ -66,9 +113,13 @@ enum class MessageType : uint16_t {
     PLUGIN_DATA             = 4001,
     PLUGIN_STOP             = 4002,
 
-    // 5000+: Config & Themes
+    // 5000+: Config, Themes & Wallpaper
     CONFIG_CHANGED          = 5000,
     THEME_CHANGED           = 5001,
+    WALLPAPER_CHANGED       = 5002,
+    WALLPAPER_STATUS_QUERY  = 5003,
+    WALLPAPER_STATUS_REPLY  = 5004,
+    WALLPAPER_FRAME_ADVANCE = 5005,
 };
 
 } // namespace tinexus::ipcd::protocol
