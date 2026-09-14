@@ -25,14 +25,11 @@ mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs /dev/shm/upper /dev/shm/work
 cleanup_mounts() {
     info "Running cleanup handler..."
     fuser -km /mnt/rootfs 2>/dev/null || true
-    umount /mnt/rootfs/dev/pts 2>/dev/null || umount -l /mnt/rootfs/dev/pts 2>/dev/null || true
-    umount /mnt/rootfs/dev 2>/dev/null || umount -l /mnt/rootfs/dev 2>/dev/null || true
-    umount /mnt/rootfs/workspace 2>/dev/null || umount -l /mnt/rootfs/workspace 2>/dev/null || true
-    umount /mnt/rootfs/sys 2>/dev/null || umount -l /mnt/rootfs/sys 2>/dev/null || true
-    umount /mnt/rootfs/proc 2>/dev/null || umount -l /mnt/rootfs/proc 2>/dev/null || true
-    umount /mnt/rootfs 2>/dev/null || umount -l /mnt/rootfs 2>/dev/null || true
-    umount /mnt/squashfs 2>/dev/null || umount -l /mnt/squashfs 2>/dev/null || true
-    umount /mnt/isomnt 2>/dev/null || umount -l /mnt/isomnt 2>/dev/null || true
+    for m in /mnt/rootfs/dev/pts /mnt/rootfs/dev /mnt/rootfs/workspace /mnt/rootfs/proc /mnt/rootfs/sys /mnt/rootfs/run /mnt/rootfs/tmp /mnt/rootfs /mnt/squashfs /mnt/isomnt; do
+        while mount | grep -q " $m "; do
+            umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || break
+        done
+    done
     rm -rf /dev/shm/upper /dev/shm/work 2>/dev/null || true
 }
 trap cleanup_mounts EXIT
@@ -58,11 +55,11 @@ fi
 # 4. Setup chroot bindings
 info "Setting up chroot bindings..."
 echo "nameserver 8.8.8.8" > /mnt/rootfs/etc/resolv.conf
-mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
-mount --bind /sys /mnt/rootfs/sys 2>/dev/null || true
-mount --bind /dev /mnt/rootfs/dev 2>/dev/null || true
+mountpoint -q /mnt/rootfs/proc || mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
+mountpoint -q /mnt/rootfs/sys || mount --bind /sys /mnt/rootfs/sys 2>/dev/null || true
+mountpoint -q /mnt/rootfs/dev || mount --bind /dev /mnt/rootfs/dev 2>/dev/null || true
 mkdir -p /mnt/rootfs/workspace
-mount --bind /workspace /mnt/rootfs/workspace 2>/dev/null || true
+mountpoint -q /mnt/rootfs/workspace || mount --bind /workspace /mnt/rootfs/workspace 2>/dev/null || true
 
 # Ensure temporary directories with proper sticky bit permissions
 mkdir -p /mnt/rootfs/tmp /mnt/rootfs/var/tmp /mnt/rootfs/tmp/build_apps
@@ -334,14 +331,8 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -o /workspace/build/bin/tinexus-dock
 
 # 8e. tinexus-shell
-info "Compiling tinexus-shell..."
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/shell/ShellBridge.hpp -o /tmp/build_apps/moc_ShellBridge.cpp
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/shell -I/workspace/src/shell/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
-  /workspace/src/shell/main.cpp \
-  /workspace/src/shell/ShellBridge.cpp \
-  -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lQt6DBus -DHAVE_LAYERSHELL=1 \
-  -o /workspace/build/bin/tinexus-shell
+info "Compiling tinexus-shell via compile_shell.sh..."
+/workspace/tools/compile_shell.sh
 
 # 8f. tinexus-wallpaper
 info "Compiling tinexus-wallpaper..."
@@ -355,88 +346,8 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -o /workspace/build/bin/tinexus-wallpaper
 
 # 8g. tinexus-comp
-info "Compiling tinexus-comp..."
-COMP_SRC="/workspace/src/comp"
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  -I/workspace/src/comp \
-  -I/workspace/src/comp/server/include \
-  -I/workspace/src/comp/backend/include \
-  -I/workspace/src/comp/renderer/include \
-  -I/workspace/src/comp/output/include \
-  -I/workspace/src/comp/cursor/include \
-  -I/workspace/src/comp/window/include \
-  -I/workspace/src/comp/focus/include \
-  -I/workspace/src/comp/workspace/include \
-  -I/workspace/src/comp/shell/include \
-  -I/workspace/src/comp/render/include \
-  -I/workspace/src/comp/animation/include \
-  -I/workspace/src/comp/input/include \
-  -I/workspace/src/comp/surface/include \
-  -I/workspace/include \
-  -I/workspace/src \
-  -I/workspace/src/common/include \
-  -I/workspace/src/ipcd/include \
-  -I/workspace/build/protocols \
-  -I/usr/include/pixman-1 \
-  -I/usr/include/libdrm \
-  -I/usr/include/wlroots-0.19 \
-  -DWLR_USE_UNSTABLE=1 \
-  $COMP_SRC/main.cpp \
-  $COMP_SRC/server/server.cpp \
-  $COMP_SRC/server/global_registry.cpp \
-  $COMP_SRC/server/surface_tree.cpp \
-  $COMP_SRC/backend/headless_backend.cpp \
-  $COMP_SRC/backend/wlroots_backend.cpp \
-  $COMP_SRC/backend/drm_backend.cpp \
-  $COMP_SRC/renderer/renderer.cpp \
-  $COMP_SRC/renderer/render_surface.cpp \
-  $COMP_SRC/renderer/pixman_renderer.cpp \
-  $COMP_SRC/surface/surface_state.cpp \
-  $COMP_SRC/surface/configure_serial.cpp \
-  $COMP_SRC/surface/buffer_manager.cpp \
-  $COMP_SRC/surface/frame_callback.cpp \
-  $COMP_SRC/surface/resource_cleanup.cpp \
-  $COMP_SRC/surface/xdg_shell_manager.cpp \
-  $COMP_SRC/window/scene_node.cpp \
-  $COMP_SRC/window/window_node.cpp \
-  $COMP_SRC/window/xdg_toplevel_node.cpp \
-  $COMP_SRC/window/scene_graph.cpp \
-  $COMP_SRC/window/decoration_manager.cpp \
-  $COMP_SRC/window/window_manager.cpp \
-  $COMP_SRC/window/MinimizeAnimation.cpp \
-  $COMP_SRC/window/RestoreAnimation.cpp \
-  $COMP_SRC/input/keymap_engine.cpp \
-  $COMP_SRC/input/interaction_controller.cpp \
-  $COMP_SRC/input/seat_manager.cpp \
-  $COMP_SRC/input/udev_monitor.cpp \
-  $COMP_SRC/output/output.cpp \
-  $COMP_SRC/output/output_layout.cpp \
-  $COMP_SRC/output/output_manager.cpp \
-  $COMP_SRC/cursor/cursor_manager.cpp \
-  $COMP_SRC/window/window_rules.cpp \
-  $COMP_SRC/focus/focus_manager.cpp \
-  $COMP_SRC/workspace/workspace_manager.cpp \
-  $COMP_SRC/shell/shell_state.cpp \
-  $COMP_SRC/render/frame_scheduler.cpp \
-  $COMP_SRC/animation/animation.cpp \
-  $COMP_SRC/animation/animation_manager.cpp \
-  $COMP_SRC/input/shortcut_engine.cpp \
-  $COMP_SRC/surface/surface_manager.cpp \
-  $COMP_SRC/surface/layer_shell_manager.cpp \
-  $COMP_SRC/surface/exclusive_zone_calculator.cpp \
-  $COMP_SRC/server/protocol_dispatcher.cpp \
-  $COMP_SRC/window/layer_manager.cpp \
-  $COMP_SRC/render/damage_tracker.cpp \
-  $COMP_SRC/renderer/renderer_factory.cpp \
-  $COMP_SRC/renderer/render_target.cpp \
-  $COMP_SRC/renderer/gpu_resource_manager.cpp \
-  $COMP_SRC/renderer/vulkan_renderer.cpp \
-  $COMP_SRC/renderer/opengl_renderer.cpp \
-  $COMP_SRC/renderer/blur_pass.cpp \
-  $COMP_SRC/renderer/shadow_generator.cpp \
-  -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
-  -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lxkbcommon -lpixman-1 -lpthread \
-  -o /workspace/build/bin/tinexus-comp
+info "Compiling tinexus-comp via compile_comp.sh..."
+/workspace/tools/compile_comp.sh
 
 # 8h. tinexus-monitor
 info "Compiling tinexus-monitor..."
@@ -572,10 +483,11 @@ sleep 1
 info "Unmounting all chroot bindings..."
 # Innermost submounts first
 for m in /mnt/rootfs/dev/pts /mnt/rootfs/dev /mnt/rootfs/workspace /mnt/rootfs/proc /mnt/rootfs/sys /mnt/rootfs/run /mnt/rootfs/tmp; do
-    if mount | grep -q " $m "; then
+    while mount | grep -q " $m "; do
         info "Unmounting $m..."
-        umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || fatal "CRITICAL: Failed to unmount $m!"
-    fi
+        umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || break
+        sleep 0.2
+    done
 done
 
 info "Verifying zero leaked runtime mounts under /mnt/rootfs..."

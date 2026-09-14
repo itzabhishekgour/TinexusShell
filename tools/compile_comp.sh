@@ -19,11 +19,11 @@ if ! mount | grep -q '/mnt/rootfs'; then
     mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir=/dev/shm/upper,workdir=/dev/shm/work /mnt/rootfs
 fi
 
-mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
-mount --bind /sys /mnt/rootfs/sys 2>/dev/null || true
-mount --bind /dev /mnt/rootfs/dev 2>/dev/null || true
+mountpoint -q /mnt/rootfs/proc || mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
+mountpoint -q /mnt/rootfs/sys || mount --bind /sys /mnt/rootfs/sys 2>/dev/null || true
+mountpoint -q /mnt/rootfs/dev || mount --bind /dev /mnt/rootfs/dev 2>/dev/null || true
 mkdir -p /mnt/rootfs/workspace
-mount --bind /workspace /mnt/rootfs/workspace 2>/dev/null || true
+mountpoint -q /mnt/rootfs/workspace || mount --bind /workspace /mnt/rootfs/workspace 2>/dev/null || true
 
 echo "[INFO] Generating wayland protocols including org-kde-kwin-blur..."
 mkdir -p /mnt/rootfs/workspace/build/protocols

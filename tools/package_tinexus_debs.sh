@@ -198,6 +198,9 @@ fi
 
 # Fonts
 if [ -f "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" ]; then
+    mkdir -p "$DESK_DIR/usr/share/fonts/truetype/inter" "$DESK_DIR/usr/share/tinexus/fonts"
+    cp "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" "$DESK_DIR/usr/share/fonts/truetype/inter/"
+    cp "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf" "$DESK_DIR/usr/share/fonts/truetype/inter/"
     cp "$PROJECT_DIR/assets/fonts/Inter-Regular.ttf" "$DESK_DIR/usr/share/tinexus/fonts/"
     cp "$PROJECT_DIR/assets/fonts/Inter-Bold.ttf" "$DESK_DIR/usr/share/tinexus/fonts/"
 fi
