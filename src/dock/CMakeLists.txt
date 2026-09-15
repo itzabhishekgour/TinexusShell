@@ -20,10 +20,13 @@ add_executable(tinexus-dock
     main.cpp
     DockBridge.cpp
     DockBridge.hpp
+    DockModel.cpp
+    include/dock/DockModel.hpp
+    include/dock/DockBridge.hpp
 )
 
-target_include_directories(tinexus-dock PRIVATE 
-    ${CMAKE_SOURCE_DIR}/include 
+target_include_directories(tinexus-dock PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/ipcd/include
     ${CMAKE_SOURCE_DIR}/src/common/include
@@ -42,16 +45,22 @@ target_link_libraries(tinexus-dock PRIVATE
 if(LayerShellQt_FOUND)
     target_link_libraries(tinexus-dock PRIVATE LayerShellQt::Interface)
     target_compile_definitions(tinexus-dock PRIVATE HAVE_LAYERSHELL=1)
-    message(STATUS "tinexus-dock: LayerShellQt linked")
+    message(STATUS "tinexus-dock: LayerShellQt linked (Layer=Top, Scope=dock)")
 else()
     message(STATUS "tinexus-dock: LayerShellQt not found — running in fallback QWindow mode")
 endif()
+
+set_target_properties(tinexus-dock PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 # ── Offscreen Visual Render Test ──────────────────────────────────────────────
 add_executable(test-dock-render
     test_dock_render.cpp
     DockBridge.cpp
     DockBridge.hpp
+    DockModel.cpp
+    include/dock/DockModel.hpp
+    include/dock/DockBridge.hpp
 )
 
 target_include_directories(test-dock-render PRIVATE
