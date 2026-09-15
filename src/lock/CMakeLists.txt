@@ -32,6 +32,8 @@ target_include_directories(tinexus-lock PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/common/include
+    # M6: IpcWatcher needs WallpaperChangedPayload and MessageType — header-only
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
 )
 
 target_link_libraries(tinexus-lock PRIVATE
@@ -69,6 +71,7 @@ target_include_directories(test-lock-live PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
 )
 target_link_libraries(test-lock-live PRIVATE
     tinexus_common

@@ -923,6 +923,8 @@ private:
     }
 
     bool toggle_launcher() noexcept override {
+        bool signaled = false;
+
         // 1. First attempt to signal running launcher instance via local socket
         const char* rundir = getenv("XDG_RUNTIME_DIR");
         std::vector<std::string> candidates;
@@ -952,23 +954,32 @@ private:
                 (void)wres;
                 ::close(s);
                 log::info("[Backend] Sent toggle to running launcher via socket at {}", sock_path);
-                return true;
+                signaled = true;
+                break;
             }
             ::close(s);
         }
 
-        // 2. Check layer surfaces (if launcher is running as a layer-surface)
+        // 2. Assert keyboard focus to the launcher layer-surface AFTER sending IPC toggle
         for (const auto* w : m_layer_surfaces) {
             if (w && w->layer_surface) {
                 const char* ns = w->layer_surface->wl_namespace;
                 if (ns && (std::string(ns) == "launcher" || std::string(ns) == "tinexus-launcher")) {
-                    if (w->layer_surface->surface && w->layer_surface->surface->mapped) {
-                        log::info("[Backend] Found mapped launcher layer-surface; asserting keyboard focus");
-                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
-                        return true;
+                    if (w->scene_layer && w->scene_layer->tree) {
+                        wlr_scene_node_raise_to_top(&w->scene_layer->tree->node);
                     }
+                    if (w->layer_surface->surface) {
+                        log::info("[Backend] Asserting keyboard focus to launcher surface={}",
+                                  static_cast<void*>(w->layer_surface->surface));
+                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                    }
+                    return true;
                 }
             }
+        }
+
+        if (signaled) {
+            return true;
         }
 
         // 3. Check toplevels

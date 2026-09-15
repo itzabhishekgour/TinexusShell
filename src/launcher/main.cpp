@@ -132,14 +132,15 @@ int main(int argc, char* argv[]) {
         lsWin->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityExclusive);
         lsWin->setScope("launcher");
         lsWin->setAnchors(LayerShellQt::Window::Anchors::fromInt(LayerShellQt::Window::AnchorTop));
+        lsWin->setMargins(QMargins(0, 48, 0, 0));
         lsWin->setExclusiveZone(0);
-        tinexus::log::info("[Launcher] LayerShellQt initialized: Layer=Top, Anchor=Top, KeyboardInteractivity=Exclusive, Scope=launcher");
+        tinexus::log::info("[Launcher] LayerShellQt initialized: Layer=Top, Anchor=Top, MarginTop=48, KeyboardInteractivity=Exclusive, Scope=launcher");
     } else {
         tinexus::log::warn("[Launcher] LayerShellQt::Window::get returned nullptr; running in standard window mode.");
     }
 #endif
 
-    QObject::connect(&bridge, &tinexus::launcher::LauncherBridge::closeRequested, window, &QQuickWindow::hide);
+    // Note: window hide is gracefully performed by QML dismissTimer at the end of the spring animation.
 
     QLocalServer server;
     QLocalServer::removeServer(socketName);

@@ -11,7 +11,7 @@ Window {
     id: rootWindow
 
     width: 640
-    height: Math.min(520, (searchBox.height + (resultsList.count > 0 ? resultsList.height + 20 : 0) + 36))
+    height: Math.min(540, (searchBox.height + (resultsList.count > 0 ? resultsList.height + 20 : 0) + 36) + 24)
     color: "transparent"
     flags: Qt.FramelessWindowHint
 
@@ -36,6 +36,7 @@ Window {
         visible = true;
         hasBeenActive = false;
         canDismiss = false;
+        dismissTimer.stop();
         activationGraceTimer.restart();
         searchInput.text = "";
         if (typeof bridge !== "undefined") {
@@ -48,9 +49,11 @@ Window {
     }
 
     function dismissLauncher() {
+        if (!isOpen && !visible) return;
         isOpen = false;
         hasBeenActive = false;
         canDismiss = false;
+        activationGraceTimer.stop();
         dismissTimer.restart();
     }
 
@@ -60,8 +63,9 @@ Window {
         repeat: false
         onTriggered: {
             rootWindow.visible = false;
+            // Clear query silently without emitting closeRequested
             if (typeof bridge !== "undefined") {
-                bridge.closeLauncher();
+                bridge.query = "";
             }
         }
     }
@@ -73,6 +77,8 @@ Window {
             isOpen = false;
             hasBeenActive = false;
             canDismiss = false;
+            activationGraceTimer.stop();
+            dismissTimer.stop();
         }
     }
 
@@ -87,7 +93,9 @@ Window {
     Connections {
         target: typeof bridge !== "undefined" ? bridge : null
         function onCloseRequested() {
-            rootWindow.dismissLauncher();
+            if (rootWindow.visible && rootWindow.isOpen) {
+                rootWindow.dismissLauncher();
+            }
         }
     }
 
@@ -100,17 +108,19 @@ Window {
     // ── Drop-from-Notch Container with LiquidGlass & Spring Physics ──────
     Item {
         id: container
-        anchors.fill: parent
+        width: parent.width
+        height: parent.height - 24
         transformOrigin: Item.Top
 
-        // Morph out from exact physical Aura Notch (width 236px / 640px = 0.37)
-        scale: isOpen ? 1.0 : 0.37
-        y: isOpen ? 0 : -32
+        // Physical drop from notch: detaches from notch tip (y: -48) and falls down into workspace (y: 12)
+        // while expanding horizontally and vertically (scale: 0.25 -> 1.0)
+        scale: isOpen ? 1.0 : 0.25
+        y: isOpen ? 12 : -48
         opacity: isOpen ? 1.0 : 0.0
 
         Behavior on scale {
             SpringAnimation {
-                spring: 3.8
+                spring: 3.6
                 damping: 0.28
                 epsilon: 0.005
             }
@@ -118,7 +128,7 @@ Window {
 
         Behavior on y {
             SpringAnimation {
-                spring: 3.8
+                spring: 3.6
                 damping: 0.28
                 epsilon: 0.005
             }
@@ -126,7 +136,7 @@ Window {
 
         Behavior on opacity {
             SpringAnimation {
-                spring: 3.8
+                spring: 3.6
                 damping: 0.28
                 epsilon: 0.005
             }
@@ -228,7 +238,6 @@ Window {
                                     event.accepted = true;
                                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                                     bridge.launchSelected();
-                                    rootWindow.dismissLauncher();
                                     event.accepted = true;
                                 } else if (event.key === Qt.Key_Escape || ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_K)) {
                                     rootWindow.dismissLauncher();
@@ -236,7 +245,6 @@ Window {
                                 } else if ((event.modifiers & Qt.ControlModifier) && event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
                                     var idx = event.key - Qt.Key_1;
                                     bridge.launchIndex(idx);
-                                    rootWindow.dismissLauncher();
                                     event.accepted = true;
                                 }
                             }

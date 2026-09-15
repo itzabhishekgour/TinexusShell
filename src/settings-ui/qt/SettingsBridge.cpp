@@ -563,10 +563,10 @@ void SettingsBridge::scanWallpapers() {
         const char* fileName;
         const char* color;
     } walls[] = {
+        {"Emerald Matrix",     "emerald-matrix.png",     "#0f2f2e"},
         {"Tinexus Default",    "tinexus-default.jpg",    "#18223c"},
         {"Tinexus OS Primary", "tinexus-os-primary.jpg", "#121b2d"},
-        {"Sunset Gradient",    "sunset-gradient.png",    "#4a1d36"},
-        {"Emerald Matrix",     "emerald-matrix.png",     "#0f2f2e"}
+        {"Sunset Gradient",    "sunset-gradient.png",    "#4a1d36"}
     };
 
     for (const auto& w : walls) {
@@ -662,7 +662,11 @@ void SettingsBridge::saveConfig() {
     out << "accent_index = " << m_accentIndex << "\n";
     out << "selected_wallpaper_idx = " << m_selectedWallpaperIndex << "\n";
     if (m_selectedWallpaperIndex >= 0 && m_selectedWallpaperIndex < m_wallpapers.size()) {
-        out << "wallpaper_path = \"" << m_wallpapers[m_selectedWallpaperIndex].toMap().value(QStringLiteral("path")).toString().toStdString() << "\"\n";
+        std::string wall_path = m_wallpapers[m_selectedWallpaperIndex].toMap().value(QStringLiteral("path")).toString().toStdString();
+        out << "wallpaper_path = \"" << wall_path << "\"\n";
+        out << "\n[wallpaper]\n";
+        out << "path = \"" << wall_path << "\"\n";
+        out << "mode = \"fill\"\n";
     }
     out << "theme_mode = \"" << m_themeMode.toStdString() << "\"\n";
     out << "display_scale_idx = " << m_displayScaleIndex << "\n";

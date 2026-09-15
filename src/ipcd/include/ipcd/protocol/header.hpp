@@ -122,6 +122,47 @@ enum class MessageType : uint16_t {
     WALLPAPER_FRAME_ADVANCE = 5005,
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// WallpaperStatusPayload — wire format for WALLPAPER_STATUS_REPLY (5004)
+//
+// Sent by tinexus-wallpaper in response to a WALLPAPER_STATUS_QUERY (5003).
+// Enables the Settings UI to render an accurate thumbnail and display current
+// schedule state without polling a file or calling a D-Bus method.
+//
+// Wire size: 512 + 1 + 1 + 2 + 2 + 4 + 4 = 526 bytes.
+// ─────────────────────────────────────────────────────────────────────────────
+#pragma pack(push, 1)
+struct WallpaperStatusPayload {
+    // Absolute UTF-8 path to the currently committed wallpaper asset.
+    // Empty (path[0] == '\0') means a dynamic schedule is active and the path
+    // of the current frame is encoded in current_frame_index.
+    char     path[512];
+
+    // Fit mode currently applied (matches WallpaperChangedPayload::mode encoding).
+    uint8_t  mode;
+
+    // 0 = static image active; 1 = dynamic .twallpaper schedule active.
+    uint8_t  is_dynamic;
+
+    // Index of the currently displayed frame (0 for static, 0–N for dynamic).
+    uint16_t current_frame_index;
+
+    // Total number of frames in the active schedule (1 for static images).
+    uint16_t total_frames;
+
+    // Seconds until the next automatic frame change.
+    // 0 if is_dynamic == 0 or no next transition is scheduled.
+    uint32_t next_change_secs;
+
+    // Reserved for v2 (HDR status, color space, per-output state).
+    // Must be zeroed by the sender. Receiver must ignore unknown bits.
+    uint8_t  reserved[4];
+};
+#pragma pack(pop)
+
+static_assert(sizeof(WallpaperStatusPayload) == 526,
+              "WallpaperStatusPayload wire size must be exactly 526 bytes");
+
 } // namespace tinexus::ipcd::protocol
 
 #endif // TINEXUS_IPCD_PROTOCOL_HEADER_HPP

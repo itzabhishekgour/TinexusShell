@@ -71,7 +71,7 @@ chroot /mnt/rootfs /usr/bin/apt-get update || true
 chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
     g++ qt6-base-dev-tools qt6-declarative-dev liblayershellqtinterface-dev layer-shell-qt \
     isc-dhcp-client procps libcap2-bin wget ca-certificates libssl-dev libwayland-dev libpixman-1-dev libfreetype-dev \
-    libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev
+    libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev libpam0g-dev
 
 [ -f /mnt/rootfs/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so ] || fatal "liblayer-shell.so missing after install!"
 [ -f /mnt/rootfs/sbin/dhclient ] || [ -f /mnt/rootfs/usr/sbin/dhclient ] || fatal "dhclient missing after install!"
@@ -329,15 +329,19 @@ info "Compiling tinexus-shell via compile_shell.sh..."
 /workspace/tools/compile_shell.sh
 
 # 8f. tinexus-wallpaper
-info "Compiling tinexus-wallpaper..."
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/wallpaper/include -I/workspace/src/txui/include -I/workspace/build/protocols -I/usr/include/pixman-1 -I/usr/include/freetype2 \
+info "Compiling tinexus-wallpaper (Phase 5 M1-M7)..."
+chroot /mnt/rootfs /usr/bin/gcc -O2 -fPIC -I/workspace/build/protocols -I/usr/include/wayland /workspace/build/protocols/wp-protocols-glue.c -c -o /tmp/build_apps/wp-protocols-glue.o
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 -ftree-vectorize \
+  -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include -I/workspace/src/wallpaper/include -I/workspace/src/txui/include -I/workspace/build/protocols -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/wayland \
   /workspace/src/wallpaper/main.cpp \
   /workspace/src/wallpaper/wallpaper_provider.cpp \
-  -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
+  /workspace/src/wallpaper/solar_schedule.cpp \
+  /tmp/build_apps/wp-protocols-glue.o \
+  -L/workspace/build/lib -L/workspace/build -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
   -Wl,--whole-archive -ltxui -ltinexus_protocols_client -Wl,--no-whole-archive \
   -ltinexus_common -lwayland-client -lpixman-1 -lfreetype -lpthread \
   -o /workspace/build/bin/tinexus-wallpaper
+cp -f /workspace/build/bin/tinexus-wallpaper /workspace/build/tinexus-wallpaper
 
 # 8g. tinexus-comp
 info "Compiling tinexus-comp via compile_comp.sh..."
@@ -376,6 +380,19 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network \
   -o /workspace/build/bin/tinexus-files
 
+# 8j. tinexus-lock
+info "Compiling tinexus-lock (Phase 5 M6)..."
+chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/lock -I/workspace/src/lock/include /workspace/src/lock/LockBridge.hpp -o /tmp/build_apps/moc_LockBridge.cpp
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+  $QT6_INC $COMMON_INC -I/workspace/src/lock -I/workspace/src/lock/include -I/tmp/build_apps \
+  -DTINEXUS_LOCK_HAS_PAM=1 -DHAVE_LAYERSHELL=1 \
+  /workspace/src/lock/main.cpp \
+  /workspace/src/lock/LockBridge.cpp \
+  -L/workspace/build/lib -L/workspace/build -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
+  -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lpam \
+  -o /workspace/build/bin/tinexus-lock
+cp -f /workspace/build/bin/tinexus-lock /workspace/build/tinexus-lock
+
 success "All desktop binaries successfully compiled and deployed to /workspace/build/bin."
 
 # ── 9. Package & Install Debian Packages into Rootfs ──────────────────────────
@@ -394,6 +411,32 @@ info "Staging wallpapers and logos into rootfs..."
 mkdir -p /mnt/rootfs/usr/share/backgrounds /mnt/rootfs/usr/share/tinexus /mnt/rootfs/usr/share/pixmaps /mnt/rootfs/usr/share/icons/hicolor/32x32/apps
 cp -a /workspace/assets/wallpaper/* /mnt/rootfs/usr/share/backgrounds/ 2>/dev/null || true
 chmod 0644 /mnt/rootfs/usr/share/backgrounds/* 2>/dev/null || true
+ln -sf /usr/share/backgrounds/emerald-matrix.png /mnt/rootfs/usr/share/backgrounds/default.png 2>/dev/null || true
+
+# Pre-populate settings template with Emerald Matrix default
+mkdir -p /mnt/rootfs/etc/tinexus /mnt/rootfs/etc/skel/.config/tinexus
+cat << 'EOF' > /mnt/rootfs/etc/tinexus/settings.toml
+# Tinexus Desktop Settings Configuration
+accent_index = 0
+selected_wallpaper_idx = 0
+wallpaper_path = "/usr/share/backgrounds/emerald-matrix.png"
+theme_mode = "Dark"
+display_scale_idx = 0
+night_light = false
+vrr_enabled = false
+screen_timeout_min = 15
+sleep_after_min = 30
+power_profile_idx = 0
+lock_on_sleep = true
+pam_auth = true
+clipboard_history_size = 50
+
+[wallpaper]
+path = "/usr/share/backgrounds/emerald-matrix.png"
+mode = "fill"
+EOF
+cp -f /mnt/rootfs/etc/tinexus/settings.toml /mnt/rootfs/etc/skel/.config/tinexus/settings.toml 2>/dev/null || true
+
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/tinexus/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/pixmaps/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png
