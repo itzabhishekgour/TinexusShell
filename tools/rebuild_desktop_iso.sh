@@ -315,14 +315,8 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -o /workspace/build/bin/tinexus-settings-ui
 
 # 8d. tinexus-dock
-info "Compiling tinexus-dock..."
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/DockBridge.hpp -o /tmp/build_apps/moc_DockBridge.cpp
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/dock -I/workspace/src/dock/include \
-  /workspace/src/dock/main.cpp \
-  /workspace/src/dock/DockBridge.cpp \
-  -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -DHAVE_LAYERSHELL=1 \
-  -o /workspace/build/bin/tinexus-dock
+info "Compiling tinexus-dock via compile_dock.sh..."
+/workspace/tools/compile_dock.sh
 
 # 8e. tinexus-shell
 info "Compiling tinexus-shell via compile_shell.sh..."

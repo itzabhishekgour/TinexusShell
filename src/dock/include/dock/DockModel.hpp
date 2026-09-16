@@ -1,6 +1,6 @@
 // ============================================================================
-// DockModel.hpp — QAbstractListModel for tinexus-dock (Slice 1)
-// Merges pinned apps (from config/hardcoded) with future live Wayland toplevels.
+// DockModel.hpp — QAbstractListModel for tinexus-dock (Slice 2: Live Window Tracking)
+// Merges pinned apps (from config/hardcoded) with live Wayland toplevels.
 // Ref: Architecture Blueprint §3, docs/05_UI_UX_GUIDELINES.md
 // ============================================================================
 #pragma once
@@ -11,7 +11,11 @@
 #include <QtCore/QList>
 #include <cstdint>
 
+struct zwlr_foreign_toplevel_handle_v1;
+
 namespace tinexus::dock {
+
+class ToplevelTracker;
 
 // ── Item Kind ────────────────────────────────────────────────────────────────
 enum class DockItemKind : uint8_t {
@@ -32,6 +36,15 @@ enum class DockAppState : int {
     Minimized      = 3,
 };
 
+// ── Toplevel Reference (live Wayland window handle) ───────────────────────────
+struct ToplevelRef {
+    struct zwlr_foreign_toplevel_handle_v1* handle{nullptr};
+    QString title;
+    bool isActivated{false};
+    bool isMinimized{false};
+    bool isMaximized{false};
+};
+
 // ── Single dock item POD ─────────────────────────────────────────────────────
 struct DockItemData {
     DockItemKind kind{DockItemKind::PinnedApp};
@@ -43,12 +56,13 @@ struct DockItemData {
     QString iconType;     // "terminal" | "folder" | "gear" | "barchart" | "firefox" | "package" | "separator" | "trash"
     QUrl    iconUrl;      // Future: resolved XDG icon path
 
-    // Runtime state (populated in Slice 2 from ToplevelTracker)
-    DockAppState appState{DockAppState::NotRunning};
-    int          toplevelCount{0};      // number of open windows
-    uint32_t     badgeCount{0};         // notification badge
-    bool         needsAttention{false};
-    bool         isDeletedFromFS{false}; // show "?" badge
+    // Runtime state (populated from ToplevelTracker in Slice 2)
+    DockAppState       appState{DockAppState::NotRunning};
+    int                toplevelCount{0};      // number of open windows
+    uint32_t           badgeCount{0};         // notification badge
+    bool               needsAttention{false};
+    bool               isDeletedFromFS{false}; // show "?" badge
+    QList<ToplevelRef> toplevels;             // live Wayland window references
 
     // Sort / display position
     int configIndex{0};  // stable sort key from config
@@ -86,26 +100,64 @@ public:
     [[nodiscard]] QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
     [[nodiscard]] QHash<int, QByteArray> roleNames() const override;
 
-    // ── C++ API (for Slice 2 — ToplevelTracker integration) ─────────────────
-    /// Called when a new Wayland toplevel appears with the given app_id.
+    // ── Live Window Tracking Slots (Slice 2) ─────────────────────────────────
+    /// Atomic toplevel registration from ToplevelTracker on 'done'
+    void onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
+                                  const QString& appId,
+                                  const QString& title,
+                                  bool isActivated,
+                                  bool isMinimized,
+                                  bool isMaximized);
+
+    /// Atomic toplevel update from ToplevelTracker on 'done'
+    void onToplevelUpdatedWithHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
+                                    const QString& appId,
+                                    const QString& title,
+                                    bool isActivated,
+                                    bool isMinimized,
+                                    bool isMaximized);
+
+    /// Atomic toplevel removal from ToplevelTracker on 'closed'
+    void onToplevelRemovedWithHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
+                                    const QString& appId);
+
+    // Legacy/convenience API
     void onToplevelAdded(const QString& appId);
-    /// Called when a Wayland toplevel is removed.
     void onToplevelRemoved(const QString& appId);
-    /// Called when focus changes across toplevels.
     void onFocusChanged(const QString& focusedAppId);
-    /// Update badge count (from Notifications D-Bus).
     void setBadgeCount(const QString& appId, uint32_t count);
 
     // Direct access for DockBridge animation layer
     [[nodiscard]] const QList<DockItemData>& pinnedItems() const { return m_pinned; }
+    [[nodiscard]] const QList<DockItemData>& mergedItems() const { return m_merged; }
+    [[nodiscard]] int pinnedCount() const { return static_cast<int>(m_pinned.size()); }
     [[nodiscard]] int findItemIndex(const QString& appId) const;
+    [[nodiscard]] bool isPinned(const QString& appId) const;
+    [[nodiscard]] DockItemData getItemData(const QString& appId) const;
+
+    void setTracker(ToplevelTracker* tracker) { m_tracker = tracker; }
+    [[nodiscard]] ToplevelTracker* tracker() const { return m_tracker; }
 
 public slots:
     /// Reorder a pinned item — called after drag-and-drop (Slice 5).
     void moveItem(int fromDisplayIndex, int toDisplayIndex);
+    void commitMove();
+
+    /// Pin / Unpin management (Slice 3: Context Menu)
+    void pinApp(const QString& appId);
+    void unpinApp(const QString& appId);
+    void toggleKeepInDock(const QString& appId);
+    void removeFromDock(const QString& appId);
+
+    /// Window manipulation commands
+    void activateApp(const QString& appId);
+    void minimizeApp(const QString& appId);
+    void closeApp(const QString& appId);
+    void activateToplevel(struct zwlr_foreign_toplevel_handle_v1* handle);
 
 signals:
     void itemActivationRequested(const QString& appId);
+    void dockItemsChanged();
 
 private:
     void loadHardcodedPinnedItems();
@@ -113,14 +165,24 @@ private:
     void rebuildMergedView();
 
     DockItemData* findMutableItem(const QString& appId);
+    int findItemIndexForHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
+                               DockItemData** outItem = nullptr) const;
+
+    bool matchesAppId(const QString& itemAppId, const QString& incomingAppId) const;
+    QString resolveDisplayName(const QString& appId, const QString& title) const;
+    QString resolveIconType(const QString& appId) const;
+    void recomputeItemState(DockItemData& item);
+    void updateActiveStateAcrossAll(struct zwlr_foreign_toplevel_handle_v1* activeHandle);
 
     // ── Data sources ─────────────────────────────────────────────────────────
-    QList<DockItemData> m_pinned;     // Source 1: pinned apps (from config / hardcoded for Slice 1)
-    QList<DockItemData> m_transient;  // Source 2: running-only apps (Slice 2 — ToplevelTracker)
-    QList<DockItemData> m_stacks;     // Source 3: Stacks zone (Slice 7)
+    QList<DockItemData> m_pinned;     // Source 1: pinned apps
+    QList<DockItemData> m_transient;  // Source 2: running-only apps
+    QList<DockItemData> m_stacks;     // Source 3: Stacks zone
 
     // ── Merged flat list (what QML sees via ListView) ─────────────────────────
     QList<DockItemData> m_merged;
+
+    ToplevelTracker* m_tracker{nullptr};
 };
 
 } // namespace tinexus::dock

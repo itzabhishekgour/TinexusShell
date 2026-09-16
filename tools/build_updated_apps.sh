@@ -50,11 +50,30 @@ mkdir -p /mnt/rootfs/tmp/build_apps
 
 echo "=== 3. COMPILING tinexus-dock ==="
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/DockBridge.hpp -o /tmp/build_apps/moc_DockBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockModel.hpp -o /tmp/build_apps/moc_DockModel.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/ToplevelTracker.hpp -o /tmp/build_apps/moc_ToplevelTracker.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockMenuPopup.hpp -o /tmp/build_apps/moc_DockMenuPopup.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockWindow.hpp -o /tmp/build_apps/moc_DockWindow.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DnDHandler.hpp -o /tmp/build_apps/moc_DnDHandler.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/StacksModel.hpp -o /tmp/build_apps/moc_StacksModel.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/StacksPopup.hpp -o /tmp/build_apps/moc_StacksPopup.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockIpcClient.hpp -o /tmp/build_apps/moc_DockIpcClient.cpp
+chroot /mnt/rootfs /usr/bin/gcc -O2 -fPIC -I/workspace/src/dock -I/usr/include/wayland \
+  /workspace/src/dock/wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c -c -o /tmp/build_apps/wlr-foreign-toplevel.o
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/dock/include \
+  $QT6_INC $COMMON_INC -I/workspace/src/dock/include -I/workspace/src/dock -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/dock/main.cpp \
   /workspace/src/dock/DockBridge.cpp \
-  $QT6_LIBS \
+  /workspace/src/dock/DockModel.cpp \
+  /workspace/src/dock/ToplevelTracker.cpp \
+  /workspace/src/dock/DockMenuPopup.cpp \
+  /workspace/src/dock/DockWindow.cpp \
+  /workspace/src/dock/DnDHandler.cpp \
+  /workspace/src/dock/StacksModel.cpp \
+  /workspace/src/dock/StacksPopup.cpp \
+  /workspace/src/dock/DockIpcClient.cpp \
+  /tmp/build_apps/wlr-foreign-toplevel.o \
+  $QT6_LIBS -lwayland-client -lQt6DBus \
   -o /tmp/build_apps/tinexus-dock
 
 echo "=== 4. COMPILING tinexus-shell ==="
@@ -63,7 +82,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/shell -I/workspace/src/shell/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/shell/main.cpp \
   /workspace/src/shell/ShellBridge.cpp \
-  $QT6_LIBS -lQt6DBus \
+  $QT6_LIBS -lQt6DBus -lQt6Svg \
   -o /tmp/build_apps/tinexus-shell
 
 echo "=== 5. COMPILING tinexus-lock ==="

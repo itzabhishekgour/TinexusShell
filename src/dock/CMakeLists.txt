@@ -6,6 +6,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Gui
     Quick
     Qml
+    DBus
     WaylandClient
 )
 
@@ -23,13 +24,32 @@ add_executable(tinexus-dock
     DockModel.cpp
     include/dock/DockModel.hpp
     include/dock/DockBridge.hpp
+    ToplevelTracker.cpp
+    include/dock/ToplevelTracker.hpp
+    DockMenuPopup.cpp
+    include/dock/DockMenuPopup.hpp
+    DockWindow.cpp
+    include/dock/DockWindow.hpp
+    DnDHandler.cpp
+    include/dock/DnDHandler.hpp
+    StacksModel.cpp
+    include/dock/StacksModel.hpp
+    StacksPopup.cpp
+    include/dock/StacksPopup.hpp
+    DockIpcClient.cpp
+    include/dock/DockIpcClient.hpp
+    wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c
+    wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h
 )
 
 target_include_directories(tinexus-dock PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/wayland/protocol
     ${CMAKE_SOURCE_DIR}/src/ipcd/include
     ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_BINARY_DIR}/protocols
 )
 
 target_link_libraries(tinexus-dock PRIVATE
@@ -38,6 +58,7 @@ target_link_libraries(tinexus-dock PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
+    Qt6::DBus
     Qt6::WaylandClient
     tinexus_warnings
 )
@@ -61,13 +82,32 @@ add_executable(test-dock-render
     DockModel.cpp
     include/dock/DockModel.hpp
     include/dock/DockBridge.hpp
+    ToplevelTracker.cpp
+    include/dock/ToplevelTracker.hpp
+    DockMenuPopup.cpp
+    include/dock/DockMenuPopup.hpp
+    DockWindow.cpp
+    include/dock/DockWindow.hpp
+    DnDHandler.cpp
+    include/dock/DnDHandler.hpp
+    StacksModel.cpp
+    include/dock/StacksModel.hpp
+    StacksPopup.cpp
+    include/dock/StacksPopup.hpp
+    DockIpcClient.cpp
+    include/dock/DockIpcClient.hpp
+    wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c
+    wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h
 )
 
 target_include_directories(test-dock-render PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/wayland/protocol
     ${CMAKE_SOURCE_DIR}/src/ipcd/include
     ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_BINARY_DIR}/protocols
 )
 
 target_link_libraries(test-dock-render PRIVATE
@@ -76,6 +116,8 @@ target_link_libraries(test-dock-render PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
+    Qt6::DBus
+    Qt6::WaylandClient
     tinexus_warnings
 )
 

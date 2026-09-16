@@ -12,6 +12,7 @@ set(PROTOCOL_XMLS
     xdg-shell.xml
     wlr-layer-shell-unstable-v1.xml
     org-kde-kwin-blur.xml
+    wlr-foreign-toplevel-management-unstable-v1.xml
 )
 
 foreach(xml ${PROTOCOL_XMLS})

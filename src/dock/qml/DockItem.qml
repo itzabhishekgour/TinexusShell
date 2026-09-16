@@ -1,5 +1,5 @@
 // ============================================================================
-// DockIcon.qml — Tinexus Dock: Icon Cell with Pure QML Fisheye Magnification
+// DockItem.qml — Tinexus Dock: Icon Cell with Pure QML Fisheye Magnification
 // Slice 4: Pure QML cosine curve math, SmoothedAnimation lag, LiquidGlass style.
 // Ref: Architecture Blueprint §5.1, docs/05_UI_UX_GUIDELINES.md
 // ============================================================================

@@ -243,6 +243,21 @@ auth      include   common-auth
 account   include   common-account
 EOF
 
+# Desktop and Autostart registration for tinexus-dock
+mkdir -p "$DESK_DIR/etc/xdg/autostart" "$DESK_DIR/usr/share/applications"
+cat << 'EOF_DOCK_DESKTOP' > "$DESK_DIR/usr/share/applications/tinexus-dock.desktop"
+[Desktop Entry]
+Name=Tinexus Dock
+Comment=Tinexus Wayland Dock
+Exec=/usr/bin/tinexus-dock
+Icon=user-desktop
+Terminal=false
+Type=Application
+Categories=System;Core;
+OnlyShowIn=Tinexus;
+EOF_DOCK_DESKTOP
+cp -f "$DESK_DIR/usr/share/applications/tinexus-dock.desktop" "$DESK_DIR/etc/xdg/autostart/tinexus-dock.desktop"
+
 dpkg-deb --build "$DESK_DIR" "$OUT_DEB_DIR/tinexus-desktop_${VERSION}_amd64.deb"
 success "Built tinexus-desktop_${VERSION}_amd64.deb"
 
