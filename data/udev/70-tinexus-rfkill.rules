@@ -1,0 +1,11 @@
+# /etc/udev/rules.d/70-tinexus-rfkill.rules
+#
+# Automatically unblock all wireless radios (Wi-Fi + Bluetooth) when their
+# rfkill device node appears. This replaces the inline rfkill fork/exec calls
+# that previously ran inside tinexus-serviced/main.cpp.
+#
+# systemd-udevd processes these rules during coldplug (udevadm trigger) and
+# hotplug (when the driver binds). No serviced code required.
+
+ACTION=="add", SUBSYSTEM=="rfkill", RUN+="/usr/sbin/rfkill unblock all"
+ACTION=="change", SUBSYSTEM=="rfkill", RUN+="/usr/sbin/rfkill unblock all"
