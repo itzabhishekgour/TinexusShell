@@ -1,0 +1,37 @@
+# ==============================================================================
+# Tinexus OS — Calamares Branding Descriptor
+# ==============================================================================
+---
+componentName:  tinexus
+welcomeStyleCalamares: false
+welcomeExpandingLogo:  true
+windowExpanding:       normal
+windowSize:            850px,580px
+windowPlacement:       center
+
+strings:
+    productName:         "Tinexus OS"
+    shortProductName:    "Tinexus"
+    version:             "1.0"
+    shortVersion:        "1.0"
+    versionedName:       "Tinexus OS 1.0"
+    shortVersionedName:  "Tinexus 1.0"
+    bootloaderEntryName: "Tinexus"
+    productUrl:          "https://github.com/itzabhishekgour/TinexusShell"
+    supportUrl:          "https://github.com/itzabhishekgour/TinexusShell/issues"
+    knownIssuesUrl:      "https://github.com/itzabhishekgour/TinexusShell/issues"
+    releaseNotesUrl:     "https://github.com/itzabhishekgour/TinexusShell"
+
+images:
+    productLogo:         "tinexus-logo.png"
+    productIcon:         "tinexus-logo.png"
+    productWelcome:      "tinexus-logo.png"
+
+style:
+    SidebarBackground:        "#141420"
+    SidebarText:              "#F0F0F8"
+    SidebarTextCurrent:       "#6B8CEF"
+    SidebarBackgroundCurrent: "#1A1A24"
+
+slideshow:               "show.qml"
+slideshowAPI:            2

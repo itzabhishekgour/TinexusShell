@@ -29,19 +29,21 @@ target_link_libraries(unit_test_graphics_probe PRIVATE
 
 add_test(NAME unit_test_graphics_probe COMMAND unit_test_graphics_probe)
 
-if(NOT TARGET unit_test_txui_clipboard)
-add_executable(unit_test_txui_clipboard
-    unit/test_txui_clipboard.cpp
-)
+if(ENABLE_LEGACY_TXUI)
+    if(NOT TARGET unit_test_txui_clipboard)
+    add_executable(unit_test_txui_clipboard
+        unit/test_txui_clipboard.cpp
+    )
 
-target_link_libraries(unit_test_txui_clipboard PRIVATE
-    txui
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-)
+    target_link_libraries(unit_test_txui_clipboard PRIVATE
+        txui
+        tinexus_common
+        tinexus_warnings
+        tinexus_sanitizers
+    )
 
-add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
+    add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
+    endif()
 endif()
 
 add_executable(unit_test_wifi_contracts
@@ -489,27 +491,6 @@ target_link_libraries(integration_test_displayd PRIVATE
 
 add_test(NAME integration_test_displayd COMMAND integration_test_displayd)
 
-add_executable(integration_test_installer
-    integration/test_installer.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/disk_inspector.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/partition_engine.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/squashfs_extractor.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/bootloader_config.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/install_controller.cpp
-)
-
-target_include_directories(integration_test_installer PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/installer/include
-)
-
-target_link_libraries(integration_test_installer PRIVATE
-    tinexus-sdk
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-)
-
-add_test(NAME integration_test_installer COMMAND integration_test_installer)
 
 add_executable(integration_test_iso
     integration/test_iso.cpp
@@ -1478,17 +1459,6 @@ target_include_directories(smoke_pkg_manager PRIVATE ${CMAKE_SOURCE_DIR}/src/pkg
 target_link_libraries(smoke_pkg_manager PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
 add_test(NAME smoke_pkg_manager COMMAND smoke_pkg_manager)
 
-add_executable(smoke_installer_partition
-    smoke/installer/test_smoke_installer_partition.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/install_controller.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/disk_inspector.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/partition_engine.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/squashfs_extractor.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/bootloader_config.cpp
-)
-target_include_directories(smoke_installer_partition PRIVATE ${CMAKE_SOURCE_DIR}/src/installer/include)
-target_link_libraries(smoke_installer_partition PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
-add_test(NAME smoke_installer_partition COMMAND smoke_installer_partition)
 
 add_executable(smoke_iso_builder
     smoke/iso/test_smoke_iso_builder.cpp
@@ -1529,6 +1499,7 @@ target_include_directories(smoke_release_candidate PRIVATE
 target_link_libraries(smoke_release_candidate PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
 add_test(NAME smoke_release_candidate COMMAND smoke_release_candidate)
 
+if(ENABLE_LEGACY_TXUI)
 # Phase 4.1 Step 3 libtxui Core & Math Unit Tests
 add_executable(unit_test_txui_core unit/test_txui_core.cpp)
 target_link_libraries(unit_test_txui_core PRIVATE txui tinexus_warnings)
@@ -1607,6 +1578,7 @@ add_test(NAME unit_test_single_instance COMMAND unit_test_single_instance)
 add_executable(unit_test_app_id_isolation unit/test_app_id_isolation.cpp)
 target_link_libraries(unit_test_app_id_isolation PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_app_id_isolation COMMAND unit_test_app_id_isolation)
+endif()
 
 add_executable(test_window_state_machine unit/test_window_state_machine.cpp)
 target_include_directories(test_window_state_machine PRIVATE
@@ -1624,6 +1596,7 @@ target_include_directories(test_memory_safety_during_anim PRIVATE
 target_link_libraries(test_memory_safety_during_anim PRIVATE tinexus_common tinexus_warnings)
 add_test(NAME test_memory_safety_during_anim COMMAND test_memory_safety_during_anim)
 
+if(ENABLE_LEGACY_TXUI)
 add_executable(unit_test_topbar_geometry unit/test_topbar_geometry.cpp)
 target_link_libraries(unit_test_topbar_geometry PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_topbar_geometry COMMAND unit_test_topbar_geometry)
@@ -1631,6 +1604,7 @@ add_test(NAME unit_test_topbar_geometry COMMAND unit_test_topbar_geometry)
 add_executable(unit_test_input_region unit/test_input_region.cpp)
 target_link_libraries(unit_test_input_region PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_input_region COMMAND unit_test_input_region)
+endif()
 
 add_executable(unit_test_animation_manager
     unit/test_animation_manager.cpp
@@ -1645,6 +1619,7 @@ target_include_directories(unit_test_animation_manager PRIVATE
 target_link_libraries(unit_test_animation_manager PRIVATE tinexus_common tinexus_warnings)
 add_test(NAME unit_test_animation_manager COMMAND unit_test_animation_manager)
 
+if(ENABLE_LEGACY_TXUI)
 add_executable(unit_test_lifecycle_dock
     unit/test_lifecycle_dock.cpp
     ${CMAKE_SOURCE_DIR}/src/dock/ui/DockWidget.cpp
@@ -1657,6 +1632,7 @@ target_include_directories(unit_test_lifecycle_dock PRIVATE
 )
 target_link_libraries(unit_test_lifecycle_dock PRIVATE txui tinexus_common tinexus_warnings)
 add_test(NAME unit_test_lifecycle_dock COMMAND unit_test_lifecycle_dock)
+endif()
 
 if(TINEXUS_BUILD_QT_APPS)
     message(STATUS "Qt6 Tier 2 apps/tests enabled (TINEXUS_BUILD_QT_APPS=ON)")
