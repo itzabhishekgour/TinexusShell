@@ -1,0 +1,11 @@
+# Tinexus Desktop Platform Systemd Unit Presets
+# Enables the desktop session target and core session services by default
+enable tinexus-session.target
+enable tinexus-splash.service
+enable tinexus-hardware-env.service
+enable seatd.service
+enable tinexus-comp.service
+enable tinexus-serviced.service
+disable tinexus-shell.service
+disable tinexus-dock.service
+disable getty@tty1.service

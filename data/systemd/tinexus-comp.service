@@ -3,34 +3,47 @@ Description=Tinexus Wayland Compositor (tinexus-comp)
 Documentation=https://github.com/itzabhishekgour/TinexusShell
 # Compositor must start after the graphics stack and input devices are probed.
 # systemd-udev-settle.service ensures DRM nodes (/dev/dri/card*) exist.
-After=systemd-udev-settle.service dbus.service tinexus-hardware-env.service
+After=systemd-udev-settle.service dbus.service seatd.service tinexus-hardware-env.service
 Requires=dbus.service
+Wants=seatd.service
+Conflicts=tinexus-splash.service getty@tty1.service
 # The rest of the session depends on this unit.
 PartOf=tinexus-session.target
 
 [Service]
 Type=simple
-# Run as the Tinexus desktop user (UID 1000). Seat access is granted by logind/libseat.
+# Run as the Tinexus desktop user (UID 1000). Seat access is granted by seatd.
 User=tinexus
 Group=tinexus
 
 # wlroots needs the DRM/input device group memberships.
-# libseat 'logind' backend calls into systemd-logind to take a seat session.
-SupplementaryGroups=video input seat
+# libseat 'seatd' backend connects to /run/seatd.sock via video/seat group.
+SupplementaryGroups=video input render seat
+
+# Ensure runtime directories exist and are properly owned before dropping privileges
+RuntimeDirectory=user/1000 tinexus
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+ExecStartPre=+/bin/mkdir -p /run/user/1000 /run/tinexus
+ExecStartPre=+/bin/chown -R tinexus:tinexus /run/user/1000 /run/tinexus
+ExecStartPre=+/bin/chmod 0700 /run/user/1000
+ExecStartPre=+/bin/chmod 0755 /run/tinexus
 
 # Environment: hardware renderer selection is performed by tinexus-hardware-env.service
 # and published to /run/tinexus/env. We source that file here.
 EnvironmentFile=-/run/tinexus/env
 
 # Additional Wayland/Mesa paths that are compositor-specific.
-Environment="LIBSEAT_BACKEND=logind"
+Environment="LIBSEAT_BACKEND=seatd"
 Environment="WLR_LOG_LEVEL=info"
 Environment="LANG=C.UTF-8"
 Environment="LC_ALL=C.UTF-8"
 Environment="LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri:/usr/lib/dri"
 Environment="GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm"
 Environment="__EGL_VENDOR_LIBRARY_DIRS=/usr/share/glvnd/egl_vendor.d"
-# XDG_RUNTIME_DIR is set by pam_systemd via the logind session.
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+PAMName=login
 
 ExecStart=/usr/bin/tinexus-comp
 # Graceful stop: SIGTERM → 10-second grace → SIGKILL
@@ -51,8 +64,8 @@ OOMScoreAdjust=-200
 # Security hardening: compositor still needs full /dev access for DRM/input.
 PrivateTmp=false
 ProtectSystem=no
-ProtectHome=read-only
-NoNewPrivileges=true
+ProtectHome=false
+NoNewPrivileges=false
 
 [Install]
 WantedBy=tinexus-session.target

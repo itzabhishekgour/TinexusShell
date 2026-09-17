@@ -48,12 +48,15 @@ static pid_t launch_component(const std::string& name) {
     pid_t pid = fork();
     if (pid == 0) {
         const char* runtime_dir_env = std::getenv("XDG_RUNTIME_DIR");
-        const char* runtime_dir = (runtime_dir_env && *runtime_dir_env) ? runtime_dir_env : "/run/user/0";
+        std::string fallback_runtime = "/run/user/" + std::to_string(::getuid());
+        const char* runtime_dir = (runtime_dir_env && *runtime_dir_env) ? runtime_dir_env : fallback_runtime.c_str();
         const char* wayland_disp_env = std::getenv("WAYLAND_DISPLAY");
         const char* wayland_disp = (wayland_disp_env && *wayland_disp_env) ? wayland_disp_env : "wayland-0";
 
         setenv("WAYLAND_DISPLAY", wayland_disp, 1);
         setenv("XDG_RUNTIME_DIR", runtime_dir, 1);
+        setenv("QT_QPA_PLATFORM", "wayland", 1);
+        setenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell", 1);
 
         // Propagate Qt6 Wayland platform plugin and QML search paths
         setenv("QT_PLUGIN_PATH", "/usr/lib/x86_64-linux-gnu/qt6/plugins", 0);
@@ -133,18 +136,21 @@ int main(int argc, char* argv[]) {
     log::info("[Session] Tinexus Desktop Session Supervisor starting...");
 
     const char* runtime_dir_env = std::getenv("XDG_RUNTIME_DIR");
-    fs::path runtime_dir = (runtime_dir_env && *runtime_dir_env) ? runtime_dir_env : "/run/user/0";
+    std::string fallback_runtime = "/run/user/" + std::to_string(::getuid());
+    fs::path runtime_dir = (runtime_dir_env && *runtime_dir_env) ? runtime_dir_env : fallback_runtime;
     const char* wayland_disp_env = std::getenv("WAYLAND_DISPLAY");
     std::string wayland_disp = (wayland_disp_env && *wayland_disp_env) ? wayland_disp_env : "wayland-0";
 
     setenv("WAYLAND_DISPLAY", wayland_disp.c_str(), 1);
     setenv("XDG_RUNTIME_DIR", runtime_dir.c_str(), 1);
+    setenv("QT_QPA_PLATFORM", "wayland", 1);
+    setenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell", 1);
 
     // 1. Wait for Wayland display socket to be created and connectable
     fs::path socket_path = runtime_dir / wayland_disp;
     log::info("[Session] Waiting for Wayland display socket at {}...", socket_path.string());
 
-    if (wait_for_socket_ready(socket_path)) {
+    if (wait_for_socket_ready(socket_path, 20000)) {
         log::info("[Session] Wayland display socket '{}' is ready!", socket_path.string());
     } else {
         log::error("[Session] Timeout waiting for Wayland socket '{}'!", socket_path.string());

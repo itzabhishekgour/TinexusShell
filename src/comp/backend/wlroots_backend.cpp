@@ -221,6 +221,9 @@ public:
         auto& ws_mgr = WorkspaceManager::instance();
         const auto& workspaces = ws_mgr.get_all_workspaces();
         uint32_t screen_w = 1920;
+        if (!m_outputs.empty() && m_outputs[0] && m_outputs[0]->get_wlr_output() && m_outputs[0]->get_wlr_output()->width > 0) {
+            screen_w = static_cast<uint32_t>(m_outputs[0]->get_wlr_output()->width);
+        }
         ws_mgr.set_viewport_width(screen_w);
 
         for (const auto& ws : workspaces) {

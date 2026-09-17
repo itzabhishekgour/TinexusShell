@@ -9,8 +9,8 @@ import "../../common/qml"
 
 Window {
     id: rootWindow
-    width: 1920
-    height: 1080
+    width: Screen.width > 0 ? Screen.width : 1920
+    height: Screen.height > 0 ? Screen.height : 1080
     color: "#0B0E14"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 

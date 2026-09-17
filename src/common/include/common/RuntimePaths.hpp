@@ -53,7 +53,9 @@ public:
         if (xdg && *xdg != '\0') {
             struct stat st_xdg{};
             if (::stat(xdg, &st_xdg) != 0) {
-                ::mkdir(xdg, 0755);
+                ::mkdir(xdg, 0700);
+            } else {
+                ::chmod(xdg, 0700);
             }
         }
         struct stat st{};

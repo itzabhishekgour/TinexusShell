@@ -49,6 +49,7 @@ int main(int argc, char* argv[]) {
 
     QString qmlPath;
     const QStringList candidates = {
+        QStringLiteral("/workspace/src/lock/qml/LockWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/qml/LockWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/../src/lock/qml/LockWindow.qml"),
         QStringLiteral("src/lock/qml/LockWindow.qml"),

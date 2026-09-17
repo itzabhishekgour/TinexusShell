@@ -23,8 +23,8 @@ User=root
 #   WLR_NO_HARDWARE_CURSORS=1
 ExecStart=/usr/bin/tinexus-hardware-probe
 
-# Fallback: if probe binary is absent, write a safe minimal env file.
-ExecStartPost=/bin/sh -c 'test -f /run/tinexus/env || (mkdir -p /run/tinexus && printf "WLR_DRM_NO_ATOMIC=1\nWLR_NO_HARDWARE_CURSORS=1\nLIBSEAT_BACKEND=logind\n" > /run/tinexus/env)'
+ExecStartPost=/bin/sh -c 'test -f /run/tinexus/env || (mkdir -p /run/tinexus && printf "WLR_DRM_NO_ATOMIC=1\nWLR_NO_HARDWARE_CURSORS=1\nLIBSEAT_BACKEND=seatd\n" > /run/tinexus/env)'
+ExecStartPost=-/bin/sh -c 'for f in /sys/class/backlight/*/brightness; do [ -f "$f" ] && chgrp video "$f" && chmod 0664 "$f"; done || true'
 
 [Install]
 WantedBy=tinexus-session.target

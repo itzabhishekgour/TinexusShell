@@ -50,3 +50,18 @@ target_link_libraries(test-hardware-utils PRIVATE tinexus_common)
 set_target_properties(test-hardware-utils PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+add_executable(tinexus-hardware-probe
+    hardware_probe_main.cpp
+)
+target_link_libraries(tinexus-hardware-probe PRIVATE
+    tinexus_common
+    tinexus_warnings
+)
+set_target_properties(tinexus-hardware-probe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+install(TARGETS tinexus-hardware-probe
+    RUNTIME DESTINATION bin
+)
+

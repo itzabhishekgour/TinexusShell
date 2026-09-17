@@ -143,25 +143,59 @@ bool TinexusServer::initialize() {
         wl_event_loop_add_fd(m_wl_loop, fifo_fd, WL_EVENT_READABLE, handle_cmd_fifo, m_backend.get());
     }
 
-    // Also support legacy /tinexus_comp_cmd in XDG_RUNTIME_DIR for backwards compatibility
+    // Ensure XDG_RUNTIME_DIR is properly configured and directory exists with mode 0700
     const char* xdg_runtime = getenv("XDG_RUNTIME_DIR");
-    if (xdg_runtime) {
-        std::string legacy_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
-        unlink(legacy_path.c_str());
-        symlink(fifo_path.c_str(), legacy_path.c_str());
+    if (!xdg_runtime || !*xdg_runtime) {
+        xdg_runtime = "/run/user/1000";
+        setenv("XDG_RUNTIME_DIR", xdg_runtime, 1);
     }
+    struct stat st_xdg{};
+    if (stat(xdg_runtime, &st_xdg) != 0) {
+        mkdir(xdg_runtime, 0700);
+    } else {
+        chmod(xdg_runtime, 0700);
+    }
+
+    // Clean up stale lock and socket if they exist
+    std::string lock_file = std::string(xdg_runtime) + "/wayland-0.lock";
+    std::string sock_file = std::string(xdg_runtime) + "/wayland-0";
+    unlink(lock_file.c_str());
+    unlink(sock_file.c_str());
+
+    // Also support legacy /tinexus_comp_cmd in XDG_RUNTIME_DIR for backwards compatibility
+    std::string legacy_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
+    unlink(legacy_path.c_str());
+    symlink(fifo_path.c_str(), legacy_path.c_str());
 
     // 3. Add Wayland socket
     const char* socket_name = wl_display_add_socket_auto(m_wl_display);
-    if (socket_name) {
-        m_display_socket = socket_name;
-    } else {
-        m_display_socket = "wayland-0";
+    if (!socket_name) {
+        log::warn("TinexusServer: wl_display_add_socket_auto failed ({}), trying explicit wl_display_add_socket('wayland-0')...", strerror(errno));
+        if (wl_display_add_socket(m_wl_display, "wayland-0") == 0) {
+            socket_name = "wayland-0";
+        }
     }
+
+    if (!socket_name) {
+        log::error("TinexusServer: FATAL — Failed to add Wayland socket in '{}': {}", xdg_runtime, strerror(errno));
+        return false;
+    }
+
+    m_display_socket = socket_name;
 
     // Export WAYLAND_DISPLAY so child processes (launcher, etc.) can connect
     setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);
     log::info("TinexusServer: WAYLAND_DISPLAY={}", m_display_socket);
+
+    // Verify socket file existence on disk and grant read/write access
+    std::string verified_sock_path = std::string(xdg_runtime) + "/" + m_display_socket;
+    struct stat st_sock{};
+    if (stat(verified_sock_path.c_str(), &st_sock) == 0) {
+        chmod(verified_sock_path.c_str(), 0666);
+        log::info("TinexusServer: Verified Wayland socket at '{}' (mode=0666)", verified_sock_path);
+    } else {
+        log::warn("TinexusServer: Socket stat check on '{}' returned: {}", verified_sock_path, strerror(errno));
+    }
 
     // wl_shm is now initialized via wlr_shm_create_with_renderer() inside the backend
     log::info("TinexusServer: Successfully initialized wayland server on socket '{}'", m_display_socket);

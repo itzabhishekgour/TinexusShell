@@ -4,10 +4,8 @@ Documentation=https://github.com/itzabhishekgour/TinexusShell
 # Pulled in after graphical.target is reached on the system bus.
 # On a systemd --user instance, this is After=basic.target.
 After=graphical.target
-Wants=tinexus-comp.service tinexus-serviced.service tinexus-shell.service tinexus-dock.service
-# The session is only considered "up" when the compositor is running.
-Requires=tinexus-comp.service
-# Shell and dock are soft dependencies — the session survives their crash.
+Wants=graphical.target tinexus-splash.service tinexus-hardware-env.service seatd.service tinexus-comp.service tinexus-serviced.service
+Requires=graphical.target tinexus-comp.service tinexus-serviced.service
 
 [Install]
-WantedBy=graphical.target
+WantedBy=graphical.target default.target

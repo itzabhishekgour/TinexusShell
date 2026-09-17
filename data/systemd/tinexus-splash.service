@@ -5,6 +5,7 @@ Documentation=https://github.com/itzabhishekgour/TinexusShell
 # It is stopped automatically the moment tinexus-comp.service reaches active state.
 After=local-fs.target
 Before=tinexus-comp.service
+Conflicts=getty@tty1.service getty@tty.service console-getty.service
 # When tinexus-comp becomes active, systemd stops this unit (ConflictedBy relationship
 # is expressed via the Conflicts= directive on tinexus-comp if needed, or StopWhenUnneeded).
 StopWhenUnneeded=yes
@@ -13,6 +14,12 @@ StopWhenUnneeded=yes
 Type=simple
 User=root
 ExecStart=/usr/bin/tinexus-splash
+StandardInput=null
+StandardOutput=null
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
 # Splash exits cleanly once SIGTERM arrives — no restart needed.
 Restart=no
 KillSignal=SIGTERM

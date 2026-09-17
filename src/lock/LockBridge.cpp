@@ -1,24 +1,22 @@
 // ============================================================================
 // LockBridge.cpp — Qt6 Bridge for tinexus-lock
 //   • PAM authentication (existing)
-//   • Milestone 6: IpcWatcher QThread for live wallpaper sync
+//   • D-Bus subscriber for live wallpaper sync (io.tinexus.Wallpaper)
 // ============================================================================
 #include "LockBridge.hpp"
 #include <common/logger.hpp>
-#include <ipcd/protocol/header.hpp>
+
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusMessage>
+#include <QtDBus/QDBusPendingCall>
+#include <QtDBus/QDBusPendingCallWatcher>
+#include <QtDBus/QDBusPendingReply>
+#include <QtCore/QFile>
+
 #include <cstdlib>
 #include <unistd.h>
 #include <cstring>
-#include <thread>
-#include <cstdint>
-#include <vector>
 #include <string>
-
-// For IpcWatcher::run()
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <poll.h>
-#include <cerrno>
 
 #if TINEXUS_LOCK_HAS_PAM
 #include <security/pam_appl.h>
@@ -56,9 +54,8 @@ LockBridge::LockBridge(QObject* parent)
     connect(&m_clockTimer, &QTimer::timeout, this, &LockBridge::updateClock);
     m_clockTimer.start(1000);
 
-    // M6: Start the IPC watcher thread so the lockscreen always shows the
-    // correct wallpaper immediately when it is raised, without polling a file.
-    startIpcWatcher();
+    // Subscribe to D-Bus io.tinexus.Wallpaper for instantaneous wallpaper updates
+    setupDBus();
 }
 
 void LockBridge::updateClock() {
@@ -142,167 +139,83 @@ void LockBridge::resetAuthFailed() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// M6: IPC Watcher startup (called from LockBridge constructor)
+// D-Bus Live Wallpaper Sync (io.tinexus.Wallpaper)
 // ─────────────────────────────────────────────────────────────────────────────
 
-void LockBridge::startIpcWatcher() {
-    auto* watcher = new IpcWatcher(this); // owned by LockBridge (parent)
-
-    // Resolve the IPC socket path using XDG_RUNTIME_DIR (pure XDG, no hardcoded UIDs)
-    QString sockPath;
-    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-    if (xdg && xdg[0] != '\0') {
-        sockPath = QString::fromUtf8(xdg) + "/tinexus/ipc.sock";
-    } else {
-        sockPath = QString("/run/user/%1/tinexus/ipc.sock").arg(static_cast<uint>(::getuid()));
+void LockBridge::setupDBus() {
+    // 1. Initial wallpaper check from runtime files if available
+    const QString runtimeFiles[] = {
+        QStringLiteral("/run/user/%1/tinexus/current_wallpaper").arg(::getuid()),
+        QStringLiteral("/tmp/current_wallpaper")
+    };
+    for (const auto& rf : runtimeFiles) {
+        QFile f(rf);
+        if (f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QString p = QString::fromUtf8(f.readLine()).trimmed();
+            if (!p.isEmpty()) {
+                m_wallpaperPath = p;
+                log::info("[lock] Initial wallpaper from runtime file: '{}'", p.toStdString());
+                break;
+            }
+        }
     }
-    watcher->setSocketPath(sockPath);
 
-    // Cross-thread signal: IpcWatcher runs on its own thread, emits to LockBridge's thread
-    connect(watcher, &IpcWatcher::wallpaperPathReceived,
-            this,    &LockBridge::onWallpaperPathReceived,
-            Qt::QueuedConnection);
+    // 2. Connect to io.tinexus.Wallpaper signal WallpaperChanged (instant D-Bus subscription)
+    bool ok = QDBusConnection::sessionBus().connect(
+        QStringLiteral("io.tinexus.Wallpaper"),
+        QStringLiteral("/io/tinexus/Wallpaper"),
+        QStringLiteral("io.tinexus.Wallpaper"),
+        QStringLiteral("WallpaperChanged"),
+        this,
+        SLOT(onWallpaperChanged(QString, uchar, bool))
+    );
 
-    m_ipcWatcherThread = watcher;
-    watcher->start(QThread::LowPriority);
-    log::info("[lock] IpcWatcher started (socket='{}')", sockPath.toStdString());
+    // Also wildcard subscription across any service path
+    QDBusConnection::sessionBus().connect(
+        QString(),
+        QString(),
+        QStringLiteral("io.tinexus.Wallpaper"),
+        QStringLiteral("WallpaperChanged"),
+        this,
+        SLOT(onWallpaperChanged(QString, uchar, bool))
+    );
+
+    log::info("[lock] D-Bus WallpaperChanged subscription registered (connected={})", ok);
+
+    // 3. Query GetStatus asynchronously if wallpaper path not yet known
+    if (QDBusConnection::sessionBus().isConnected()) {
+        QDBusMessage msg = QDBusMessage::createMethodCall(
+            QStringLiteral("io.tinexus.Wallpaper"),
+            QStringLiteral("/io/tinexus/Wallpaper"),
+            QStringLiteral("io.tinexus.Wallpaper"),
+            QStringLiteral("GetStatus")
+        );
+        QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(msg);
+        auto* watcher = new QDBusPendingCallWatcher(call, this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher* w) {
+            w->deleteLater();
+            QDBusPendingReply<QString, uchar, bool, ushort, ushort, uint> reply = *w;
+            if (!reply.isError()) {
+                QString path = reply.argumentAt<0>();
+                if (!path.isEmpty() && m_wallpaperPath.isEmpty()) {
+                    onWallpaperChanged(path, 0, false);
+                }
+            }
+        });
+    }
+}
+
+void LockBridge::onWallpaperChanged(const QString& path, uchar mode, bool isDynamic) {
+    Q_UNUSED(mode);
+    Q_UNUSED(isDynamic);
+    onWallpaperPathReceived(path);
 }
 
 void LockBridge::onWallpaperPathReceived(const QString& path) {
-    if (path == m_wallpaperPath) return; // No change
+    if (path.isEmpty() || path == m_wallpaperPath) return;
     m_wallpaperPath = path;
     emit wallpaperPathChanged();
-    log::info("[lock] Wallpaper path updated to '{}'", path.toStdString());
-}
-
-} // namespace tinexus::lock
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IpcWatcher::run() — Milestone 6
-//
-// Runs on its own QThread. Self-connects to tinexus-ipcd and blocks in a
-// poll() read loop. Parses WALLPAPER_CHANGED (5002) frames and emits
-// wallpaperPathReceived() for each one. The lockscreen QML then updates its
-// background image without any file polling or timer-based tricks.
-//
-// Reconnect strategy: if ipcd is not reachable or the socket closes, the
-// thread sleeps 5 seconds and retries. This ensures the lockscreen always
-// gets the correct wallpaper even if ipcd restarts.
-// ─────────────────────────────────────────────────────────────────────────────
-
-namespace tinexus::lock {
-
-void IpcWatcher::run() {
-    using namespace ipcd::protocol;
-    log::info("[lock/ipcwatcher] Thread started");
-
-    while (!isInterruptionRequested()) {
-        // ── Connect to tinexus-ipcd ──
-        const std::string sock_path = m_socketPath.toStdString();
-        int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-        if (fd < 0) {
-            log::warn("[lock/ipcwatcher] socket(): {} — retry in 5s", std::strerror(errno));
-            msleep(5000); continue;
-        }
-
-        struct sockaddr_un addr{};
-        addr.sun_family = AF_UNIX;
-        ::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
-
-        if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-            log::info("[lock/ipcwatcher] ipcd not reachable: {} — retry in 5s",
-                      std::strerror(errno));
-            ::close(fd); msleep(5000); continue;
-        }
-        log::info("[lock/ipcwatcher] Connected to tinexus-ipcd");
-
-        // ── Register as subscriber for WALLPAPER_CHANGED (5002) ──
-        auto send_frame = [&](MessageType mt, uint32_t seq,
-                               const uint8_t* payload, uint32_t plen) -> bool {
-            Header hdr{};
-            hdr.magic = TINEXUS_IPC_MAGIC; hdr.version = TINEXUS_IPC_VERSION_1;
-            hdr.msg_type = static_cast<uint16_t>(mt);
-            hdr.sequence_id = seq; hdr.payload_len = plen;
-            std::vector<uint8_t> buf(sizeof(hdr) + plen);
-            std::memcpy(buf.data(), &hdr, sizeof(hdr));
-            if (plen && payload) std::memcpy(buf.data() + sizeof(hdr), payload, plen);
-            const uint8_t* p = buf.data(); size_t r = buf.size();
-            while (r > 0) {
-                ssize_t n = ::write(fd, p, r);
-                if (n < 0) { if (errno == EINTR) continue; return false; }
-                p += n; r -= static_cast<size_t>(n);
-            }
-            return true;
-        };
-
-        const char* svc = "lock";
-        send_frame(MessageType::SYS_REGISTER_SERVICE, 1,
-                   reinterpret_cast<const uint8_t*>(svc), static_cast<uint32_t>(std::strlen(svc) + 1));
-
-        uint16_t topic = static_cast<uint16_t>(MessageType::WALLPAPER_CHANGED);
-        send_frame(MessageType::SYS_SUBSCRIBE_TOPIC, 2,
-                   reinterpret_cast<const uint8_t*>(&topic), sizeof(topic));
-
-        // ── Read loop ──
-        std::vector<uint8_t> buf;
-        buf.reserve(sizeof(Header) + sizeof(WallpaperChangedPayload) + 16);
-
-        bool disconnected = false;
-        while (!isInterruptionRequested() && !disconnected) {
-            struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLHUP | POLLERR, .revents = 0 };
-            int ret = ::poll(&pfd, 1, 1000); // 1s timeout to allow interruption check
-
-            if (ret < 0) {
-                if (errno == EINTR) continue;
-                log::warn("[lock/ipcwatcher] poll() error: {}", std::strerror(errno));
-                disconnected = true; break;
-            }
-            if (ret == 0) continue; // Timeout — loop back to check isInterruptionRequested()
-
-            if (pfd.revents & (POLLHUP | POLLERR)) {
-                log::warn("[lock/ipcwatcher] ipcd socket closed — reconnecting");
-                disconnected = true; break;
-            }
-
-            if (pfd.revents & POLLIN) {
-                uint8_t tmp[4096]; ssize_t n;
-                while ((n = ::read(fd, tmp, sizeof(tmp))) > 0)
-                    buf.insert(buf.end(), tmp, tmp + n);
-                if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-                    disconnected = true; break;
-                }
-
-                constexpr size_t HDR = sizeof(Header);
-                while (buf.size() >= HDR) {
-                    Header hdr{}; std::memcpy(&hdr, buf.data(), HDR);
-                    if (hdr.magic != TINEXUS_IPC_MAGIC || hdr.version != TINEXUS_IPC_VERSION_1) {
-                        buf.clear(); break;
-                    }
-                    if (hdr.payload_len > 4u * 1024u * 1024u) { buf.clear(); break; }
-                    if (buf.size() < HDR + hdr.payload_len) break;
-
-                    if (static_cast<MessageType>(hdr.msg_type) == MessageType::WALLPAPER_CHANGED) {
-                        if (hdr.payload_len >= sizeof(WallpaperChangedPayload)) {
-                            WallpaperChangedPayload pkt{};
-                            std::memcpy(&pkt, buf.data() + HDR, sizeof(pkt));
-                            pkt.path[sizeof(pkt.path) - 1] = '\0';
-                            emit wallpaperPathReceived(QString::fromUtf8(pkt.path));
-                        }
-                    }
-
-                    buf.erase(buf.begin(),
-                              buf.begin() + static_cast<ptrdiff_t>(HDR + hdr.payload_len));
-                }
-            }
-        }
-
-        ::close(fd);
-        if (!disconnected) break; // Clean exit (interruption requested)
-        log::info("[lock/ipcwatcher] Reconnecting in 5 seconds...");
-        msleep(5000);
-    }
-
-    log::info("[lock/ipcwatcher] Thread exited cleanly");
+    log::info("[lock] Wallpaper path updated via D-Bus to '{}'", path.toStdString());
 }
 
 } // namespace tinexus::lock

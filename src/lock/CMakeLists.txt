@@ -6,6 +6,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Quick
     Qml
     WaylandClient
+    DBus
 )
 
 set(CMAKE_AUTOMOC ON)
@@ -32,8 +33,6 @@ target_include_directories(tinexus-lock PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/common/include
-    # M6: IpcWatcher needs WallpaperChangedPayload and MessageType — header-only
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
 )
 
 target_link_libraries(tinexus-lock PRIVATE
@@ -44,6 +43,7 @@ target_link_libraries(tinexus-lock PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::WaylandClient
+    Qt6::DBus
 )
 
 if(LayerShellQt_FOUND)
@@ -71,13 +71,13 @@ target_include_directories(test-lock-live PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/common/include
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
 )
 target_link_libraries(test-lock-live PRIVATE
     tinexus_common
     tinexus_warnings
     Qt6::Core
     Qt6::Gui
+    Qt6::DBus
 )
 if(PAM_LIBRARY AND PAM_INCLUDE_DIR)
     target_link_libraries(test-lock-live PRIVATE ${PAM_LIBRARY})
