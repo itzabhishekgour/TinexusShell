@@ -23,6 +23,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ── Pre-Packaging Sanity Verification ─────────────────────────────────────────
+info "Running strict pre-packaging sanity checks on UI binaries..."
+for b in tinexus-shell tinexus-dock tinexus-launcher; do
+    bin_path="$BIN_DIR/$b"
+    [ -f "$bin_path" ] || fatal "Pre-packaging sanity check FAILED: $b binary not found in $BIN_DIR!"
+    
+    txui_count=$(strings "$bin_path" | grep -E "txui::|N4txui" -c || true)
+    if [ "$txui_count" -ne 0 ]; then
+        fatal "CRITICAL SANITY FAILURE: $b contains $txui_count txui references! Legacy txui binary detected. Packaging aborted."
+    fi
+    
+    if ! strings "$bin_path" | grep "libQt6Core" >/dev/null 2>&1; then
+        fatal "CRITICAL SANITY FAILURE: $b is NOT linked against Qt6! Packaging aborted."
+    fi
+    success "Sanity check passed for $b (0 txui references, Qt6 confirmed)."
+done
+
 # ── 1. Package: tinexus-core ──────────────────────────────────────────────────
 info "Building tinexus-core_${VERSION}_amd64.deb..."
 CORE_DIR="$WORK_DIR/tinexus-core"
@@ -44,7 +61,7 @@ Description: Tinexus Platform Core Supervisor and IPC Broke
 EOF
 
 # Copy binaries
-for b in tinexus-serviced tinexus-ipcd tinexus-session tinexus-wifi tx-appimage; do
+for b in tinexus-serviced tinexus-ipcd tinexus-session tinexus-searchd tinexus-hardware-probe tinexus-wifi tx-appimage; do
     if [ -f "$BIN_DIR/$b" ]; then
         cp -L "$BIN_DIR/$b" "$CORE_DIR/usr/bin/"
         chmod 0755 "$CORE_DIR/usr/bin/$b"
@@ -147,6 +164,10 @@ for b in tinexus-comp tinexus-splash tinexus-comp-inspector tinexus-drm-info; do
 done
 [ -f "$COMP_DIR/usr/bin/tinexus-comp" ] || fatal "tinexus-comp missing from $BIN_DIR"
 
+if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ]; then
+    cp -L "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$COMP_DIR/tinexus-logo.png"
+fi
+
 cat << 'EOF' > "$COMP_DIR/etc/udev/rules.d/99-tinexus-seat.rules"
 SUBSYSTEM=="input", ENV{ID_INPUT}=="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
 SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="master-of-seat", TAG+="uaccess"
@@ -171,10 +192,16 @@ Architecture: amd64
 Depends: tinexus-core (= ${VERSION}), tinexus-compositor (= ${VERSION}), qt6-wayland, qml6-module-qtquick, liblayershellqtinterface6, layer-shell-qt, foot, fonts-dejavu-core
 Maintainer: Tinexus Engineering Team <team@tinexus.org>
 Description: Tinexus Shell, Dock, Launcher, Lock, and Wallpaper Environment
- Provides the complete Wayland/Qt6 desktop user experience.
+ Provides the Qt6/QML desktop shell components:
+  - tinexus-shell: AuraNotch status bar, notification center, control center
+  - tinexus-dock: floating application dock
+  - tinexus-launcher: Ctrl+K command palette
+  - tinexus-lock: PAM-authenticated layer-shell lock screen
+  - tinexus-wallpaper: wallpaper renderer and dynamic solar schedule
 EOF
 
-for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-notifications tinexus-wallpaper tinexus-searchd tinexus-indexerd; do
+# Copy binaries
+for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-wallpaper tinexus-notifications tinexus-terminal tinexus-files tinexus-settings-ui tinexus-monitor tinexus-app-installer; do
     if [ -f "$BIN_DIR/$b" ]; then
         cp -L "$BIN_DIR/$b" "$DESK_DIR/usr/bin/"
         chmod 0755 "$DESK_DIR/usr/bin/$b"
@@ -183,17 +210,35 @@ for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-notifi
         chmod 0755 "$DESK_DIR/usr/bin/$b"
     fi
 done
+ln -sf tinexus-settings-ui "$DESK_DIR/usr/bin/tinexus-settings"
 
 # Copy QML components
-for comp in common dock shell launcher lock; do
+for comp in common dock shell launcher lock settings-ui; do
     if [ -d "$PROJECT_DIR/src/$comp/qml" ]; then
         mkdir -p "$DESK_DIR/usr/share/tinexus/$comp/qml"
         cp -r "$PROJECT_DIR/src/$comp/qml/"* "$DESK_DIR/usr/share/tinexus/$comp/qml/"
+        mkdir -p "$DESK_DIR/usr/share/tinexus-$comp/qml"
+        cp -r "$PROJECT_DIR/src/$comp/qml/"* "$DESK_DIR/usr/share/tinexus-$comp/qml/"
+        if [ "$comp" = "settings-ui" ]; then
+            mkdir -p "$DESK_DIR/usr/share/tinexus-settings/qml"
+            cp -r "$PROJECT_DIR/src/$comp/qml/"* "$DESK_DIR/usr/share/tinexus-settings/qml/"
+        fi
     fi
 done
-if [ -d "$PROJECT_DIR/src/lock/qml" ]; then
-    mkdir -p "$DESK_DIR/usr/share/tinexus-lock/qml"
-    cp -r "$PROJECT_DIR/src/lock/qml/"* "$DESK_DIR/usr/share/tinexus-lock/qml/"
+
+# Stage udev rules (backlight permissions & rfkill)
+mkdir -p "$DESK_DIR/etc/udev/rules.d"
+if [ -d "$PROJECT_DIR/data/udev" ]; then
+    cp -f "$PROJECT_DIR/data/udev/"*.rules "$DESK_DIR/etc/udev/rules.d/" 2>/dev/null || true
+    chmod 0644 "$DESK_DIR/etc/udev/rules.d/"*.rules 2>/dev/null || true
+fi
+
+# Stage polkit authorization rules (poweroff, reboot, suspend)
+mkdir -p "$DESK_DIR/etc/polkit-1/rules.d"
+if [ -d "$PROJECT_DIR/data/polkit" ]; then
+    cp -f "$PROJECT_DIR/data/polkit/"*.rules "$DESK_DIR/etc/polkit-1/rules.d/" 2>/dev/null || true
+    chmod 0755 "$DESK_DIR/etc/polkit-1/rules.d"
+    chmod 0644 "$DESK_DIR/etc/polkit-1/rules.d/"*.rules 2>/dev/null || true
 fi
 
 # Fonts
@@ -272,14 +317,14 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: amd64
-Depends: tinexus-desktop (= ${VERSION}), parted, e2fsprogs, dosfstools, squashfs-tools, grub-efi-amd64-bin
+Depends: tinexus-desktop (= ${VERSION}), calamares, parted, e2fsprogs, dosfstools, squashfs-tools, grub-efi-amd64-bin
 Maintainer: Tinexus Engineering Team <team@tinexus.org>
 Description: Tinexus Core User Applications
  Includes Settings UI, Activity Monitor, File Manager, About Profiler,
- Terminal Emulator, App Store, and OS Disk Installer.
+ Terminal Emulator, and App Store.
 EOF
 
-for b in tinexus-installer tinexus-settings tinexus-settings-ui tinexus-files tinexus-about tinexus-monitor tinexus-store tinexus-terminal; do
+for b in tinexus-settings tinexus-settings-ui tinexus-files tinexus-about tinexus-monitor tinexus-store tinexus-terminal; do
     if [ -f "$BIN_DIR/$b" ]; then
         cp -L "$BIN_DIR/$b" "$APPS_DIR/usr/bin/"
         chmod 0755 "$APPS_DIR/usr/bin/$b"
@@ -288,6 +333,7 @@ for b in tinexus-installer tinexus-settings tinexus-settings-ui tinexus-files ti
         chmod 0755 "$APPS_DIR/usr/bin/$b"
     fi
 done
+ln -sf tinexus-settings-ui "$APPS_DIR/usr/bin/tinexus-settings"
 
 # Copy app QML directories
 for app in settings-ui about monitor files; do
@@ -298,6 +344,10 @@ for app in settings-ui about monitor files; do
         cp -r "$PROJECT_DIR/src/$app/qml/"* "$APPS_DIR/usr/share/$target_name/qml/"
         mkdir -p "$APPS_DIR/usr/share/tinexus/$app/qml"
         cp -r "$PROJECT_DIR/src/$app/qml/"* "$APPS_DIR/usr/share/tinexus/$app/qml/"
+        if [ "$app" = "settings-ui" ]; then
+            mkdir -p "$APPS_DIR/usr/share/tinexus-settings-ui/qml"
+            cp -r "$PROJECT_DIR/src/$app/qml/"* "$APPS_DIR/usr/share/tinexus-settings-ui/qml/"
+        fi
     fi
 done
 
@@ -378,6 +428,19 @@ Icon=utilities-terminal
 Terminal=false
 Type=Application
 Categories=System;TerminalEmulator;Core;
+EOF
+
+cat > "$APPS_DIR/usr/share/applications/tinexus-installer.desktop" << 'EOF'
+[Desktop Entry]
+Name=Install Tinexus OS
+GenericName=Live System Installer
+Comment=Install Tinexus OS permanently to your storage drive
+Exec=sudo -E calamares -d
+Icon=system-software-install
+Terminal=false
+Type=Application
+Categories=System;Utility;Core;
+StartupNotify=true
 EOF
 
 dpkg-deb --build "$APPS_DIR" "$OUT_DEB_DIR/tinexus-apps_${VERSION}_amd64.deb"

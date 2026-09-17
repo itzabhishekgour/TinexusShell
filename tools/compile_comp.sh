@@ -2,21 +2,32 @@
 set -euo pipefail
 
 ORIG_ISO="/workspace/build/Tinexus-x86_64.iso"
-mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs /dev/shm/upper /dev/shm/work
+if [ -f "/workspace/build/workdisk.img" ]; then
+    mkdir -p /mnt/workdisk
+    mountpoint -q /mnt/workdisk || mount -o loop "/workspace/build/workdisk.img" /mnt/workdisk 2>/dev/null || true
+fi
+if mountpoint -q /mnt/workdisk; then
+    UPPER_DIR="/mnt/workdisk/comp_upper"
+    WORK_DIR="/mnt/workdisk/comp_work"
+else
+    UPPER_DIR="/var/tmp/comp_upper"
+    WORK_DIR="/var/tmp/comp_work"
+fi
+mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs "$UPPER_DIR" "$WORK_DIR"
 
-if ! mount | grep -q '/mnt/isomnt'; then
+if ! mountpoint -q /mnt/isomnt; then
     echo "[INFO] Mounting original ISO to /mnt/isomnt..."
     mount -o loop,ro "$ORIG_ISO" /mnt/isomnt
 fi
 
-if ! mount | grep -q '/mnt/squashfs'; then
+if ! mountpoint -q /mnt/squashfs; then
     echo "[INFO] Mounting squashfs to /mnt/squashfs..."
     mount -o loop,ro /mnt/isomnt/live/rootfs.squashfs /mnt/squashfs
 fi
 
-if ! mount | grep -q '/mnt/rootfs'; then
+if ! mountpoint -q /mnt/rootfs; then
     echo "[INFO] Mounting overlayfs to /mnt/rootfs..."
-    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir=/dev/shm/upper,workdir=/dev/shm/work /mnt/rootfs
+    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir="$UPPER_DIR",workdir="$WORK_DIR" /mnt/rootfs
 fi
 
 mountpoint -q /mnt/rootfs/proc || mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
@@ -152,11 +163,26 @@ done
 wait
 
 echo "[INFO] Linking tinexus-comp..."
+mkdir -p /workspace/build/bin
+rm -f /workspace/build/bin/tinexus-comp
+BUILD_START_TIME=$(date +%s)
+
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   "${OBJS[@]}" \
   -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
   -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lxkbcommon -lpixman-1 -lpthread \
   -o /workspace/build/bin/tinexus-comp
 
-echo "[SUCCESS] tinexus-comp compiled successfully!"
-ls -lh /mnt/rootfs/workspace/build/bin/tinexus-comp
+# Post-link assertions
+if [ ! -f /workspace/build/bin/tinexus-comp ]; then
+    echo "[FATAL] tinexus-comp linking failed: binary does not exist!" >&2
+    exit 1
+fi
+bin_mtime=$(stat -c %Y /workspace/build/bin/tinexus-comp)
+if [ "$bin_mtime" -lt "$BUILD_START_TIME" ]; then
+    echo "[FATAL] tinexus-comp binary mtime ($bin_mtime) is older than build start ($BUILD_START_TIME)! Stale binary." >&2
+    exit 1
+fi
+
+echo "[SUCCESS] tinexus-comp compiled successfully! ($(ls -lh /workspace/build/bin/tinexus-comp | awk '{print $5}'))"
+

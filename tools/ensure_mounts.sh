@@ -1,7 +1,24 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+hwclock -s 2>/dev/null || true
+
 ORIG_ISO="/workspace/build/Tinexus-x86_64.iso"
-mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs /dev/shm/upper /dev/shm/work
+
+if [ -f "/workspace/build/workdisk.img" ]; then
+    mkdir -p /mnt/workdisk
+    mountpoint -q /mnt/workdisk || mount -o loop "/workspace/build/workdisk.img" /mnt/workdisk 2>/dev/null || true
+fi
+
+if mountpoint -q /mnt/workdisk; then
+    UPPER_DIR="/mnt/workdisk/upper"
+    WORK_DIR="/mnt/workdisk/work"
+else
+    UPPER_DIR="/var/tmp/upper"
+    WORK_DIR="/var/tmp/work"
+fi
+
+mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs "$UPPER_DIR" "$WORK_DIR"
 
 if ! mount | grep -q '/mnt/isomnt'; then
     mount -o loop,ro "$ORIG_ISO" /mnt/isomnt
@@ -12,7 +29,7 @@ if ! mount | grep -q '/mnt/squashfs'; then
 fi
 
 if ! mount | grep -q '/mnt/rootfs'; then
-    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir=/dev/shm/upper,workdir=/dev/shm/work /mnt/rootfs
+    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir="$UPPER_DIR",workdir="$WORK_DIR" /mnt/rootfs
 fi
 
 mountpoint -q /mnt/rootfs/proc || mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
@@ -24,3 +41,12 @@ chmod 666 /mnt/rootfs/dev/pts/ptmx 2>/dev/null || true
 chmod 666 /mnt/rootfs/dev/ptmx 2>/dev/null || true
 mkdir -p /mnt/rootfs/workspace
 mountpoint -q /mnt/rootfs/workspace || mount --bind /workspace /mnt/rootfs/workspace 2>/dev/null || true
+
+# Ensure rootfs /tmp uses workdisk if available to avoid /dev/shm or rootfs exhaustion
+if mountpoint -q /mnt/workdisk; then
+    mkdir -p /mnt/workdisk/tmp
+    chmod 1777 /mnt/workdisk/tmp
+    mkdir -p /mnt/rootfs/tmp
+    mountpoint -q /mnt/rootfs/tmp || mount --bind /mnt/workdisk/tmp /mnt/rootfs/tmp 2>/dev/null || true
+fi
+chmod 1777 /mnt/rootfs/tmp 2>/dev/null || true

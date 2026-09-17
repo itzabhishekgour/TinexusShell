@@ -254,6 +254,7 @@ EOF_POLICY
         DEBIAN_FRONTEND=noninteractive \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         apt-get install -y --no-install-recommends \
+            systemd systemd-sysv libpam-systemd \
             udev kmod dbus dbus-daemon \
             iproute2 net-tools iputils-ping \
             wpasupplicant iw rfkill curl ca-certificates \
@@ -274,7 +275,15 @@ EOF_POLICY
             libpam-runtime libpam-modules \
             isc-dhcp-client procps libcap2-bin \
             parted e2fsprogs dosfstools squashfs-tools grub-efi-amd64-bin \
-            firefox
+            calamares calamares-settings-ubuntu-common \
+            linux-firmware \
+            firefox || true
+
+    # Attempt to install signed bootloader packages if available in repository
+    chroot "$ROOTFS_DIR" env -i \
+        DEBIAN_FRONTEND=noninteractive \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        apt-get install -y --no-install-recommends shim-signed grub-efi-amd64-signed || true
 
     # ── Firefox: Stage Wayland profile & macOS traffic-light userChrome ────
     # Firefox profile lands in /etc/skel/.mozilla so every user inherits it
@@ -545,10 +554,64 @@ export QML_IMPORT_PATH=/usr/lib/x86_64-linux-gnu/qt6/qml
 export TINEXUS_SETTINGS_QML=/usr/share/tinexus-settings/qml/MainWindow.qml
 EOF_PROFILE
 
-    # Ensure Supervisor PID 1 symlinks
+    # Ensure Init symlinks (standard systemd PID 1 with serviced fallback)
     mkdir -p "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/bin"
-    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
-    ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
+    if [ -f "$ROOTFS_DIR/lib/systemd/systemd" ]; then
+        ln -sf /lib/systemd/systemd "$ROOTFS_DIR/sbin/init"
+        ln -sf /lib/systemd/systemd "$ROOTFS_DIR/init"
+    elif [ -f "$ROOTFS_DIR/usr/lib/systemd/systemd" ]; then
+        ln -sf /usr/lib/systemd/systemd "$ROOTFS_DIR/sbin/init"
+        ln -sf /usr/lib/systemd/systemd "$ROOTFS_DIR/init"
+    else
+        ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/sbin/init"
+        ln -sf /usr/bin/tinexus-serviced "$ROOTFS_DIR/init"
+    fi
+
+    # Stage Calamares configuration & branding
+    info "Staging Calamares configuration and branding into /etc/calamares/..."
+    mkdir -p "$ROOTFS_DIR/etc/calamares"
+    if [ -d "$PROJECT_DIR/data/calamares" ]; then
+        cp -r "$PROJECT_DIR/data/calamares/"* "$ROOTFS_DIR/etc/calamares/"
+    fi
+
+    # Stage Tinexus systemd services, targets, and presets
+    info "Staging Tinexus systemd services, targets, and presets..."
+    mkdir -p "$ROOTFS_DIR/etc/systemd/system" "$ROOTFS_DIR/lib/systemd/system-preset" "$ROOTFS_DIR/etc/systemd/system-preset"
+    if [ -d "$PROJECT_DIR/data/systemd" ]; then
+        cp -L "$PROJECT_DIR/data/systemd/"* "$ROOTFS_DIR/etc/systemd/system/"
+        if [ -f "$PROJECT_DIR/data/systemd/90-tinexus.preset" ]; then
+            cp -f "$PROJECT_DIR/data/systemd/90-tinexus.preset" "$ROOTFS_DIR/lib/systemd/system-preset/"
+            cp -f "$PROJECT_DIR/data/systemd/90-tinexus.preset" "$ROOTFS_DIR/etc/systemd/system-preset/" 2>/dev/null || true
+        fi
+    fi
+
+    # Configure autologin drop-ins for tty1 and ttyS0 so live session boots cleanly without password prompts
+    info "Configuring autologin for live session on tty1 and ttyS0..."
+    mkdir -p "$ROOTFS_DIR/etc/systemd/system/getty@tty1.service.d"
+    cat << 'EOF_TTY1' > "$ROOTFS_DIR/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\u' --autologin tinexus --noclear %I $TERM
+EOF_TTY1
+
+    mkdir -p "$ROOTFS_DIR/etc/systemd/system/serial-getty@ttyS0.service.d"
+    cat << 'EOF_TTYS0' > "$ROOTFS_DIR/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf"
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\u' --autologin tinexus --noclear --keep-baud 115200,38400,9600 %I $TERM
+EOF_TTYS0
+
+    info "Ensuring device access groups and enabling Tinexus session units in systemd..."
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        groupadd -r -f seat 2>/dev/null || true
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        usermod -aG video,input,render,seat tinexus 2>/dev/null || true
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        systemctl preset tinexus-session.target tinexus-comp.service tinexus-serviced.service tinexus-shell.service tinexus-dock.service tinexus-hardware-env.service tinexus-splash.service 2>/dev/null || true
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        systemctl enable tinexus-session.target tinexus-comp.service tinexus-serviced.service tinexus-shell.service tinexus-dock.service tinexus-hardware-env.service 2>/dev/null || true
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        systemctl set-default tinexus-session.target 2>/dev/null || true
 
     # Audio priority config (auto-detect dsp_driver=0 for universal hardware compatibility)
     mkdir -p "$ROOTFS_DIR/etc/modprobe.d"
@@ -765,8 +828,6 @@ fi
 log_step() {
     echo ">>> [TINEXUS-STEP] $1"
     echo "<6>>>> [TINEXUS-STEP] $1" > /dev/kmsg 2>/dev/null || true
-    echo ">>> [TINEXUS-STEP] $1" > /dev/console 2>/dev/null || true
-    [ -c /dev/tty0 ] && echo ">>> [TINEXUS-STEP] $1" > /dev/tty0 2>/dev/null || true
 }
 
 log_step "STEP 1: Initramfs mounted /proc, /sys, /dev successfully."
@@ -1118,11 +1179,22 @@ if [ "$IS_DEBUG" = "1" ]; then
     log_step "Debug shell exited. Resuming switch_root handoff..."
 fi
 
-log_step "STEP 11: ABOUT TO EXECUTE switch_root -c /dev/console /newroot /usr/bin/tinexus-serviced..."
+log_step "STEP 11: ABOUT TO EXECUTE switch_root into init system..."
 echo 100 > /tmp/splash_progress 2>/dev/null
 sleep 0.5
 
-exec switch_root -c /dev/console /newroot /usr/bin/tinexus-serviced
+INIT_EXEC="/sbin/init"
+if [ ! -x "/newroot$INIT_EXEC" ]; then
+    if [ -x "/newroot/lib/systemd/systemd" ]; then
+        INIT_EXEC="/lib/systemd/systemd"
+    elif [ -x "/newroot/usr/lib/systemd/systemd" ]; then
+        INIT_EXEC="/usr/lib/systemd/systemd"
+    elif [ -x "/newroot/bin/systemd" ]; then
+        INIT_EXEC="/bin/systemd"
+    fi
+fi
+log_step "Executing switch_root -c /dev/console /newroot $INIT_EXEC..."
+exec switch_root -c /dev/console /newroot "$INIT_EXEC"
 
 # Fallback: if switch_root returns or fails
 log_step "FATAL: switch_root failed or returned unexpectedly! Exit code: $?"
@@ -1209,26 +1281,48 @@ build_grub_efi_x64() {
     info "Verifying & Building GRUB EFI image (BOOTX64.EFI)..."
     mkdir -p "$ISO_TREE/EFI/BOOT"
 
-    # Explicit dual-tree module check for EFI
-    local req_efi_mods=(gfxterm all_video gettext efi_gop font)
-    for mod in "${req_efi_mods[@]}"; do
-        [ -f "$GRUB_EFI_MODS/${mod}.mod" ] || fatal "Required GRUB EFI module missing: $GRUB_EFI_MODS/${mod}.mod"
+    # Stage Secure Boot signed shim & grub if available
+    local staged_signed=0
+    for shim_cand in "$ROOTFS_DIR/usr/lib/shim/shimx64.efi.signed" "/usr/lib/shim/shimx64.efi.signed"; do
+        if [ -f "$shim_cand" ]; then
+            local grub_cand="$(dirname "$shim_cand")/../grub/x86_64-efi-signed/grubx64.efi.signed"
+            [ ! -f "$grub_cand" ] && grub_cand="/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed"
+            if [ -f "$grub_cand" ]; then
+                info "Staging Canonical/Microsoft signed Secure Boot binaries ($shim_cand -> BOOTX64.EFI, $grub_cand -> grubx64.efi)..."
+                cp -L "$shim_cand" "$ISO_TREE/EFI/BOOT/BOOTX64.EFI"
+                cp -L "$grub_cand" "$ISO_TREE/EFI/BOOT/grubx64.efi"
+                for mm_cand in "$(dirname "$shim_cand")/mmx64.efi.signed" "/usr/lib/shim/mmx64.efi.signed"; do
+                    [ -f "$mm_cand" ] && cp -L "$mm_cand" "$ISO_TREE/EFI/BOOT/mmx64.efi" && break || true
+                done
+                staged_signed=1
+                break
+            fi
+        fi
     done
 
-    local efi_modules=(
-        part_gpt part_msdos fat exfat iso9660
-        normal boot linux linux16 configfile
-        search search_fs_uuid search_fs_file search_label
-        gfxterm gfxterm_background all_video video_fb video efi_gop font gettext
-        echo test true ls cat reboot halt
-    )
+    if [ "$staged_signed" -eq 0 ]; then
+        info "Generating standalone GRUB EFI binary via grub-mkimage..."
+        # Explicit dual-tree module check for EFI
+        local req_efi_mods=(gfxterm all_video gettext efi_gop font)
+        for mod in "${req_efi_mods[@]}"; do
+            [ -f "$GRUB_EFI_MODS/${mod}.mod" ] || fatal "Required GRUB EFI module missing: $GRUB_EFI_MODS/${mod}.mod"
+        done
 
-    grub-mkimage -O x86_64-efi \
-        -d "$GRUB_EFI_MODS" \
-        -p /boot/grub \
-        -c "$EMBEDDED_CFG" \
-        -o "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" \
-        "${efi_modules[@]}"
+        local efi_modules=(
+            part_gpt part_msdos fat exfat iso9660
+            normal boot linux linux16 configfile
+            search search_fs_uuid search_fs_file search_label
+            gfxterm gfxterm_background all_video video_fb video efi_gop font gettext
+            echo test true ls cat reboot halt
+        )
+
+        grub-mkimage -O x86_64-efi \
+            -d "$GRUB_EFI_MODS" \
+            -p /boot/grub \
+            -c "$EMBEDDED_CFG" \
+            -o "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" \
+            "${efi_modules[@]}"
+    fi
 
     if ! file -b "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" | grep -qi "PE32\|EFI"; then
         fatal "BOOTX64.EFI is not a valid PE32+ EFI binary."
@@ -1277,11 +1371,13 @@ build_esp() {
     info "Building EFI System Partition (esp.img)..."
     export ESP_IMG="$WORK_DIR/esp.img"
     mkdir -p "$WORK_DIR"
-    dd if=/dev/zero of="$ESP_IMG" bs=1K count=4096 status=none
+    dd if=/dev/zero of="$ESP_IMG" bs=1M count=32 status=none
     mkfs.vfat -n "TINEXUS_EFI" "$ESP_IMG" >/dev/null
     mmd -i "$ESP_IMG" ::/EFI
     mmd -i "$ESP_IMG" ::/EFI/BOOT
     mcopy -i "$ESP_IMG" "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
+    [ -f "$ISO_TREE/EFI/BOOT/grubx64.efi" ] && mcopy -i "$ESP_IMG" "$ISO_TREE/EFI/BOOT/grubx64.efi" ::/EFI/BOOT/grubx64.efi || true
+    [ -f "$ISO_TREE/EFI/BOOT/mmx64.efi" ] && mcopy -i "$ESP_IMG" "$ISO_TREE/EFI/BOOT/mmx64.efi" ::/EFI/BOOT/mmx64.efi || true
     success "EFI System Partition created."
 }
 

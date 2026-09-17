@@ -4,11 +4,27 @@
 # ==============================================================================
 set -euo pipefail
 
+hwclock -s 2>/dev/null || true
+
 PROJECT_DIR="/workspace"
 BUILD_DIR="$PROJECT_DIR/build"
 ORIG_ISO="$BUILD_DIR/Tinexus-x86_64.iso"
 NEW_ISO="$BUILD_DIR/Tinexus-x86_64-updated.iso"
-NEW_SQUASHFS="/dev/shm/rootfs.squashfs"
+
+if [ -f "$BUILD_DIR/workdisk.img" ]; then
+    mkdir -p /mnt/workdisk
+    mountpoint -q /mnt/workdisk || mount -o loop "$BUILD_DIR/workdisk.img" /mnt/workdisk 2>/dev/null || true
+fi
+
+if mountpoint -q /mnt/workdisk; then
+    UPPER_DIR="/mnt/workdisk/upper"
+    WORK_DIR="/mnt/workdisk/work"
+    NEW_SQUASHFS="/mnt/workdisk/rootfs.squashfs"
+else
+    UPPER_DIR="/dev/shm/upper"
+    WORK_DIR="/dev/shm/work"
+    NEW_SQUASHFS="/dev/shm/rootfs.squashfs"
+fi
 
 info()    { echo -e "\e[1;34m[INFO]\e[0m $1"; }
 success() { echo -e "\e[1;32m[SUCCESS]\e[0m $1"; }
@@ -20,36 +36,36 @@ info "Checking requirements..."
 command -v mksquashfs >/dev/null 2>&1 || fatal "mksquashfs not found"
 command -v xorriso >/dev/null 2>&1 || fatal "xorriso not found"
 
-mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs /dev/shm/upper /dev/shm/work
+mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs "$UPPER_DIR" "$WORK_DIR"
 
 cleanup_mounts() {
     info "Running cleanup handler..."
     fuser -km /mnt/rootfs 2>/dev/null || true
     for m in /mnt/rootfs/dev/pts /mnt/rootfs/dev /mnt/rootfs/workspace /mnt/rootfs/proc /mnt/rootfs/sys /mnt/rootfs/run /mnt/rootfs/tmp /mnt/rootfs /mnt/squashfs /mnt/isomnt; do
-        while mount | grep -q " $m "; do
+        while mount | grep " $m " >/dev/null 2>&1; do
             umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || break
         done
     done
-    rm -rf /dev/shm/upper /dev/shm/work 2>/dev/null || true
+    rm -rf "$UPPER_DIR" "$WORK_DIR" 2>/dev/null || true
 }
 trap cleanup_mounts EXIT
 
 # 1. Mount original ISO if not mounted
-if ! mount | grep -q '/mnt/isomnt'; then
+if ! mountpoint -q /mnt/isomnt; then
     info "Mounting original ISO to /mnt/isomnt..."
     mount -o loop,ro "$ORIG_ISO" /mnt/isomnt
 fi
 
 # 2. Mount original squashfs if not mounted
-if ! mount | grep -q '/mnt/squashfs'; then
+if ! mountpoint -q /mnt/squashfs; then
     info "Mounting squashfs to /mnt/squashfs..."
     mount -o loop,ro /mnt/isomnt/live/rootfs.squashfs /mnt/squashfs
 fi
 
 # 3. Mount overlayfs on /mnt/rootfs
-if ! mount | grep -q '/mnt/rootfs'; then
+if ! mountpoint -q /mnt/rootfs; then
     info "Mounting overlayfs to /mnt/rootfs..."
-    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir=/dev/shm/upper,workdir=/dev/shm/work /mnt/rootfs
+    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir="$UPPER_DIR",workdir="$WORK_DIR" /mnt/rootfs
 fi
 
 # 4. Setup chroot bindings
@@ -62,16 +78,23 @@ mkdir -p /mnt/rootfs/workspace
 mountpoint -q /mnt/rootfs/workspace || mount --bind /workspace /mnt/rootfs/workspace 2>/dev/null || true
 
 # Ensure temporary directories with proper sticky bit permissions
+if mountpoint -q /mnt/workdisk; then
+    mkdir -p /mnt/workdisk/tmp
+    chmod 1777 /mnt/workdisk/tmp
+    mountpoint -q /mnt/rootfs/tmp || mount --bind /mnt/workdisk/tmp /mnt/rootfs/tmp 2>/dev/null || true
+fi
 mkdir -p /mnt/rootfs/tmp /mnt/rootfs/var/tmp /mnt/rootfs/tmp/build_apps
-chmod 1777 /mnt/rootfs/tmp /mnt/rootfs/var/tmp 2>/dev/null || true
+chmod 1777 /mnt/rootfs/tmp /mnt/rootfs/var/tmp /mnt/rootfs/tmp/build_apps 2>/dev/null || true
 
 # 5. In chroot: Install core dependencies & build tools
 info "Checking / Installing dependencies and dev packages in rootfs..."
 chroot /mnt/rootfs /usr/bin/apt-get update || true
 chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
-    g++ qt6-base-dev-tools qt6-declarative-dev liblayershellqtinterface-dev layer-shell-qt \
+    g++ qt6-base-dev-tools qt6-declarative-dev qml6-module-qtquick-shapes liblayershellqtinterface-dev layer-shell-qt \
     isc-dhcp-client procps libcap2-bin wget ca-certificates libssl-dev libwayland-dev libpixman-1-dev libfreetype-dev \
-    libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev libpam0g-dev
+    libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev libpam0g-dev \
+    systemd systemd-sysv libpam-systemd calamares calamares-settings-ubuntu-common \
+    linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin
 
 [ -f /mnt/rootfs/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so ] || fatal "liblayer-shell.so missing after install!"
 [ -f /mnt/rootfs/sbin/dhclient ] || [ -f /mnt/rootfs/usr/sbin/dhclient ] || fatal "dhclient missing after install!"
@@ -256,6 +279,8 @@ COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/includ
 
 # 80. libtinexus_common
 info "Compiling updated libtinexus_common..."
+rm -f /workspace/build/lib/libtinexus_common.so.0.1.0
+BUILD_START_COMMON=$(date +%s)
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -shared -fPIC \
   -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/usr/include/libdrm \
   /workspace/src/common/AudioUtils.cpp /workspace/src/common/BacklightUtils.cpp /workspace/src/common/DisplayUtils.cpp \
@@ -264,14 +289,32 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -shared -fPIC \
   /workspace/src/common/logger.cpp /workspace/src/common/peer_credentials.cpp /workspace/src/common/string_interner.cpp \
   -ldrm -lgbm -lEGL -lsystemd -lpthread \
   -o /workspace/build/lib/libtinexus_common.so.0.1.0
+[ -f /workspace/build/lib/libtinexus_common.so.0.1.0 ] || fatal "libtinexus_common compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/lib/libtinexus_common.so.0.1.0)" -ge "$BUILD_START_COMMON" ] || fatal "libtinexus_common mtime is older than build start! Stale library."
 ln -sf libtinexus_common.so.0.1.0 /workspace/build/lib/libtinexus_common.so
 ln -sf libtinexus_common.so.0.1.0 /workspace/build/lib/libtinexus_common.so.0
 cp -av /workspace/build/lib/libtinexus_common.so* /mnt/rootfs/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
 cp -av /workspace/build/lib/libtinexus_common.so* /mnt/rootfs/usr/lib/ 2>/dev/null || true
 chroot /mnt/rootfs /sbin/ldconfig
 
+# 80a. tinexus-hardware-probe
+info "Compiling tinexus-hardware-probe..."
+rm -f /workspace/build/bin/tinexus-hardware-probe
+BUILD_START_PROBE=$(date +%s)
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+  -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/usr/include/libdrm \
+  /workspace/src/common/hardware_probe_main.cpp \
+  -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -ldrm -lgbm -lEGL -lsystemd -lpthread \
+  -o /workspace/build/bin/tinexus-hardware-probe
+[ -f /workspace/build/bin/tinexus-hardware-probe ] || fatal "tinexus-hardware-probe compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-hardware-probe)" -ge "$BUILD_START_PROBE" ] || fatal "tinexus-hardware-probe mtime is older than build start! Stale binary."
+cp -f /workspace/build/bin/tinexus-hardware-probe /mnt/rootfs/usr/bin/tinexus-hardware-probe
+chmod 0755 /mnt/rootfs/usr/bin/tinexus-hardware-probe
+
 # 80b. tinexus-serviced
 info "Compiling tinexus-serviced..."
+rm -f /workspace/build/bin/tinexus-serviced
+BUILD_START_SERVICED=$(date +%s)
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/serviced/include -I/workspace/src/ipcd/include -I/workspace/src/guard/include \
   /workspace/src/serviced/daemon_spec.cpp \
@@ -286,9 +329,13 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/serviced/main.cpp \
   -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -ltinexus-guard -lcrypto -lsystemd -lpthread \
   -o /workspace/build/bin/tinexus-serviced
+[ -f /workspace/build/bin/tinexus-serviced ] || fatal "tinexus-serviced compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-serviced)" -ge "$BUILD_START_SERVICED" ] || fatal "tinexus-serviced mtime is older than build start! Stale binary."
 
 # 8a. tinexus-session
 info "Compiling tinexus-session..."
+rm -f /workspace/build/bin/tinexus-session
+BUILD_START_SESSION=$(date +%s)
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -I/workspace/src -I/workspace/src/common/include -I/workspace/src/session/include \
   /workspace/src/session/main.cpp \
@@ -297,52 +344,64 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/session/session_manager.cpp \
   -L/usr/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lpthread \
   -o /workspace/build/bin/tinexus-session
+[ -f /workspace/build/bin/tinexus-session ] || fatal "tinexus-session compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-session)" -ge "$BUILD_START_SESSION" ] || fatal "tinexus-session mtime is older than build start! Stale binary."
 
 # 8b. tinexus-launcher
 info "Compiling tinexus-launcher via compile_launcher.sh..."
+rm -f /workspace/build/bin/tinexus-launcher
 /workspace/tools/compile_launcher.sh
+[ -f /workspace/build/bin/tinexus-launcher ] || fatal "tinexus-launcher compilation FAILED!"
 
 # 8c. tinexus-settings-ui
 info "Compiling tinexus-settings-ui..."
+rm -f /workspace/build/bin/tinexus-settings-ui
+BUILD_START_SETTINGS=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/qt/SettingsBridge.hpp -o /tmp/build_apps/moc_SettingsBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/include/settings-ui/SettingsAdaptor.hpp -o /tmp/build_apps/moc_SettingsAdaptor.cpp
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/guard/include -I/workspace/src/settings-ui -I/workspace/src/settings-ui/qt -I/workspace/src/settings-ui/include \
+  $QT6_INC $COMMON_INC -I/workspace/src/guard/include -I/workspace/src/settings-ui -I/workspace/src/settings-ui/qt -I/workspace/src/settings-ui/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/settings-ui/qt/main_qt.cpp \
   /workspace/src/settings-ui/qt/SettingsBridge.cpp \
+  /workspace/src/settings-ui/qt/SettingsAdaptor.cpp \
   /workspace/src/settings-ui/WifiManager.cpp \
   /tmp/build_apps/moc_SettingsBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lcrypto \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6DBus -lcrypto \
   -o /workspace/build/bin/tinexus-settings-ui
+[ -f /workspace/build/bin/tinexus-settings-ui ] || fatal "tinexus-settings-ui compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-settings-ui)" -ge "$BUILD_START_SETTINGS" ] || fatal "tinexus-settings-ui mtime is older than build start! Stale binary."
+strings /workspace/build/bin/tinexus-settings-ui | grep "libQt6Core" >/dev/null 2>&1 || fatal "tinexus-settings-ui not linked to Qt6!"
 
 # 8d. tinexus-dock
 info "Compiling tinexus-dock via compile_dock.sh..."
 /workspace/tools/compile_dock.sh
+[ -f /workspace/build/bin/tinexus-dock ] || fatal "tinexus-dock compilation FAILED!"
 
 # 8e. tinexus-shell
 info "Compiling tinexus-shell via compile_shell.sh..."
 /workspace/tools/compile_shell.sh
+[ -f /workspace/build/bin/tinexus-shell ] || fatal "tinexus-shell compilation FAILED!"
 
-# 8f. tinexus-wallpaper
-info "Compiling tinexus-wallpaper (Phase 5 M1-M7)..."
-chroot /mnt/rootfs /usr/bin/gcc -O2 -fPIC -I/workspace/build/protocols -I/usr/include/wayland /workspace/build/protocols/wp-protocols-glue.c -c -o /tmp/build_apps/wp-protocols-glue.o
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 -ftree-vectorize \
-  -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include -I/workspace/src/wallpaper/include -I/workspace/src/txui/include -I/workspace/build/protocols -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/wayland \
-  /workspace/src/wallpaper/main.cpp \
-  /workspace/src/wallpaper/wallpaper_provider.cpp \
-  /workspace/src/wallpaper/solar_schedule.cpp \
-  /tmp/build_apps/wp-protocols-glue.o \
-  -L/workspace/build/lib -L/workspace/build -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
-  -Wl,--whole-archive -ltxui -ltinexus_protocols_client -Wl,--no-whole-archive \
-  -ltinexus_common -lwayland-client -lpixman-1 -lfreetype -lpthread \
-  -o /workspace/build/bin/tinexus-wallpaper
-cp -f /workspace/build/bin/tinexus-wallpaper /workspace/build/tinexus-wallpaper
+# 8f. Phase 4 daemons & Qt6/QML apps (tinexus-wallpaper, tinexus-notifications, tinexus-terminal)
+info "Compiling Phase 4 daemons via compile_phase4_qml.sh..."
+/workspace/tools/compile_phase4_qml.sh
+for app in tinexus-wallpaper tinexus-notifications tinexus-terminal test-terminal-pty-e2e; do
+    [ -f "/workspace/build/debug/bin/$app" ] && cp -f "/workspace/build/debug/bin/$app" /workspace/build/bin/
+done
+cp -f /workspace/build/bin/tinexus-wallpaper /workspace/build/tinexus-wallpaper 2>/dev/null || true
+[ -f /workspace/build/bin/tinexus-wallpaper ] || fatal "tinexus-wallpaper missing from build/bin!"
+[ -f /workspace/build/bin/tinexus-notifications ] || fatal "tinexus-notifications missing from build/bin!"
+[ -f /workspace/build/bin/tinexus-terminal ] || fatal "tinexus-terminal missing from build/bin!"
 
 # 8g. tinexus-comp
 info "Compiling tinexus-comp via compile_comp.sh..."
 /workspace/tools/compile_comp.sh
+[ -f /workspace/build/bin/tinexus-comp ] || fatal "tinexus-comp compilation FAILED!"
 
 # 8h. tinexus-monitor
 info "Compiling tinexus-monitor..."
+rm -f /workspace/build/bin/tinexus-monitor
+BUILD_START_MON=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/monitor/MonitorBridge.hpp -o /tmp/build_apps/moc_MonitorBridge.cpp
 MON_SRC="/workspace/src/monitor"
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
@@ -362,9 +421,14 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /tmp/build_apps/moc_MonitorBridge.cpp \
   -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network \
   -o /workspace/build/bin/tinexus-monitor
+[ -f /workspace/build/bin/tinexus-monitor ] || fatal "tinexus-monitor compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-monitor)" -ge "$BUILD_START_MON" ] || fatal "tinexus-monitor mtime is older than build start! Stale binary."
+strings /workspace/build/bin/tinexus-monitor | grep "libQt6Core" >/dev/null 2>&1 || fatal "tinexus-monitor not linked to Qt6!"
 
 # 8i. tinexus-files
 info "Compiling tinexus-files..."
+rm -f /workspace/build/bin/tinexus-files
+BUILD_START_FILES=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/files/FilesBridge.hpp -o /tmp/build_apps/moc_FilesBridge.cpp
 FILES_SRC="/workspace/src/files"
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
@@ -373,18 +437,26 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $FILES_SRC/FilesBridge.cpp \
   -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network \
   -o /workspace/build/bin/tinexus-files
+[ -f /workspace/build/bin/tinexus-files ] || fatal "tinexus-files compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-files)" -ge "$BUILD_START_FILES" ] || fatal "tinexus-files mtime is older than build start! Stale binary."
+strings /workspace/build/bin/tinexus-files | grep "libQt6Core" >/dev/null 2>&1 || fatal "tinexus-files not linked to Qt6!"
 
 # 8j. tinexus-lock
 info "Compiling tinexus-lock (Phase 5 M6)..."
+rm -f /workspace/build/bin/tinexus-lock
+BUILD_START_LOCK=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/lock -I/workspace/src/lock/include /workspace/src/lock/LockBridge.hpp -o /tmp/build_apps/moc_LockBridge.cpp
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/lock -I/workspace/src/lock/include -I/tmp/build_apps \
+  $QT6_INC $COMMON_INC -I/workspace/src/lock -I/workspace/src/lock/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus -I/tmp/build_apps \
   -DTINEXUS_LOCK_HAS_PAM=1 -DHAVE_LAYERSHELL=1 \
   /workspace/src/lock/main.cpp \
   /workspace/src/lock/LockBridge.cpp \
   -L/workspace/build/lib -L/workspace/build -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
-  -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lpam \
+  -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lQt6DBus -lpam \
   -o /workspace/build/bin/tinexus-lock
+[ -f /workspace/build/bin/tinexus-lock ] || fatal "tinexus-lock compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-lock)" -ge "$BUILD_START_LOCK" ] || fatal "tinexus-lock mtime is older than build start! Stale binary."
+strings /workspace/build/bin/tinexus-lock | grep "libQt6Core" >/dev/null 2>&1 || fatal "tinexus-lock not linked to Qt6!"
 cp -f /workspace/build/bin/tinexus-lock /workspace/build/tinexus-lock
 
 success "All desktop binaries successfully compiled and deployed to /workspace/build/bin."
@@ -399,6 +471,123 @@ chroot /mnt/rootfs /usr/bin/dpkg -i --force-overwrite \
     /workspace/build/debs/tinexus-compositor_1.0.0_amd64.deb \
     /workspace/build/debs/tinexus-desktop_1.0.0_amd64.deb \
     /workspace/build/debs/tinexus-apps_1.0.0_amd64.deb
+
+# Stage Calamares configuration & branding
+if [ -d "/workspace/data/calamares" ]; then
+    info "Staging Calamares configuration into /etc/calamares..."
+    mkdir -p /mnt/rootfs/etc/calamares
+    cp -r /workspace/data/calamares/* /mnt/rootfs/etc/calamares/
+    chmod -R 0755 /mnt/rootfs/etc/calamares/
+fi
+
+# Stage Systemd services & Presets
+if [ -d "/workspace/data/systemd" ]; then
+    info "Staging systemd unit files and presets into rootfs..."
+    mkdir -p /mnt/rootfs/etc/systemd/system /mnt/rootfs/lib/systemd/system-preset /mnt/rootfs/etc/systemd/system-preset
+    cp -r /workspace/data/systemd/* /mnt/rootfs/etc/systemd/system/
+    if [ -f "/workspace/data/systemd/90-tinexus.preset" ]; then
+        cp -f /workspace/data/systemd/90-tinexus.preset /mnt/rootfs/lib/systemd/system-preset/
+        cp -f /workspace/data/systemd/90-tinexus.preset /mnt/rootfs/etc/systemd/system-preset/
+    fi
+    chmod 0644 /mnt/rootfs/etc/systemd/system/*.service /mnt/rootfs/etc/systemd/system/*.target 2>/dev/null || true
+    
+    # Ensure serial autologin for headless diagnostics, but mask getty@tty1 so it never overlaps the GUI
+    info "Configuring serial autologin on ttyS0 and masking getty@tty1 for clean graphical session..."
+    rm -rf /mnt/rootfs/etc/systemd/system/getty@tty1.service.d
+    mkdir -p /mnt/rootfs/etc/systemd/system/serial-getty@ttyS0.service.d
+    cat << 'EOF_TTYS0' > /mnt/rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\u' --autologin tinexus --noclear --keep-baud 115200,38400,9600 %I $TERM
+EOF_TTYS0
+
+    info "Ensuring device access groups, QML staging, and enabling Tinexus session units in systemd..."
+    mkdir -p /mnt/rootfs/var/lib/systemd/linger
+    touch /mnt/rootfs/var/lib/systemd/linger/tinexus
+    mkdir -p /mnt/rootfs/etc/sudoers.d
+    echo "tinexus ALL=(ALL) NOPASSWD:ALL" > /mnt/rootfs/etc/sudoers.d/tinexus
+    chmod 0440 /mnt/rootfs/etc/sudoers.d/tinexus
+
+    mkdir -p /mnt/rootfs/usr/share/tinexus-lock/qml /mnt/rootfs/usr/share/tinexus/lock/qml
+    cp -rf /workspace/src/lock/qml/* /mnt/rootfs/usr/share/tinexus-lock/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/lock/qml/* /mnt/rootfs/usr/share/tinexus/lock/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus-dock/qml /mnt/rootfs/usr/share/tinexus/dock/qml
+    cp -rf /workspace/src/dock/qml/* /mnt/rootfs/usr/share/tinexus-dock/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/dock/qml/* /mnt/rootfs/usr/share/tinexus/dock/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus-shell/qml /mnt/rootfs/usr/share/tinexus/shell/qml
+    cp -rf /workspace/src/shell/qml/* /mnt/rootfs/usr/share/tinexus-shell/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/shell/qml/* /mnt/rootfs/usr/share/tinexus/shell/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus-launcher/qml /mnt/rootfs/usr/share/tinexus/launcher/qml
+    cp -rf /workspace/src/launcher/qml/* /mnt/rootfs/usr/share/tinexus-launcher/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/launcher/qml/* /mnt/rootfs/usr/share/tinexus/launcher/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus-settings/qml /mnt/rootfs/usr/share/tinexus-settings-ui/qml /mnt/rootfs/usr/share/tinexus/settings-ui/qml
+    cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings-ui/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus/settings-ui/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus/common/qml
+    cp -rf /workspace/src/common/qml/* /mnt/rootfs/usr/share/tinexus/common/qml/ 2>/dev/null || true
+
+    mkdir -p /mnt/rootfs/etc/udev/rules.d /mnt/rootfs/etc/polkit-1/rules.d
+    if [ -d "/workspace/data/udev" ]; then
+        cp -rf /workspace/data/udev/*.rules /mnt/rootfs/etc/udev/rules.d/ 2>/dev/null || true
+        chmod 0644 /mnt/rootfs/etc/udev/rules.d/*.rules 2>/dev/null || true
+    fi
+    if [ -d "/workspace/data/polkit" ]; then
+        cp -rf /workspace/data/polkit/*.rules /mnt/rootfs/etc/polkit-1/rules.d/ 2>/dev/null || true
+        chmod 0755 /mnt/rootfs/etc/polkit-1/rules.d 2>/dev/null || true
+        chmod 0644 /mnt/rootfs/etc/polkit-1/rules.d/*.rules 2>/dev/null || true
+    fi
+
+    ln -sf /usr/bin/tinexus-settings-ui /mnt/rootfs/usr/bin/tinexus-settings
+
+
+    chroot /mnt/rootfs /bin/bash -c "
+        groupadd -r -f seat 2>/dev/null || true
+        groupadd -r -f netdev 2>/dev/null || true
+        usermod -aG video,input,render,seat,sudo,adm,systemd-journal,netdev tinexus 2>/dev/null || true
+        systemctl preset-all 2>/dev/null || true
+        systemctl enable tinexus-session.target 2>/dev/null || true
+        systemctl enable tinexus-splash.service 2>/dev/null || true
+        systemctl enable tinexus-hardware-env.service 2>/dev/null || true
+        systemctl enable seatd.service 2>/dev/null || true
+        systemctl enable tinexus-comp.service 2>/dev/null || true
+        systemctl enable tinexus-serviced.service 2>/dev/null || true
+        systemctl disable tinexus-shell.service 2>/dev/null || true
+        systemctl disable tinexus-dock.service 2>/dev/null || true
+        systemctl mask getty@tty1.service 2>/dev/null || true
+        systemctl mask getty@tty.service 2>/dev/null || true
+        systemctl mask console-getty.service 2>/dev/null || true
+        systemctl set-default tinexus-session.target 2>/dev/null || true
+    "
+    
+    # Assert default target is tinexus-session.target
+    def_target="$(chroot /mnt/rootfs systemctl get-default 2>/dev/null || true)"
+    info "Current systemd default target: $def_target"
+    [ "$def_target" = "tinexus-session.target" ] || fatal "Failed to set default target to tinexus-session.target (got $def_target)!"
+    
+    # Assert all core units are enabled
+    for u in tinexus-session.target seatd.service tinexus-hardware-env.service tinexus-comp.service tinexus-serviced.service; do
+        is_en="$(chroot /mnt/rootfs systemctl is-enabled "$u" 2>/dev/null || true)"
+        [ "$is_en" = "enabled" ] || fatal "Unit $u is NOT enabled (status: $is_en)!"
+        success "Verified unit $u is enabled."
+    done
+
+    # Assert hardware probe binary exists and is executable in rootfs
+    [ -x "/mnt/rootfs/usr/bin/tinexus-hardware-probe" ] || fatal "tinexus-hardware-probe missing or not executable in /mnt/rootfs/usr/bin/!"
+    success "Verified tinexus-hardware-probe binary is staged and executable."
+fi
+
+# Stage Install Tinexus OS shortcut on user desktop
+info "Staging Install Tinexus OS shortcut on live user Desktop..."
+mkdir -p /mnt/rootfs/home/tinexus/Desktop /mnt/rootfs/etc/skel/Desktop
+if [ -f "/mnt/rootfs/usr/share/applications/tinexus-installer.desktop" ]; then
+    cp -f /mnt/rootfs/usr/share/applications/tinexus-installer.desktop /mnt/rootfs/home/tinexus/Desktop/
+    cp -f /mnt/rootfs/usr/share/applications/tinexus-installer.desktop /mnt/rootfs/etc/skel/Desktop/
+fi
+chmod 0755 /mnt/rootfs/home/tinexus/Desktop/*.desktop /mnt/rootfs/etc/skel/Desktop/*.desktop 2>/dev/null || true
+if [ -d /mnt/rootfs/home/tinexus ]; then
+    chroot /mnt/rootfs chown -R 1000:1000 /home/tinexus/Desktop 2>/dev/null || true
+fi
 
 # ── 10. Stage Wallpapers, Logos and Libraries ──────────────────────────────────
 info "Staging wallpapers and logos into rootfs..."
@@ -431,6 +620,7 @@ mode = "fill"
 EOF
 cp -f /mnt/rootfs/etc/tinexus/settings.toml /mnt/rootfs/etc/skel/.config/tinexus/settings.toml 2>/dev/null || true
 
+cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/tinexus/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/pixmaps/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png
@@ -468,9 +658,34 @@ for raw_bin in /bin/busybox /usr/bin/udhcpc /sbin/udhcpc; do
         chroot /mnt/rootfs getcap "$real_bin" || true
     fi
 done
+for raw_bin in /usr/bin/ip /bin/ip /sbin/ip /usr/sbin/ip /usr/sbin/iw /usr/bin/iw; do
+    if [ -f "/mnt/rootfs$raw_bin" ]; then
+        real_bin="$(chroot /mnt/rootfs realpath "$raw_bin" 2>/dev/null || echo "$raw_bin")"
+        chroot /mnt/rootfs setcap cap_net_admin,cap_net_raw+ep "$real_bin" || true
+        info "setcap applied to $real_bin"
+    fi
+done
 mkdir -p /mnt/rootfs/var/lib/dhcp
 chmod 1777 /mnt/rootfs/var/lib/dhcp
-success "Network binaries are capability-hardened (no sudo needed for tinexus user)."
+
+mkdir -p /mnt/rootfs/var/run/wpa_supplicant /mnt/rootfs/run/wpa_supplicant
+chown -R root:netdev /mnt/rootfs/var/run/wpa_supplicant /mnt/rootfs/run/wpa_supplicant 2>/dev/null || true
+chmod 1777 /mnt/rootfs/var/run/wpa_supplicant /mnt/rootfs/run/wpa_supplicant
+
+mkdir -p /mnt/rootfs/etc/tmpfiles.d
+cat << 'EOF' > /mnt/rootfs/etc/tmpfiles.d/wpa_supplicant.conf
+d /run/wpa_supplicant 1777 root netdev - -
+d /var/run/wpa_supplicant 1777 root netdev - -
+EOF
+
+mkdir -p /mnt/rootfs/etc/wpa_supplicant
+cat << 'EOF' > /mnt/rootfs/etc/wpa_supplicant/wpa_supplicant.conf
+ctrl_interface=/var/run/wpa_supplicant
+ctrl_interface_group=netdev
+update_config=1
+EOF
+chmod 0644 /mnt/rootfs/etc/wpa_supplicant/wpa_supplicant.conf
+success "Network binaries and socket paths are capability-hardened (no sudo needed for tinexus user)."
 
 # ── 12. Systematic Automated Rootfs Verification Pass ─────────────────────────
 info "Running automated assertion: Verifying EVERY file promised by ANY .deb package exists in rootfs..."
@@ -514,7 +729,7 @@ sleep 1
 info "Unmounting all chroot bindings..."
 # Innermost submounts first
 for m in /mnt/rootfs/dev/pts /mnt/rootfs/dev /mnt/rootfs/workspace /mnt/rootfs/proc /mnt/rootfs/sys /mnt/rootfs/run /mnt/rootfs/tmp; do
-    while mount | grep -q " $m "; do
+    while mount | grep " $m " >/dev/null 2>&1; do
         info "Unmounting $m..."
         umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || break
         sleep 0.2
@@ -543,8 +758,8 @@ find /mnt/rootfs/sys -mindepth 1 -delete 2>/dev/null || true
 # Check uncompressed rootfs size
 rootfs_kb="$(du -s /mnt/rootfs | awk '{print $1}')"
 info "Uncompressed rootfs size: $((rootfs_kb / 1024)) MB"
-if [ "$rootfs_kb" -gt 6000000 ]; then
-    fatal "CRITICAL BUILD ERROR: Uncompressed rootfs size ($((rootfs_kb / 1024)) MB) exceeds 6000 MB! Contamination detected."
+if [ "$rootfs_kb" -gt 15000000 ]; then
+    fatal "CRITICAL BUILD ERROR: Uncompressed rootfs size ($((rootfs_kb / 1024)) MB) exceeds 15000 MB! Contamination detected."
 fi
 
 # ── 15. Create New SquashFS ───────────────────────────────────────────────────
@@ -562,9 +777,9 @@ success "Created new squashfs: $(ls -lh "$NEW_SQUASHFS" | awk '{print $5}')"
 # ── 15b. Rigorous SquashFS Content Verification ───────────────────────────────
 info "Auditing generated SquashFS contents for runtime leaks..."
 squashfs_mb="$(du -m "$NEW_SQUASHFS" | awk '{print $1}')"
-info "Generated SquashFS size: ${squashfs_mb} MB (Expected: 650 MB – 950 MB)"
-if [ "$squashfs_mb" -gt 950 ] || [ "$squashfs_mb" -lt 650 ]; then
-    fatal "CRITICAL BUILD ERROR: Abnormal SquashFS size (${squashfs_mb} MB)! Expected between 650MB and 950MB."
+info "Generated SquashFS size: ${squashfs_mb} MB (Expected: 650 MB – 3500 MB)"
+if [ "$squashfs_mb" -gt 3500 ] || [ "$squashfs_mb" -lt 650 ]; then
+    fatal "CRITICAL BUILD ERROR: Abnormal SquashFS size (${squashfs_mb} MB)! Expected between 650MB and 3500MB."
 fi
 
 leaked_files="$(unsquashfs -l "$NEW_SQUASHFS" | grep -E '^squashfs-root/(proc/|sys/|workspace/[a-zA-Z0-9])' || true)"
@@ -573,12 +788,19 @@ if [ -n "$leaked_files" ]; then
 fi
 success "SquashFS content verification PASSED: Zero leaked runtime files detected."
 
-# ── 16. Replay ISO Boot Configuration & Insert New SquashFS ───────────────────
+# ── 16. Rebuild Initramfs & Replay ISO Boot Configuration ───────────────────
+info "Rebuilding initramfs with /sbin/init systemd target..."
+bash /workspace/tools/rebuild_initramfs.sh
+NEW_INITRAMFS="/workspace/build/kernel/initramfs.img"
+[ -f "$NEW_INITRAMFS" ] || fatal "Updated initramfs not found at $NEW_INITRAMFS"
+info "Verified updated initramfs: $(ls -lh "$NEW_INITRAMFS" | awk '{print $5}')"
+
 info "Assembling updated ISO via xorriso replay..."
 rm -f "$NEW_ISO"
 xorriso -indev "$ORIG_ISO" \
         -outdev "$NEW_ISO" \
         -update "$NEW_SQUASHFS" /live/rootfs.squashfs \
+        -update "$NEW_INITRAMFS" /boot/initramfs.img \
         -boot_image any replay
 
 success "Updated ISO created at $NEW_ISO"
