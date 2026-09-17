@@ -20,11 +20,14 @@ void run_process_async(const char* bin, const char* arg1, const char* arg2) {
     if (!fs::exists(bin)) return;
     pid_t pid = fork();
     if (pid == 0) {
-        execl(bin, bin, arg1, arg2, nullptr);
-        _exit(127);
+        pid_t p2 = fork();
+        if (p2 == 0) {
+            execl(bin, bin, arg1, arg2, nullptr);
+            _exit(127);
+        }
+        _exit(0);
     } else if (pid > 0) {
-        int status = 0;
-        waitpid(pid, &status, 0);
+        waitpid(pid, nullptr, 0);
     }
 }
 } // namespace

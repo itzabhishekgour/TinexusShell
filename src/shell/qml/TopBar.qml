@@ -7,7 +7,7 @@ import "../../common/qml"
 
 Item {
     id: root
-    width: parent ? parent.width : 1920
+    width: parent ? parent.width : (Screen.width > 0 ? Screen.width : 1920)
     height: 32
     readonly property bool notchExpanded: centerNotch.expanded
 

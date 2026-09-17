@@ -6,7 +6,7 @@ import QtQuick.Window
 
 Window {
     id: rootWindow
-    width: 1920
+    width: Screen.width > 0 ? Screen.width : 1920
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 

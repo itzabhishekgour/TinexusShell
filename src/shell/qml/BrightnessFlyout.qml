@@ -54,18 +54,29 @@ Item {
             }
 
             MouseArea {
+                id: sliderMouseArea
                 anchors.fill: parent
-                onPositionChanged: function(mouse) {
-                    var pct = Math.max(0, Math.min(100, Math.round((mouse.x / width) * 100)));
+                preventStealing: true
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+
+                function updateBrightness(mouseX) {
+                    var pct = Math.max(5, Math.min(100, Math.round((mouseX / sliderTrack.width) * 100)));
                     if (typeof bridge !== "undefined") {
                         bridge.brightness = pct;
                     }
                 }
-                onClicked: function(mouse) {
-                    var pct = Math.max(0, Math.min(100, Math.round((mouse.x / width) * 100)));
-                    if (typeof bridge !== "undefined") {
-                        bridge.brightness = pct;
+
+                onPositionChanged: function(mouse) {
+                    if (pressed) {
+                        updateBrightness(mouse.x);
                     }
+                }
+                onPressed: function(mouse) {
+                    updateBrightness(mouse.x);
+                }
+                onClicked: function(mouse) {
+                    updateBrightness(mouse.x);
                 }
             }
         }

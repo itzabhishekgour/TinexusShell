@@ -290,10 +290,13 @@ void ShellBridge::setSoundMuted(bool muted) {
 }
 
 void ShellBridge::setBrightness(int bri) {
-    bri = std::clamp(bri, 0, 100);
-    hardware::BacklightUtils::set_brightness_percent(bri, /*persist=*/true);
-    m_brightness = hardware::BacklightUtils::get_brightness_percent();
-    emit brightnessChanged();
+    bri = std::clamp(bri, 5, 100);
+    if (m_brightness != bri) {
+        m_brightness = bri;
+        emit brightnessChanged();
+    }
+    // Set hardware backlight with throttling enabled to avoid GUI stutter
+    hardware::BacklightUtils::set_brightness_percent(bri, /*persist=*/false, /*throttle=*/true);
 }
 
 void ShellBridge::setActiveAppName(const QString& name) {
@@ -306,6 +309,10 @@ void ShellBridge::setActiveAppName(const QString& name) {
 void ShellBridge::closeAllFlyouts() {
     bool changed = m_logoMenuOpen || m_appMenuOpen || m_calendarOpen || m_notificationsOpen ||
                    m_volumeFlyoutOpen || m_brightnessFlyoutOpen || m_rebootConfirmationOpen || m_shutdownConfirmationOpen;
+
+    if (m_brightnessFlyoutOpen) {
+        hardware::BacklightUtils::set_brightness_percent(m_brightness, /*persist=*/true, /*throttle=*/false);
+    }
 
     m_logoMenuOpen             = false;
     m_appMenuOpen              = false;
@@ -430,13 +437,28 @@ void ShellBridge::launchApp(const QString& execCmd) {
     QStringList parts = QProcess::splitCommand(execCmd);
     if (parts.isEmpty()) return;
     QString prog = parts.takeFirst();
+
+    // Resolve full path if binary is in /usr/bin or /usr/local/bin
+    if (!prog.startsWith('/')) {
+        if (QFile::exists(QStringLiteral("/usr/bin/") + prog)) {
+            prog = QStringLiteral("/usr/bin/") + prog;
+        } else if (QFile::exists(QStringLiteral("/usr/local/bin/") + prog)) {
+            prog = QStringLiteral("/usr/local/bin/") + prog;
+        }
+    }
+
     QProcess proc;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    QString pathEnv = env.value(QStringLiteral("PATH"));
+    if (pathEnv.isEmpty()) {
+        env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"));
+    }
     proc.setProcessEnvironment(env);
     proc.setProgram(prog);
     proc.setArguments(parts);
-    proc.startDetached();
+    bool started = proc.startDetached();
+    tinexus::log::info("[Shell] App '{}' startDetached result: {}", prog.toStdString(), started);
 }
 
 void ShellBridge::openWifiSettings() {
@@ -471,44 +493,80 @@ void ShellBridge::requestShutdown() {
 }
 
 void ShellBridge::powerReboot() {
-    tinexus::log::info("[Shell] Executing system Reboot via logind D-Bus");
+    tinexus::log::info("[Shell] Executing system Reboot");
     closeAllFlyouts();
+    bool dbusSuccess = false;
     QDBusInterface login1(QStringLiteral("org.freedesktop.login1"),
                           QStringLiteral("/org/freedesktop/login1"),
                           QStringLiteral("org.freedesktop.login1.Manager"),
                           QDBusConnection::systemBus());
     if (login1.isValid()) {
-        login1.call(QStringLiteral("Reboot"), true);
-    } else {
-        sync();
-        ::reboot(RB_AUTOBOOT);
+        QDBusMessage reply = login1.call(QStringLiteral("Reboot"), false);
+        if (reply.type() != QDBusMessage::ErrorMessage) {
+            dbusSuccess = true;
+        } else {
+            tinexus::log::warn("[Shell] logind Reboot D-Bus call returned error: {}",
+                              reply.errorMessage().toStdString());
+        }
+    }
+    if (!dbusSuccess) {
+        tinexus::log::info("[Shell] Falling back to systemctl reboot");
+        bool ok = QProcess::startDetached(QStringLiteral("sudo"), {QStringLiteral("/bin/systemctl"), QStringLiteral("reboot")});
+        if (!ok) {
+            QProcess::startDetached(QStringLiteral("systemctl"), {QStringLiteral("reboot")});
+        }
     }
 }
 
 void ShellBridge::powerShutdown() {
-    tinexus::log::info("[Shell] Executing system PowerOff via logind D-Bus");
+    tinexus::log::info("[Shell] Executing system PowerOff");
     closeAllFlyouts();
+    bool dbusSuccess = false;
     QDBusInterface login1(QStringLiteral("org.freedesktop.login1"),
                           QStringLiteral("/org/freedesktop/login1"),
                           QStringLiteral("org.freedesktop.login1.Manager"),
                           QDBusConnection::systemBus());
     if (login1.isValid()) {
-        login1.call(QStringLiteral("PowerOff"), true);
-    } else {
-        sync();
-        ::reboot(RB_POWER_OFF);
+        QDBusMessage reply = login1.call(QStringLiteral("PowerOff"), false);
+        if (reply.type() != QDBusMessage::ErrorMessage) {
+            dbusSuccess = true;
+        } else {
+            tinexus::log::warn("[Shell] logind PowerOff D-Bus call returned error: {}",
+                              reply.errorMessage().toStdString());
+        }
+    }
+    if (!dbusSuccess) {
+        tinexus::log::info("[Shell] Falling back to systemctl poweroff");
+        bool ok = QProcess::startDetached(QStringLiteral("sudo"), {QStringLiteral("/bin/systemctl"), QStringLiteral("poweroff")});
+        if (!ok) {
+            QProcess::startDetached(QStringLiteral("systemctl"), {QStringLiteral("poweroff")});
+        }
     }
 }
 
 void ShellBridge::powerSleep() {
-    tinexus::log::info("[Shell] Executing system Suspend via logind D-Bus");
+    tinexus::log::info("[Shell] Executing system Suspend");
     closeAllFlyouts();
+    bool dbusSuccess = false;
     QDBusInterface login1(QStringLiteral("org.freedesktop.login1"),
                           QStringLiteral("/org/freedesktop/login1"),
                           QStringLiteral("org.freedesktop.login1.Manager"),
                           QDBusConnection::systemBus());
     if (login1.isValid()) {
-        login1.call(QStringLiteral("Suspend"), true);
+        QDBusMessage reply = login1.call(QStringLiteral("Suspend"), false);
+        if (reply.type() != QDBusMessage::ErrorMessage) {
+            dbusSuccess = true;
+        } else {
+            tinexus::log::warn("[Shell] logind Suspend D-Bus call returned error: {}",
+                              reply.errorMessage().toStdString());
+        }
+    }
+    if (!dbusSuccess) {
+        tinexus::log::info("[Shell] Falling back to systemctl suspend");
+        bool ok = QProcess::startDetached(QStringLiteral("sudo"), {QStringLiteral("/bin/systemctl"), QStringLiteral("suspend")});
+        if (!ok) {
+            QProcess::startDetached(QStringLiteral("systemctl"), {QStringLiteral("suspend")});
+        }
     }
 }
 

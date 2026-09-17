@@ -169,10 +169,10 @@ int main(int argc, char* argv[]) {
                 mask += QRect(w - 398, 36, 390, 370);
             }
             if (bridge.volumeFlyoutOpen()) {
-                mask += QRect(w - 270, 36, 230, 190);
+                mask += QRect(w - 295, 36, 260, 190);
             }
             if (bridge.brightnessFlyoutOpen()) {
-                mask += QRect(w - 300, 36, 230, 190);
+                mask += QRect(w - 325, 36, 260, 190);
             }
             if (bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen()) {
                 mask += QRect(cx - 180, 60, 360, 190);
