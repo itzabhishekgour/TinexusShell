@@ -4,7 +4,7 @@
 // Pure C++20 Wayland LAYER_BACKGROUND daemon.
 //
 // Milestone 1: Per-output surface map — wl_output + wp_fractional_scale_v1
-// Milestone 3: IPC-native event loop — dual-fd poll(wayland + ipcd, -1)
+// Milestone 3: D-Bus event loop — poll(wayland + dbus, -1)
 // Milestone 4: CPU cross-fade — dual-buffer ping-pong via timerfd at 60fps
 // Milestone 5: Dynamic solar schedule — .twallpaper + timerfd CLOCK_REALTIME
 // Milestone 7: WALLPAPER_STATUS_QUERY → WallpaperStatusPayload response
@@ -12,10 +12,9 @@
 
 #include "wallpaper/wallpaper_provider.hpp"
 #include "wallpaper/solar_schedule.hpp"
-#include <txui/wayland/WaylandConnection.hpp>
-#include <txui/render/WaylandRenderTarget.hpp>
+#include "wallpaper/shm_surface.hpp"
 #include <common/logger.hpp>
-#include <ipcd/protocol/header.hpp>
+#include "wallpaper/wallpaper_dbus.hpp"
 
 #include <wlr-layer-shell-unstable-v1-client-protocol.h>
 #include <wayland-client.h>
@@ -25,9 +24,6 @@ extern "C" {
 #include <fractional-scale-v1-client-protocol.h>
 #include <viewporter-client-protocol.h>
 }
-
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/timerfd.h>
 #include <csignal>
 #include <atomic>
@@ -51,6 +47,9 @@ namespace fs = std::filesystem;
 // ─────────────────────────────────────────────────────────────────────────────
 // Global compositor state
 // ─────────────────────────────────────────────────────────────────────────────
+static wl_display*                     g_display         = nullptr;
+static wl_compositor*                  g_compositor      = nullptr;
+static wl_shm*                         g_shm             = nullptr;
 static zwlr_layer_shell_v1*            g_layer_shell     = nullptr;
 static wp_fractional_scale_manager_v1* g_frac_scale_mgr  = nullptr;
 static wp_viewporter*                  g_viewporter       = nullptr;
@@ -61,10 +60,10 @@ static volatile sig_atomic_t           g_reload_requested = 0;
 // OutputSurface — per-monitor wallpaper state
 // ─────────────────────────────────────────────────────────────────────────────
 struct OutputSurface {
-    wl_output*                                output      = nullptr;
-    zwlr_layer_surface_v1*                    layer_surf  = nullptr;
-    std::unique_ptr<txui::WaylandRenderTarget> buf_a;  // currently displayed
-    std::unique_ptr<txui::WaylandRenderTarget> buf_b;  // cross-fade target
+    wl_output*                                  output      = nullptr;
+    zwlr_layer_surface_v1*                      layer_surf  = nullptr;
+    std::unique_ptr<wallpaper::ShmRenderTarget> buf_a;  // currently displayed
+    std::unique_ptr<wallpaper::ShmRenderTarget> buf_b;  // cross-fade target
     wp_fractional_scale_v1*                   frac_scale  = nullptr;
     wp_viewport*                              viewport    = nullptr;
 
@@ -137,8 +136,6 @@ static std::pair<uint32_t, uint32_t> phys_size(uint32_t lw, uint32_t lh, double 
 // ─────────────────────────────────────────────────────────────────────────────
 // Forward declarations needed by layer_surface_configure
 // ─────────────────────────────────────────────────────────────────────────────
-namespace txui::wayland { class WaylandConnection; }
-static txui::wayland::WaylandConnection* g_conn = nullptr;
 static void render_and_commit(OutputSurface& out, const std::string& path);
 [[nodiscard]] static std::string resolve_wallpaper_path_from_settings();
 
@@ -191,7 +188,7 @@ static void layer_surface_configure(void* data, struct zwlr_layer_surface_v1* su
             render_and_commit(*out, path);
         }
     }
-    if (g_conn) g_conn->flush();
+    if (g_display) wl_display_flush(g_display);
 }
 
 static void layer_surface_closed(void* data, struct zwlr_layer_surface_v1*) {
@@ -253,7 +250,17 @@ static void registry_handle_global(void*, struct wl_registry* reg,
                                     uint32_t name, const char* interface, uint32_t version) {
     using sv = std::string_view;
 
-    if (sv(interface) == zwlr_layer_shell_v1_interface.name) {
+    if (sv(interface) == wl_compositor_interface.name) {
+        g_compositor = static_cast<wl_compositor*>(
+            wl_registry_bind(reg, name, &wl_compositor_interface, version >= 4 ? 4 : version));
+        log::info("[wallpaper] Bound wl_compositor");
+
+    } else if (sv(interface) == wl_shm_interface.name) {
+        g_shm = static_cast<wl_shm*>(
+            wl_registry_bind(reg, name, &wl_shm_interface, 1));
+        log::info("[wallpaper] Bound wl_shm");
+
+    } else if (sv(interface) == zwlr_layer_shell_v1_interface.name) {
         g_layer_shell = static_cast<zwlr_layer_shell_v1*>(
             wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface, version >= 4 ? 4 : version));
         log::info("[wallpaper] Bound zwlr_layer_shell_v1");
@@ -279,7 +286,7 @@ static void registry_handle_global(void*, struct wl_registry* reg,
         wl_output_add_listener(output, &output_listener, &out);
         log::info("[wallpaper] wl_output announced (name={})", name);
 
-        if (g_layer_shell && g_conn) create_output_surface(output);
+        if (g_layer_shell && g_compositor && g_shm) create_output_surface(output);
     }
 }
 
@@ -307,12 +314,6 @@ static const struct wl_registry_listener registry_listener = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Path resolution — pure XDG, zero hardcoded paths or UIDs
 // ─────────────────────────────────────────────────────────────────────────────
-[[nodiscard]] static std::string get_ipc_socket_path() {
-    const char* x = std::getenv("XDG_RUNTIME_DIR");
-    if (x && x[0] != '\0') return std::string(x) + "/tinexus/ipc.sock";
-    return "/run/user/" + std::to_string(static_cast<unsigned>(::getuid()))
-           + "/tinexus/ipc.sock";
-}
 
 [[nodiscard]] static std::string resolve_wallpaper_path_from_settings() {
     std::error_code ec;
@@ -398,69 +399,22 @@ static const struct wl_registry_listener registry_listener = {
     return "/usr/share/backgrounds/emerald-matrix.png";
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IPC client helpers
-// ─────────────────────────────────────────────────────────────────────────────
-[[nodiscard]] static int connect_to_ipcd() {
-    const std::string path = get_ipc_socket_path();
-    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) { log::error("[wallpaper] socket(): {}", std::strerror(errno)); return -1; }
-    struct sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    ::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
-    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        log::warn("[wallpaper] ipcd not reachable: {} (standalone mode)", std::strerror(errno));
-        ::close(fd); return -1;
-    }
-    log::info("[wallpaper] Connected to tinexus-ipcd at '{}'", path);
-    return fd;
-}
 
-[[nodiscard]] static bool send_ipc_frame(int fd,
-                                          ipcd::protocol::MessageType mt, uint32_t seq,
-                                          const uint8_t* payload, uint32_t plen) {
-    using namespace ipcd::protocol;
-    Header hdr{}; hdr.magic = TINEXUS_IPC_MAGIC; hdr.version = TINEXUS_IPC_VERSION_1;
-    hdr.msg_type = static_cast<uint16_t>(mt); hdr.sequence_id = seq; hdr.payload_len = plen;
-    std::vector<uint8_t> buf(sizeof(hdr) + plen);
-    std::memcpy(buf.data(), &hdr, sizeof(hdr));
-    if (payload && plen) std::memcpy(buf.data() + sizeof(hdr), payload, plen);
-    const uint8_t* p = buf.data(); size_t r = buf.size();
-    while (r > 0) {
-        ssize_t n = ::write(fd, p, r);
-        if (n < 0) { if (errno == EINTR) continue; return false; }
-        p += n; r -= static_cast<size_t>(n);
-    }
-    return true;
-}
-
-static bool register_with_ipcd(int ipc_fd) {
-    using MT = ipcd::protocol::MessageType;
-    const char* svc = "wallpaper";
-    if (!send_ipc_frame(ipc_fd, MT::SYS_REGISTER_SERVICE, 1,
-                        reinterpret_cast<const uint8_t*>(svc),
-                        static_cast<uint32_t>(std::strlen(svc) + 1))) return false;
-    uint16_t topic = static_cast<uint16_t>(MT::WALLPAPER_CHANGED);
-    return send_ipc_frame(ipc_fd, MT::SYS_SUBSCRIBE_TOPIC, 2,
-                          reinterpret_cast<const uint8_t*>(&topic), sizeof(topic));
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // create_output_surface — allocates two SHM buffers and a layer surface
 // ─────────────────────────────────────────────────────────────────────────────
 static void create_output_surface(wl_output* output) {
     auto it = g_outputs.find(output);
-    if (it == g_outputs.end() || !g_conn) return;
+    if (it == g_outputs.end() || !g_shm || !g_compositor) return;
     OutputSurface& out = it->second;
     if (out.layer_surf) return; // Already created
 
-    auto ta = txui::WaylandRenderTarget::create(*g_conn, 1, 1);
-    auto tb = txui::WaylandRenderTarget::create(*g_conn, 1, 1);
-    if (!ta || !tb) { log::error("[wallpaper] Failed to create render targets"); return; }
-    out.buf_a = std::make_unique<txui::WaylandRenderTarget>(std::move(*ta));
-    out.buf_b = std::make_unique<txui::WaylandRenderTarget>(std::move(*tb));
+    out.buf_a = wallpaper::ShmRenderTarget::create(g_shm, g_compositor, 1, 1);
+    out.buf_b = wallpaper::ShmRenderTarget::create(g_shm, g_compositor, 1, 1);
+    if (!out.buf_a || !out.buf_b) { log::error("[wallpaper] Failed to create render targets"); return; }
 
-    wl_surface* surf_a = out.buf_a->surface().surface();
+    wl_surface* surf_a = out.buf_a->surface();
 
     if (g_frac_scale_mgr) {
         out.frac_scale = wp_fractional_scale_manager_v1_get_fractional_scale(g_frac_scale_mgr, surf_a);
@@ -578,33 +532,8 @@ static void advance_fade_frame() {
             still_fading = true;
         }
     }
-    if (g_conn) g_conn->flush();
+    if (g_display) wl_display_flush(g_display);
     if (!still_fading) disarm_fade_timerfd(g_fade_timer_fd);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// build_status_payload — M7: WallpaperStatusPayload for WALLPAPER_STATUS_REPLY
-// ─────────────────────────────────────────────────────────────────────────────
-static ipcd::protocol::WallpaperStatusPayload build_status_payload() {
-    ipcd::protocol::WallpaperStatusPayload s{};
-    for (const auto& [_, out] : g_outputs) {
-        if (out.configured && !out.active_path.empty()) {
-            ::strncpy(s.path, out.active_path.c_str(), sizeof(s.path) - 1);
-            s.mode = static_cast<uint8_t>(out.fit_mode);
-            break;
-        }
-    }
-    if (g_schedule.is_loaded()) {
-        s.is_dynamic = 1;
-        const int64_t now = static_cast<int64_t>(::time(nullptr));
-        auto frame = g_schedule.resolve_frame(now);
-        s.current_frame_index = frame ? frame->index : 0;
-        s.total_frames        = g_schedule.frame_count();
-        s.next_change_secs    = g_schedule.seconds_until_next_transition(now);
-    } else {
-        s.total_frames = 1;
-    }
-    return s;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -620,14 +549,7 @@ int main() {
     sigaction(SIGUSR1, &sa, nullptr);
 
     log::set_component_name("wallpaper");
-    log::info("[wallpaper] tinexus-wallpaper starting (M1+M3+M4+M5+M7)...");
-
-    // ── IPC connection ──
-    int ipc_fd = connect_to_ipcd();
-    if (ipc_fd >= 0 && !register_with_ipcd(ipc_fd)) {
-        log::warn("[wallpaper] ipcd handshake failed — standalone mode");
-        ::close(ipc_fd); ipc_fd = -1;
-    }
+    log::info("[wallpaper] tinexus-wallpaper starting (D-Bus io.tinexus.Wallpaper)...");
 
     // ── Cross-fade timerfd (60fps, disarmed when no fade is active) ──
     g_fade_timer_fd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -636,21 +558,22 @@ int main() {
                   std::strerror(errno));
 
     // ── Wayland connection ──
-    auto conn_opt = txui::wayland::WaylandConnection::connect();
-    if (!conn_opt) {
+    g_display = wl_display_connect(nullptr);
+    if (!g_display) {
         log::error("[wallpaper] Failed to connect to Wayland display!");
-        if (ipc_fd >= 0) ::close(ipc_fd);
         return 1;
     }
-    auto connection = std::move(*conn_opt);
-    g_conn = &connection;
 
-    wl_registry* reg = wl_display_get_registry(connection.display());
+    wl_registry* reg = wl_display_get_registry(g_display);
     wl_registry_add_listener(reg, &registry_listener, nullptr);
-    wl_display_roundtrip(connection.display()); // binds globals + announces outputs
+    wl_display_roundtrip(g_display); // binds globals + announces outputs
 
     if (!g_layer_shell) {
         log::error("[wallpaper] zwlr_layer_shell_v1 not advertised by compositor!");
+        return 1;
+    }
+    if (!g_compositor || !g_shm) {
+        log::error("[wallpaper] wl_compositor or wl_shm not advertised by compositor!");
         return 1;
     }
     if (g_outputs.empty()) {
@@ -662,14 +585,14 @@ int main() {
     for (auto& [output, _] : g_outputs)
         create_output_surface(output);
 
-    wl_display_roundtrip(connection.display()); // receive configure events
+    wl_display_roundtrip(g_display); // receive configure events
 
     // Wait up to 1 second for all outputs to configure
     for (int tries = 100; tries > 0; --tries) {
         bool all_ok = true;
         for (const auto& [_, o] : g_outputs) if (!o.configured) { all_ok = false; break; }
         if (all_ok) break;
-        wl_display_dispatch(connection.display());
+        wl_display_dispatch(g_display);
         ::usleep(10'000);
     }
 
@@ -689,7 +612,7 @@ int main() {
     }();
 
     for (auto& [_, out] : g_outputs) render_and_commit(out, init_path);
-    connection.flush();
+    wl_display_flush(g_display);
 
     // Arm solar timer
     if (g_schedule.is_loaded() && g_solar_timer.is_valid()) {
@@ -699,21 +622,93 @@ int main() {
         log::info("[wallpaper] Solar timer armed: next frame in {} seconds", secs);
     }
 
-    // ── IPC receive buffer ──
-    std::vector<uint8_t> ipc_buf;
-    ipc_buf.reserve(sizeof(ipcd::protocol::Header) +
-                    sizeof(ipcd::protocol::WallpaperChangedPayload) + 16);
-
     std::string current_path    = init_path;
     uint16_t    current_fade_ms = 500;
     auto        current_mode    = wallpaper::FitMode::Fill;
 
-    const int wayland_fd = wl_display_get_fd(connection.display());
+    // ── Initialize D-Bus service (io.tinexus.Wallpaper) ──
+    wallpaper::WallpaperDBus::instance().init(
+        // on_set (SetWallpaper method call)
+        [&](const std::string& path, uint8_t mode, bool dynamic, uint16_t fade_ms) {
+            current_path    = path;
+            current_mode    = static_cast<wallpaper::FitMode>(mode);
+            current_fade_ms = fade_ms > 0 ? fade_ms : 500;
+
+            const std::string& target = dynamic && g_schedule.is_loaded()
+                ? ([&]() -> const std::string& {
+                       auto f = g_schedule.resolve_frame(static_cast<int64_t>(::time(nullptr)));
+                       return f ? f->path : current_path;
+                   }())
+                : current_path;
+
+            for (auto& [_, out] : g_outputs) {
+                out.fit_mode = current_mode;
+                begin_crossfade(out, target, current_fade_ms);
+            }
+            if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+
+            wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
+                target, mode, dynamic);
+        },
+        // on_status (GetStatus method call)
+        [&]() -> wallpaper::WallpaperStatus {
+            wallpaper::WallpaperStatus st{};
+            for (const auto& [_, out] : g_outputs) {
+                if (out.configured && !out.active_path.empty()) {
+                    st.path = out.active_path;
+                    st.mode = static_cast<uint8_t>(out.fit_mode);
+                    break;
+                }
+            }
+            if (st.path.empty()) st.path = current_path;
+            if (g_schedule.is_loaded()) {
+                st.is_dynamic = true;
+                const int64_t now = static_cast<int64_t>(::time(nullptr));
+                auto frame = g_schedule.resolve_frame(now);
+                st.current_frame_index = frame ? frame->index : 0;
+                st.total_frames        = g_schedule.frame_count();
+                st.next_change_secs    = g_schedule.seconds_until_next_transition(now);
+            } else {
+                st.total_frames = 1;
+            }
+            return st;
+        },
+        // on_advance (AdvanceFrame method call)
+        [&]() {
+            if (!g_schedule.is_loaded()) return;
+            const int64_t now = static_cast<int64_t>(::time(nullptr));
+            auto frame = g_schedule.resolve_frame(now);
+            if (frame) {
+                current_path = frame->path;
+                for (auto& [_, out] : g_outputs)
+                    begin_crossfade(out, frame->path, 1000);
+                if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+                wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
+                    frame->path, static_cast<uint8_t>(current_mode), true);
+            }
+        },
+        // on_reload (io.tinexus.Settings ThemeChanged/ConfigChanged signal)
+        [&]() {
+            current_path = resolve_wallpaper_path_from_settings();
+            log::info("[wallpaper] Settings signal received -> crossfade to '{}'", current_path);
+            for (auto& [_, out] : g_outputs)
+                begin_crossfade(out, current_path, current_fade_ms);
+            if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+            wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
+                current_path, static_cast<uint8_t>(current_mode), false);
+        }
+    );
+
+    // Initial state announcement
+    wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
+        init_path, 0, g_schedule.is_loaded());
+
+    const int wayland_fd = wl_display_get_fd(g_display);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Main event loop — up to 4 fds:
     //   [0] Wayland display fd
-    //   [1] tinexus-ipcd fd (when connected)
+    //   [1] D-Bus session bus fd (via sd-bus)
     //   [2] cross-fade timerfd (armed only during active fades)
     //   [3] solar schedule timerfd (CLOCK_REALTIME)
     // ─────────────────────────────────────────────────────────────────────────
@@ -725,26 +720,32 @@ int main() {
             for (auto& [_, out] : g_outputs)
                 begin_crossfade(out, current_path, current_fade_ms);
             if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+            wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
+                current_path, static_cast<uint8_t>(current_mode), false);
         }
 
-        while (wl_display_prepare_read(connection.display()) != 0)
-            wl_display_dispatch_pending(connection.display());
-        connection.flush();
+        while (wl_display_prepare_read(g_display) != 0)
+            wl_display_dispatch_pending(g_display);
+        wl_display_flush(g_display);
+
+        const int bus_fd = wallpaper::WallpaperDBus::instance().fd();
 
         struct pollfd fds[4];
         int nfds = 0;
-        fds[nfds++] = { .fd = wayland_fd,          .events = POLLIN,                 .revents = 0 };
-        if (ipc_fd >= 0)
-            fds[nfds++] = { .fd = ipc_fd,           .events = POLLIN|POLLHUP|POLLERR, .revents = 0 };
+        fds[nfds++] = { .fd = wayland_fd, .events = POLLIN, .revents = 0 };
+        if (bus_fd >= 0) {
+            short b_ev = static_cast<short>(wallpaper::WallpaperDBus::instance().events() | POLLIN);
+            fds[nfds++] = { .fd = bus_fd, .events = b_ev, .revents = 0 };
+        }
         if (g_fade_timer_fd >= 0)
-            fds[nfds++] = { .fd = g_fade_timer_fd,  .events = POLLIN,                 .revents = 0 };
+            fds[nfds++] = { .fd = g_fade_timer_fd, .events = POLLIN, .revents = 0 };
         if (g_solar_timer.is_valid())
-            fds[nfds++] = { .fd = g_solar_timer.fd(),.events = POLLIN,                .revents = 0 };
+            fds[nfds++] = { .fd = g_solar_timer.fd(), .events = POLLIN, .revents = 0 };
 
         int ret = ::poll(fds, static_cast<nfds_t>(nfds), -1);
 
         if (ret < 0) {
-            wl_display_cancel_read(connection.display());
+            wl_display_cancel_read(g_display);
             if (errno == EINTR) continue;
             log::error("[wallpaper] poll() error: {}", std::strerror(errno));
             break;
@@ -752,85 +753,19 @@ int main() {
 
         // Wayland
         if (fds[0].revents & POLLIN) {
-            wl_display_read_events(connection.display());
-            wl_display_dispatch_pending(connection.display());
+            wl_display_read_events(g_display);
+            wl_display_dispatch_pending(g_display);
         } else {
-            wl_display_cancel_read(connection.display());
+            wl_display_cancel_read(g_display);
         }
 
-        // IPC
-        if (ipc_fd >= 0) {
+        // D-Bus
+        if (bus_fd >= 0) {
             for (int i = 1; i < nfds; ++i) {
-                if (fds[i].fd != ipc_fd) continue;
-                if (fds[i].revents & (POLLHUP | POLLERR)) {
-                    log::warn("[wallpaper] ipcd socket closed — standalone mode");
-                    ::close(ipc_fd); ipc_fd = -1; ipc_buf.clear(); break;
+                if (fds[i].fd == bus_fd && (fds[i].revents & (POLLIN | POLLERR | POLLHUP))) {
+                    wallpaper::WallpaperDBus::instance().process();
+                    break;
                 }
-                if (!(fds[i].revents & POLLIN)) break;
-
-                uint8_t tmp[4096]; ssize_t n;
-                while ((n = ::read(ipc_fd, tmp, sizeof(tmp))) > 0)
-                    ipc_buf.insert(ipc_buf.end(), tmp, tmp + n);
-                if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-                    ::close(ipc_fd); ipc_fd = -1; ipc_buf.clear(); break;
-                }
-
-                using namespace ipcd::protocol;
-                constexpr size_t HDR = sizeof(Header);
-                while (ipc_buf.size() >= HDR) {
-                    Header hdr{}; std::memcpy(&hdr, ipc_buf.data(), HDR);
-                    if (hdr.magic != TINEXUS_IPC_MAGIC || hdr.version != TINEXUS_IPC_VERSION_1) {
-                        log::warn("[wallpaper] Malformed IPC frame"); ipc_buf.clear(); break;
-                    }
-                    if (hdr.payload_len > 4u * 1024u * 1024u) {
-                        log::warn("[wallpaper] Oversized IPC payload"); ipc_buf.clear(); break;
-                    }
-                    if (ipc_buf.size() < HDR + hdr.payload_len) break;
-
-                    const uint8_t* payload  = ipc_buf.data() + HDR;
-                    auto           msg_type = static_cast<MessageType>(hdr.msg_type);
-
-                    if (msg_type == MessageType::WALLPAPER_CHANGED) {
-                        if (hdr.payload_len >= sizeof(WallpaperChangedPayload)) {
-                            WallpaperChangedPayload pkt{};
-                            std::memcpy(&pkt, payload, sizeof(pkt));
-                            pkt.path[sizeof(pkt.path) - 1] = '\0';
-                            current_path     = std::string(pkt.path);
-                            current_mode     = static_cast<wallpaper::FitMode>(pkt.mode);
-                            current_fade_ms  = pkt.fade_ms > 0 ? pkt.fade_ms : 500;
-
-                            log::info("[wallpaper] WALLPAPER_CHANGED → '{}' mode={} fade={}ms",
-                                      current_path, pkt.mode, pkt.fade_ms);
-
-                            const std::string& target = pkt.dynamic && g_schedule.is_loaded()
-                                ? ([&]() -> const std::string& {
-                                       auto f = g_schedule.resolve_frame(static_cast<int64_t>(::time(nullptr)));
-                                       return f ? f->path : current_path;
-                                   }())
-                                : current_path;
-
-                            for (auto& [_, out] : g_outputs) {
-                                out.fit_mode = current_mode;
-                                begin_crossfade(out, target, current_fade_ms);
-                            }
-                            if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
-                        }
-
-                    } else if (msg_type == MessageType::WALLPAPER_STATUS_QUERY) {
-                        // M7: full status response
-                        auto status = build_status_payload();
-                        static_cast<void>(send_ipc_frame(ipc_fd, MessageType::WALLPAPER_STATUS_REPLY,
-                                       hdr.sequence_id,
-                                       reinterpret_cast<const uint8_t*>(&status), sizeof(status)));
-
-                    } else {
-                        log::debug("[wallpaper] Ignoring IPC msg_type={}", hdr.msg_type);
-                    }
-
-                    ipc_buf.erase(ipc_buf.begin(),
-                                  ipc_buf.begin() + static_cast<ptrdiff_t>(HDR + hdr.payload_len));
-                }
-                break;
             }
         }
 
@@ -857,6 +792,8 @@ int main() {
                         for (auto& [_, out] : g_outputs)
                             begin_crossfade(out, frame->path, 2000); // 2-second solar fade
                         if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+                        wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
+                            frame->path, static_cast<uint8_t>(current_mode), true);
                     }
                     const uint32_t secs = g_schedule.seconds_until_next_transition(now);
                     g_solar_timer.arm(secs);
@@ -877,8 +814,9 @@ int main() {
     }
     g_outputs.clear();
     if (g_fade_timer_fd >= 0) ::close(g_fade_timer_fd);
-    if (ipc_fd >= 0)          ::close(ipc_fd);
+    wallpaper::WallpaperDBus::instance().shutdown();
     wallpaper::ImageProvider::cache().clear();
+    if (g_display) wl_display_disconnect(g_display);
     log::info("[wallpaper] tinexus-wallpaper exited cleanly.");
     return 0;
 }

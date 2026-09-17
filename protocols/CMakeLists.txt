@@ -3,6 +3,7 @@ target_include_directories(tinexus_protocols PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 
 add_library(tinexus_protocols_client STATIC)
 target_include_directories(tinexus_protocols_client PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(tinexus_protocols_client PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
 

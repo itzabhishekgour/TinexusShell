@@ -1,11 +1,6 @@
 #include "dock/DockWidget.hpp"
-#include "ipcd/protocol/dock_protocol.hpp"
-#include "ipcd/protocol/header.hpp"
 #include <txui/render/FontMetrics.hpp>
 #include <txui/core/SingleInstance.hpp>
-#include <common/RuntimePaths.hpp>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstdlib>
@@ -48,35 +43,12 @@ DockWidget::~DockWidget() {
 }
 
 void DockWidget::setup_ipc() {
-    m_ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (m_ipc_socket >= 0) {
-        struct sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        std::string sock_path = tinexus::common::RuntimePaths::get_ipc_socket_path();
-        strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
-        if (connect(m_ipc_socket, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-            close(m_ipc_socket);
-            m_ipc_socket = -1;
-        }
-    }
+    // Deprecated in Phase 3: migrated to Qt6 D-Bus (io.tinexus.Dock)
+    m_ipc_socket = -1;
 }
 
-void DockWidget::send_ipc(uint16_t msg_type, const std::string& app_id) {
-    if (m_ipc_socket < 0) return;
-    tinexus::ipcd::protocol::Header hdr;
-    tinexus::ipcd::protocol::DockNotifyPayload pld;
-    hdr.magic       = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-    hdr.version     = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-    hdr.msg_type    = msg_type;
-    hdr.payload_len = sizeof(pld);
-    hdr.flags = hdr.sequence_id = hdr.checksum = 0;
-    memset(&pld, 0, sizeof(pld));
-    strncpy(pld.app_id, app_id.c_str(), sizeof(pld.app_id) - 1);
-    pld.surface_id = 0;
-
-    send(m_ipc_socket, &hdr, sizeof(hdr), MSG_NOSIGNAL);
-    send(m_ipc_socket, &pld, sizeof(pld), MSG_NOSIGNAL);
+void DockWidget::send_ipc(uint16_t /*msg_type*/, const std::string& /*app_id*/) {
+    // Deprecated in Phase 3: migrated to Qt6 D-Bus (io.tinexus.Dock)
 }
 
 void DockWidget::spawn_app(const std::string& exec_cmd) {
@@ -171,10 +143,10 @@ void DockWidget::on_icon_clicked(size_t idx) {
         icon.bounce_offset_spring.reset(0.4, 0.0);
         break;
     case DockIconAppState::Minimized:
-        send_ipc(static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RESTORE_REQUEST), icon.app_id);
+        // Migrated to D-Bus io.tinexus.Dock
         break;
     case DockIconAppState::RunningBg:
-        send_ipc(static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS), icon.app_id);
+        // Migrated to D-Bus io.tinexus.Dock
         break;
     case DockIconAppState::RunningFocused:
         icon.bounce_offset_spring.reset(0.22, 0.0);

@@ -6,6 +6,7 @@
 #include <QtCore/QEvent>
 #include <QtCore/QCoreApplication>
 #include <QtGui/QScreen>
+#include <QtGui/QGuiApplication>
 
 #if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
 #include <LayerShellQt/Window>
@@ -96,7 +97,13 @@ void DockWindow::setupTripwireWindow(QQmlApplicationEngine*) {
     m_tripwireWindow = new QQuickWindow();
     m_tripwireWindow->setColor(Qt::transparent);
     m_tripwireWindow->setFlags(Qt::FramelessWindowHint);
-    m_tripwireWindow->resize(1920, 2);
+    int screen_w = 1920;
+    if (m_mainWindow && m_mainWindow->screen()) {
+        screen_w = m_mainWindow->screen()->geometry().width();
+    } else if (QGuiApplication::primaryScreen()) {
+        screen_w = QGuiApplication::primaryScreen()->geometry().width();
+    }
+    m_tripwireWindow->resize(screen_w > 0 ? screen_w : 1920, 2);
 
     auto* filter = new TripwireEventFilter(this);
     m_tripwireWindow->installEventFilter(filter);

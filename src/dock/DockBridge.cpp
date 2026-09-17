@@ -7,17 +7,17 @@
 #include "dock/DockMenuPopup.hpp"
 #include "dock/DockWindow.hpp"
 #include "dock/StacksPopup.hpp"
-#include <ipcd/protocol/dock_protocol.hpp>
-#include <ipcd/protocol/header.hpp>
-#include <common/RuntimePaths.hpp>
+#include "dock/DockAdaptor.hpp"
 #include <common/logger.hpp>
 #include <unordered_map>
 
 #include <QtCore/QProcess>
+#include <QtCore/QFile>
 #include <QtCore/QCoreApplication>
-#include <txui/core/SingleInstance.hpp>
-#include <sys/socket.h>
-#include <sys/un.h>
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusInterface>
+#include <QtDBus/QDBusMessage>
+#include <common/SingleInstance.hpp>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -44,18 +44,13 @@ DockBridge::DockBridge(QObject* parent)
     }
 
     recomputeLayout();
-    setupIpc();
+    setupDBus();
 
     connect(&m_animTimer, &QTimer::timeout, this, &DockBridge::onAnimationTimer);
     m_animTimer.start(16); // 60 FPS
 }
 
-DockBridge::~DockBridge() {
-    if (m_ipcFd >= 0) {
-        ::close(m_ipcFd);
-        m_ipcFd = -1;
-    }
-}
+DockBridge::~DockBridge() = default;
 
 void DockBridge::setReducedMotion(bool val) {
     if (m_reducedMotion != val) {
@@ -463,9 +458,9 @@ void DockBridge::activateApp(const QString& appId) {
     }
 
     std::string canonical = tinexus::common::get_canonical_app_id(icon.appId.toStdString());
-    if (txui::is_single_instance_app(canonical) && txui::SingleInstance::is_app_running(canonical)) {
+    if (tinexus::common::is_single_instance_app(canonical) && tinexus::common::SingleInstance::is_app_running(canonical)) {
         tinexus::log::info("[DockBridge] Single-instance app '{}' is already running — focusing", canonical);
-        txui::SingleInstance::focus_app(canonical);
+        tinexus::common::SingleInstance::focus_app(canonical);
         if (m_model) m_model->activateApp(icon.appId);
         if (!m_reducedMotion) icon.bounceSpring.reset(0.25, 0.0);
         return;
@@ -475,7 +470,7 @@ void DockBridge::activateApp(const QString& appId) {
         if (m_model) {
             m_model->activateApp(icon.appId);
         }
-        sendIpc(static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS), icon.appId);
+        sendRaiseAndFocus(icon.appId);
         if (!m_reducedMotion) icon.bounceSpring.reset(0.22, 0.0);
         return;
     }
@@ -587,9 +582,23 @@ void DockBridge::spawnApp(const QString& execCmd) {
     QStringList parts = QProcess::splitCommand(execCmd);
     if (parts.isEmpty()) return;
     QString prog = parts.takeFirst();
+
+    // Resolve full path if binary is in /usr/bin or /usr/local/bin
+    if (!prog.startsWith('/')) {
+        if (QFile::exists(QStringLiteral("/usr/bin/") + prog)) {
+            prog = QStringLiteral("/usr/bin/") + prog;
+        } else if (QFile::exists(QStringLiteral("/usr/local/bin/") + prog)) {
+            prog = QStringLiteral("/usr/local/bin/") + prog;
+        }
+    }
+
     QProcess proc;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    QString pathEnv = env.value(QStringLiteral("PATH"));
+    if (pathEnv.isEmpty()) {
+        env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"));
+    }
     proc.setProcessEnvironment(env);
     proc.setProgram(prog);
     proc.setArguments(parts);
@@ -602,161 +611,204 @@ void DockBridge::updateIconState(const QString& appId, DockIconAppState state) {
         if (icon.appId == appId) {
             icon.appState = state;
             emit iconsChanged();
+            if (m_dockAdaptor) {
+                emit m_dockAdaptor->AppStateChanged(appId, static_cast<int>(state));
+            }
             break;
         }
     }
 }
 
-void DockBridge::setupIpc() {
-    m_ipcFd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
-    if (m_ipcFd < 0) return;
+void DockBridge::setupDBus() {
+    m_dockAdaptor = new DockAdaptor(this);
 
-    struct sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::string sock_path = tinexus::common::RuntimePaths::get_ipc_socket_path();
-    std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (bus.isConnected()) {
+        bus.registerService(QStringLiteral("io.tinexus.Dock"));
+        bus.registerObject(QStringLiteral("/Dock"), this);
+        bus.registerObject(QStringLiteral("/io/tinexus/Dock"), this);
 
-    if (::connect(m_ipcFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0 || errno == EINPROGRESS) {
-        uint16_t sub_types[] = {
-            static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_MINIMIZED),
-            static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_RESTORED),
-            static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED),
-            static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION),
-            static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_STARTED),
-            static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_CLOSED)
-        };
-
-        for (uint16_t t : sub_types) {
-            struct {
-                tinexus::ipcd::protocol::Header hdr;
-                uint16_t topic;
-            } __attribute__((packed)) msg{};
-            msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-            msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-            msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC);
-            msg.hdr.payload_len = sizeof(msg.topic);
-            msg.topic = t;
-            ::send(m_ipcFd, &msg, sizeof(msg), MSG_NOSIGNAL);
-        }
-
-        m_notifier = std::make_unique<QSocketNotifier>(m_ipcFd, QSocketNotifier::Read, this);
-        connect(m_notifier.get(), &QSocketNotifier::activated, this, &DockBridge::onSocketReadable);
+        // Subscribe to compositor notifications if compositor emits D-Bus signals
+        bus.connect(
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("/io/tinexus/Compositor"),
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("WindowMinimized"),
+            this,
+            SLOT(onDBusNotifyMinimized(QString, qulonglong))
+        );
+        bus.connect(
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("/io/tinexus/Compositor"),
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("WindowRestored"),
+            this,
+            SLOT(onDBusNotifyRestored(QString, qulonglong))
+        );
+        bus.connect(
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("/io/tinexus/Compositor"),
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("FocusChanged"),
+            this,
+            SLOT(onDBusNotifyFocusChanged(QString, bool))
+        );
+        tinexus::log::info("[DockBridge] Registered on session D-Bus as io.tinexus.Dock at /Dock");
     } else {
-        ::close(m_ipcFd);
-        m_ipcFd = -1;
+        tinexus::log::warn("[DockBridge] Session D-Bus not connected — running in standalone mode");
     }
 }
 
-void DockBridge::sendIpc(uint16_t msgType, const QString& appId) {
-    if (m_ipcFd < 0) return;
-
-    tinexus::ipcd::protocol::Header hdr{};
-    tinexus::ipcd::protocol::DockNotifyPayload pld{};
-    hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-    hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-    hdr.msg_type = msgType;
-    hdr.payload_len = sizeof(pld);
-
-    QByteArray id_bytes = appId.toUtf8();
-    std::strncpy(pld.app_id, id_bytes.constData(), sizeof(pld.app_id) - 1);
-    pld.surface_id = 0;
-
-    ::send(m_ipcFd, &hdr, sizeof(hdr), MSG_NOSIGNAL);
-    ::send(m_ipcFd, &pld, sizeof(pld), MSG_NOSIGNAL);
+void DockBridge::sendRaiseAndFocus(const QString& appId) {
+    if (m_model) {
+        m_model->activateApp(appId);
+    }
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (bus.isConnected()) {
+        QDBusMessage msg = QDBusMessage::createMethodCall(
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("/io/tinexus/Compositor"),
+            QStringLiteral("io.tinexus.Compositor"),
+            QStringLiteral("RaiseAndFocus")
+        );
+        msg << appId;
+        bus.send(msg);
+    }
 }
 
-void DockBridge::onSocketReadable() {
-    using namespace tinexus::ipcd::protocol;
-    Header hdr{};
+void DockBridge::onDBusNotifyMinimized(const QString& appId, qulonglong surfaceId) {
+    Q_UNUSED(surfaceId);
+    updateIconState(appId, DockIconAppState::Minimized);
+}
 
-    while (true) {
-        ssize_t peek_n = ::recv(m_ipcFd, &hdr, sizeof(hdr), MSG_PEEK | MSG_DONTWAIT);
-        if (peek_n == 0) {
-            if (m_notifier) m_notifier->setEnabled(false);
-            ::close(m_ipcFd);
-            m_ipcFd = -1;
+void DockBridge::onDBusNotifyRestored(const QString& appId, qulonglong surfaceId) {
+    Q_UNUSED(surfaceId);
+    updateIconState(appId, DockIconAppState::RunningFocused);
+}
+
+void DockBridge::onDBusNotifyFocusChanged(const QString& appId, bool isFocused) {
+    if (isFocused) {
+        updateIconState(appId, DockIconAppState::RunningFocused);
+        for (auto& icon : m_icons) {
+            if (icon.appId != appId && icon.appState == DockIconAppState::RunningFocused) {
+                updateIconState(icon.appId, DockIconAppState::RunningBg);
+            }
+        }
+    } else {
+        updateIconState(appId, DockIconAppState::RunningBg);
+    }
+}
+
+void DockBridge::onDBusNotifyAppStarted(const QString& appId, qulonglong surfaceId) {
+    Q_UNUSED(surfaceId);
+    updateIconState(appId, DockIconAppState::RunningFocused);
+}
+
+void DockBridge::onDBusNotifyAppClosed(const QString& appId, qulonglong surfaceId) {
+    Q_UNUSED(surfaceId);
+    updateIconState(appId, DockIconAppState::NotRunning);
+}
+
+void DockBridge::onDBusQueryIconPosition(const QString& appId) {
+    int x = 0, y = 0, w = 0, h = 0;
+    queryIconPosition(appId, x, y, w, h);
+}
+
+void DockBridge::queryIconPosition(const QString& appId, int& x, int& y, int& w, int& h) const {
+    x = y = w = h = 0;
+    for (const auto& icon : m_icons) {
+        if (icon.appId == appId) {
+            double scale = icon.scaleSpring.value + icon.bounceSpring.value;
+            double size = BASE_SIZE * scale;
+            w = static_cast<int32_t>(size);
+            h = static_cast<int32_t>(size);
+            x = static_cast<int32_t>(icon.centerX - size / 2.0);
+            y = static_cast<int32_t>(120.0 - DOCK_BOT_MARGIN - pillHeight() + (pillHeight() - size) / 2.0);
             break;
         }
-        if (peek_n < static_cast<ssize_t>(sizeof(hdr))) break;
+    }
+}
 
-        if (hdr.magic != TINEXUS_IPC_MAGIC) {
-            char c;
-            if (::recv(m_ipcFd, &c, 1, 0) <= 0) break;
-            continue;
-        }
-
-        const size_t total = sizeof(hdr) + hdr.payload_len;
-        std::vector<uint8_t> buf(total);
-        ssize_t peek_total = ::recv(m_ipcFd, buf.data(), total, MSG_PEEK | MSG_DONTWAIT);
-        if (peek_total < static_cast<ssize_t>(total)) break;
-
-        ssize_t n = ::recv(m_ipcFd, buf.data(), total, MSG_DONTWAIT);
-        if (n != static_cast<ssize_t>(total)) break;
-
-        const void* payload = buf.data() + sizeof(hdr);
-
-        if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_MINIMIZED)) {
-            auto* p = static_cast<const DockNotifyPayload*>(payload);
-            updateIconState(QString::fromUtf8(p->app_id), DockIconAppState::Minimized);
-        } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_RESTORED)) {
-            auto* p = static_cast<const DockNotifyPayload*>(payload);
-            updateIconState(QString::fromUtf8(p->app_id), DockIconAppState::RunningFocused);
-        } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED)) {
-            auto* p = static_cast<const DockFocusChangedPayload*>(payload);
-            QString appId = QString::fromUtf8(p->app_id);
-            if (p->is_focused) {
-                updateIconState(appId, DockIconAppState::RunningFocused);
-                for (auto& icon : m_icons) {
-                    if (icon.appId != appId && icon.appState == DockIconAppState::RunningFocused) {
-                        updateIconState(icon.appId, DockIconAppState::RunningBg);
-                    }
-                }
-            } else {
-                updateIconState(appId, DockIconAppState::RunningBg);
-            }
-        } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_APP_STARTED)) {
-            auto* p = static_cast<const DockNotifyPayload*>(payload);
-            updateIconState(QString::fromUtf8(p->app_id), DockIconAppState::RunningFocused);
-        } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_APP_CLOSED)) {
-            auto* p = static_cast<const DockNotifyPayload*>(payload);
-            updateIconState(QString::fromUtf8(p->app_id), DockIconAppState::NotRunning);
-        } else if (hdr.msg_type == static_cast<uint16_t>(DockMessageType::DOCK_QUERY_ICON_POSITION)) {
-            auto* p = static_cast<const DockQueryIconPositionPayload*>(payload);
-            QString queryApp = QString::fromUtf8(p->app_id);
-            int32_t x = 0, y = 0, w = 0, h = 0;
-
-            for (const auto& icon : m_icons) {
-                if (icon.appId == queryApp) {
-                    double scale = icon.scaleSpring.value + icon.bounceSpring.value;
-                    double size = BASE_SIZE * scale;
-                    w = static_cast<int32_t>(size);
-                    h = static_cast<int32_t>(size);
-                    x = static_cast<int32_t>(icon.centerX - size / 2.0);
-                    y = static_cast<int32_t>(120.0 - DOCK_BOT_MARGIN - pillHeight() + (pillHeight() - size) / 2.0);
-                    break;
-                }
-            }
-
-            struct {
-                Header reply_hdr;
-                DockIconPositionPayload reply_pld;
-            } __attribute__((packed)) reply{};
-
-            reply.reply_hdr.magic = TINEXUS_IPC_MAGIC;
-            reply.reply_hdr.version = TINEXUS_IPC_VERSION_1;
-            reply.reply_hdr.msg_type = static_cast<uint16_t>(DockMessageType::DOCK_ICON_POSITION);
-            reply.reply_hdr.payload_len = sizeof(reply.reply_pld);
-            reply.reply_hdr.sequence_id = hdr.sequence_id;
-
-            std::strncpy(reply.reply_pld.app_id, p->app_id, sizeof(reply.reply_pld.app_id) - 1);
-            reply.reply_pld.x = x;
-            reply.reply_pld.y = y;
-            reply.reply_pld.w = w;
-            reply.reply_pld.h = h;
-
-            ::send(m_ipcFd, &reply, sizeof(reply), MSG_NOSIGNAL);
+QStringList DockBridge::runningApps() const {
+    QStringList list;
+    for (const auto& icon : m_icons) {
+        if (icon.appState != DockIconAppState::NotRunning) {
+            list.append(icon.appId);
         }
     }
+    return list;
+}
+
+QString DockBridge::focusedApp() const {
+    for (const auto& icon : m_icons) {
+        if (icon.appState == DockIconAppState::RunningFocused) {
+            return icon.appId;
+        }
+    }
+    return {};
+}
+
+uint DockBridge::totalBadgeCount() const {
+    uint total = 0;
+    for (const auto& [_, count] : m_badgeMap) {
+        total += count;
+    }
+    if (total == 0) {
+        for (const auto& icon : m_icons) {
+            total += icon.badgeCount;
+        }
+    }
+    return total;
+}
+
+uint DockBridge::badgeCount(const QString& appId) const {
+    auto it = m_badgeMap.find(appId.toStdString());
+    if (it != m_badgeMap.end()) return it->second;
+    for (const auto& icon : m_icons) {
+        if (icon.appId == appId) return icon.badgeCount;
+    }
+    return 0u;
+}
+
+QVariantMap DockBridge::badgeCounts() const {
+    QVariantMap map;
+    for (const auto& [app, count] : m_badgeMap) {
+        if (count > 0) map.insert(QString::fromStdString(app), count);
+    }
+    for (const auto& icon : m_icons) {
+        if (icon.badgeCount > 0 && !map.contains(icon.appId)) {
+            map.insert(icon.appId, icon.badgeCount);
+        }
+    }
+    return map;
+}
+
+void DockBridge::setBadgeCount(const QString& appId, uint count) {
+    m_badgeMap[appId.toStdString()] = count;
+    for (auto& icon : m_icons) {
+        if (icon.appId == appId) {
+            icon.badgeCount = count;
+            emit iconsChanged();
+            break;
+        }
+    }
+    if (m_model) {
+        m_model->setBadgeCount(appId, count);
+    }
+}
+
+void DockBridge::restoreWindow(const QString& appId) {
+    for (auto& icon : m_icons) {
+        if (icon.appId == appId) {
+            if (m_model) m_model->activateApp(appId);
+            updateIconState(appId, DockIconAppState::RunningFocused);
+            break;
+        }
+    }
+}
+
+void DockBridge::raiseApp(const QString& appId) {
+    sendRaiseAndFocus(appId);
 }
 
 } // namespace tinexus::dock

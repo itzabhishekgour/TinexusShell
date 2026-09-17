@@ -38,6 +38,9 @@ add_executable(tinexus-dock
     include/dock/StacksPopup.hpp
     DockIpcClient.cpp
     include/dock/DockIpcClient.hpp
+    DockAdaptor.cpp
+    DockAdaptor.hpp
+    include/dock/DockAdaptor.hpp
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h
 )
@@ -47,7 +50,6 @@ target_include_directories(tinexus-dock PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/wayland/protocol
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
     ${CMAKE_SOURCE_DIR}/src/common/include
     ${CMAKE_BINARY_DIR}/protocols
 )
@@ -96,6 +98,9 @@ add_executable(test-dock-render
     include/dock/StacksPopup.hpp
     DockIpcClient.cpp
     include/dock/DockIpcClient.hpp
+    DockAdaptor.cpp
+    DockAdaptor.hpp
+    include/dock/DockAdaptor.hpp
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h
 )
@@ -105,7 +110,6 @@ target_include_directories(test-dock-render PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/wayland/protocol
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
     ${CMAKE_SOURCE_DIR}/src/common/include
     ${CMAKE_BINARY_DIR}/protocols
 )

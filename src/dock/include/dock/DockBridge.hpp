@@ -4,21 +4,31 @@
 // Reuses: SpringStatePortable.hpp (Gate 3), IpcBridge pattern (Gate 2)
 // Slice 3: Click, Activate, Context Menu Overlay Routing
 // Slice 4: Fisheye Magnification & Auto-Hide State Controller
+// Slice 6: Wayland File Drag-and-Drop Drop Target Integration
+// Slice 7: Stacks Popover & D-Bus Badges Integration
+// Phase 3: Standardized on Qt6 D-Bus (io.tinexus.Dock)
 // ============================================================================
 #pragma once
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtCore/QVariantList>
 #include <QtCore/QVariantMap>
 #include <QtCore/QTimer>
-#include <QtCore/QSocketNotifier>
 #include <common/SpringStatePortable.hpp>
 #include <memory>
 #include <vector>
 #include <string>
+#include <unordered_map>
+
+QT_BEGIN_NAMESPACE
+class QDBusInterface;
+QT_END_NAMESPACE
 
 namespace tinexus::dock {
+
+class DockAdaptor;
 
 enum class DockIconAppState : int {
     NotRunning     = 0,
@@ -31,7 +41,7 @@ struct DockIconItem {
     QString appId;
     QString label;
     QString exec;
-    QString iconType; // "terminal", "folder", "gear", "barchart", "package", "separator", "trash"
+    QString iconType; // "terminal", "folder", "gear", "barchart", "package", "separator", "trash", "stack"
     DockIconAppState appState{DockIconAppState::NotRunning};
     int     toplevelCount{0};
     uint32_t badgeCount{0};
@@ -140,6 +150,17 @@ public:
     void tickAnimations(double dt);
     const std::vector<DockIconItem>& rawIcons() const { return m_icons; }
 
+    // D-Bus query & notification helpers
+    [[nodiscard]] QStringList runningApps() const;
+    [[nodiscard]] QString focusedApp() const;
+    [[nodiscard]] uint totalBadgeCount() const;
+    [[nodiscard]] uint badgeCount(const QString& appId) const;
+    [[nodiscard]] QVariantMap badgeCounts() const;
+    void setBadgeCount(const QString& appId, uint count);
+    void queryIconPosition(const QString& appId, int& x, int& y, int& w, int& h) const;
+    void restoreWindow(const QString& appId);
+    void raiseApp(const QString& appId);
+
 signals:
     void iconsChanged();
     void hoverChanged();
@@ -155,13 +176,20 @@ public slots:
     void syncFromModel();
     void onMenuActionTriggered(const QString& action, const QString& appId, const QVariantMap& params);
 
+    // D-Bus slots: window state change handlers
+    void onDBusNotifyMinimized(const QString& appId, qulonglong surfaceId);
+    void onDBusNotifyRestored(const QString& appId, qulonglong surfaceId);
+    void onDBusNotifyFocusChanged(const QString& appId, bool isFocused);
+    void onDBusNotifyAppStarted(const QString& appId, qulonglong surfaceId);
+    void onDBusNotifyAppClosed(const QString& appId, qulonglong surfaceId);
+    void onDBusQueryIconPosition(const QString& appId);
+
 private slots:
     void onAnimationTimer();
-    void onSocketReadable();
 
 private:
-    void setupIpc();
-    void sendIpc(uint16_t msgType, const QString& appId);
+    void setupDBus();
+    void sendRaiseAndFocus(const QString& appId);
     void spawnApp(const QString& execCmd);
     void recomputeLayout();
 
@@ -182,8 +210,9 @@ private:
     int    m_autoHideState{0}; // 0=Visible, 1=Peaking, 2=Hidden
 
     QTimer m_animTimer;
-    int    m_ipcFd{-1};
-    std::unique_ptr<QSocketNotifier> m_notifier;
+    QDBusInterface* m_compIface{nullptr};
+    DockAdaptor* m_dockAdaptor{nullptr};
+    std::unordered_map<std::string, uint32_t> m_badgeMap;
 };
 
 } // namespace tinexus::dock
