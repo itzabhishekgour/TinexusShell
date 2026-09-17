@@ -1,13 +1,16 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
 
-find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 QUIET)
+find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 DBus QUIET)
 
 if(Qt6_FOUND)
     # Qt6 QML Settings Application
     add_executable(tinexus-settings-ui
         qt/main_qt.cpp
         qt/SettingsBridge.cpp
+        qt/SettingsAdaptor.cpp
+        qt/SettingsAdaptor.hpp
+        include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
     )
 
@@ -24,6 +27,7 @@ if(Qt6_FOUND)
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
+        Qt6::DBus
         tinexus_common
         tinexus_warnings
         tinexus-guard
@@ -34,6 +38,9 @@ if(Qt6_FOUND)
     add_executable(test-settings-render
         test_settings_render.cpp
         qt/SettingsBridge.cpp
+        qt/SettingsAdaptor.cpp
+        qt/SettingsAdaptor.hpp
+        include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
     )
     set_target_properties(test-settings-render PROPERTIES
@@ -47,6 +54,7 @@ if(Qt6_FOUND)
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
+        Qt6::DBus
         tinexus_common
         tinexus_warnings
         tinexus-guard
@@ -55,6 +63,9 @@ if(Qt6_FOUND)
     add_executable(test-settings-wifi-render
         test_settings_wifi_render.cpp
         qt/SettingsBridge.cpp
+        qt/SettingsAdaptor.cpp
+        qt/SettingsAdaptor.hpp
+        include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
     )
     set_target_properties(test-settings-wifi-render PROPERTIES
@@ -68,6 +79,7 @@ if(Qt6_FOUND)
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
+        Qt6::DBus
         tinexus_common
         tinexus_warnings
         tinexus-guard
@@ -75,19 +87,23 @@ if(Qt6_FOUND)
     add_executable(test-about-live
         qt/test_about_live.cpp
         qt/SettingsBridge.cpp
+        qt/SettingsAdaptor.cpp
+        qt/SettingsAdaptor.hpp
+        include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
     )
     set_target_properties(test-about-live PROPERTIES
         AUTOMOC ON
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-    target_include_directories(test-about-live PRIVATE include qt)
+    target_include_directories(test-about-live PRIVATE include qt ${CMAKE_SOURCE_DIR}/include)
     target_link_libraries(test-about-live PRIVATE
         Qt6::Core
         Qt6::Gui
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
+        Qt6::DBus
         tinexus_common
         tinexus_warnings
         tinexus-guard

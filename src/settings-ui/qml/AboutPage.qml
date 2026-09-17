@@ -169,7 +169,7 @@ ScrollView {
                     showSeparator: true
 
                     Text {
-                        text: "tinexus-ipcd High-Frequency Broker"
+                        text: "D-Bus Architecture (sd-bus / io.tinexus.shell.*)"
                         color: "#86868b"
                         font.pixelSize: 12
                     }

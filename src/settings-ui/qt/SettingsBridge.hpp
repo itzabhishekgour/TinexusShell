@@ -10,6 +10,8 @@
 
 namespace tinexus::settings_ui {
 
+class SettingsAdaptor;
+
 class SettingsBridge : public QObject {
     Q_OBJECT
 
@@ -258,6 +260,9 @@ private:
     QString m_displayInfo;
     QString m_graphicsEngine;
     QString m_platformVersion;
+
+    friend class SettingsAdaptor;
+    SettingsAdaptor* m_settingsAdaptor{nullptr};
 };
 
 } // namespace tinexus::settings_ui

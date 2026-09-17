@@ -1,17 +1,16 @@
 // ============================================================================
 // settings_daemon.cpp — tinexus-settings
 // ============================================================================
-// Manages live platform configuration and broadcasts changes to tinexus-ipcd
-// so all subscribed daemons (wallpaper, lock, shell) react instantly.
+// Manages live platform configuration and broadcasts changes over D-Bus
+// (io.tinexus.Settings / io.tinexus.Wallpaper) so all subscribed daemons
+// (wallpaper, lock, shell) react instantly.
 // ============================================================================
 #include "settings/settings_daemon.hpp"
 #include "settings/schema_validator.hpp"
 #include "common/logger.hpp"
 
-#include <ipcd/protocol/header.hpp>
+#include <systemd/sd-bus.h>
 
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 #include <cstring>
 #include <cstdint>
@@ -26,84 +25,6 @@ namespace tinexus::settings {
 // Internal helpers — anonymous namespace, not part of public API
 // ─────────────────────────────────────────────────────────────────────────────
 namespace {
-
-/// Returns the ipcd Unix socket path for the current user.
-/// Pure XDG resolution — no hardcoded UIDs or /tmp paths.
-[[nodiscard]] std::string get_ipc_socket_path() {
-    const char* xdg_run = std::getenv("XDG_RUNTIME_DIR");
-    if (xdg_run && xdg_run[0] != '\0') {
-        return std::string(xdg_run) + "/tinexus/ipc.sock";
-    }
-    // Fallback: derive from uid at runtime (avoids hardcoding 1000 or 0)
-    uid_t uid = ::getuid();
-    return "/run/user/" + std::to_string(uid) + "/tinexus/ipc.sock";
-}
-
-/// Open a blocking SOCK_STREAM connection to tinexus-ipcd.
-/// Returns fd >= 0 on success, -1 on failure (logs the error internally).
-[[nodiscard]] int connect_to_ipcd() {
-    const std::string path = get_ipc_socket_path();
-    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) {
-        log::error("[settings] socket() failed: {}", std::strerror(errno));
-        return -1;
-    }
-
-    struct sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    ::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        log::warn("[settings] connect to ipcd at '{}' failed: {} "
-                  "(ipcd may not be running yet; settings were still saved to disk)",
-                  path, std::strerror(errno));
-        ::close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-/// Write a complete IPC frame (Header + payload) to a blocking socket fd.
-/// Retries on EINTR. Returns true on full write, false on any error.
-[[nodiscard]] bool write_ipc_frame(int fd,
-                                   ipcd::protocol::MessageType msg_type,
-                                   uint32_t sequence_id,
-                                   const uint8_t* payload,
-                                   uint32_t payload_len) {
-    using namespace ipcd::protocol;
-
-    Header hdr{};
-    hdr.magic       = TINEXUS_IPC_MAGIC;
-    hdr.version     = TINEXUS_IPC_VERSION_1;
-    hdr.msg_type    = static_cast<uint16_t>(msg_type);
-    hdr.flags       = 0;
-    hdr.sequence_id = sequence_id;
-    hdr.payload_len = payload_len;
-    hdr.checksum    = 0; // CRC32 reserved for protocol v1.1
-
-    // Build a single contiguous buffer: header || payload
-    std::vector<uint8_t> buf;
-    buf.resize(sizeof(hdr) + payload_len);
-    std::memcpy(buf.data(), &hdr, sizeof(hdr));
-    if (payload_len > 0 && payload != nullptr) {
-        std::memcpy(buf.data() + sizeof(hdr), payload, payload_len);
-    }
-
-    // Blocking write with EINTR restart
-    const uint8_t* ptr = buf.data();
-    size_t remaining   = buf.size();
-    while (remaining > 0) {
-        ssize_t written = ::write(fd, ptr, remaining);
-        if (written < 0) {
-            if (errno == EINTR) continue;
-            log::error("[settings] IPC write() failed: {}", std::strerror(errno));
-            return false;
-        }
-        ptr       += static_cast<size_t>(written);
-        remaining -= static_cast<size_t>(written);
-    }
-    return true;
-}
 
 /// Resolve the settings.toml path cleanly, with no hardcoded usernames.
 [[nodiscard]] std::filesystem::path resolve_config_path() {
@@ -132,59 +53,75 @@ bool SettingsDaemon::initialize(const std::filesystem::path& config_path) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// broadcast_settings_changed — REAL implementation (was a dead stub)
+// broadcast_settings_changed — D-Bus signal broadcast
 //
-// For generic categories (appearance, display, input) we send CONFIG_CHANGED
-// or THEME_CHANGED to ipcd which pub-sub broadcasts to all subscribers.
-// Wallpaper changes must go through update_wallpaper() for the typed payload.
+// Emits ConfigChanged and ThemeChanged signals on io.tinexus.Settings.
+// Subscribers (wallpaper, lock, dock, shell) receive these signals immediately.
 // ─────────────────────────────────────────────────────────────────────────────
 void SettingsDaemon::broadcast_settings_changed(const std::string& category) {
-    using MT = ipcd::protocol::MessageType;
+    log::info("[settings] Broadcasting settings change for category '{}' via D-Bus", category);
 
-    log::info("[settings] Broadcasting settings change for category '{}'", category);
-
-    MT msg_type = MT::CONFIG_CHANGED;
-    if (category == "appearance" || category == "theme") {
-        msg_type = MT::THEME_CHANGED;
-    }
-
-    int ipc_fd = connect_to_ipcd();
-    if (ipc_fd < 0) {
-        log::warn("[settings] ipcd unreachable; '{}' change will not propagate live", category);
+    sd_bus* bus = nullptr;
+    int r = sd_bus_open_user(&bus);
+    if (r < 0 || !bus) {
+        log::warn("[settings] Failed to connect to user session bus: {} (settings change not broadcast)",
+                  std::strerror(-r));
         return;
     }
 
-    // Payload: null-terminated category string so subscribers can filter if needed
-    std::vector<uint8_t> payload(category.begin(), category.end());
-    payload.push_back('\0');
+    // 1. Emit ConfigChanged signal on /io/tinexus/Settings and /Settings
+    sd_bus_emit_signal(bus,
+                       "/io/tinexus/Settings",
+                       "io.tinexus.Settings",
+                       "ConfigChanged",
+                       "sv",
+                       category.c_str(),
+                       "s", category.c_str());
 
-    static uint32_t s_seq = 0;
-    bool ok = write_ipc_frame(ipc_fd, msg_type, ++s_seq,
-                              payload.data(), static_cast<uint32_t>(payload.size()));
-    ::close(ipc_fd);
+    sd_bus_emit_signal(bus,
+                       "/Settings",
+                       "io.tinexus.Settings",
+                       "ConfigChanged",
+                       "sv",
+                       category.c_str(),
+                       "s", category.c_str());
 
-    if (ok) {
-        log::info("[settings] '{}' change broadcast sent (msg_type={})",
-                  category, static_cast<uint16_t>(msg_type));
+    // 2. If theme changed, emit ThemeChanged signal
+    if (category == "appearance" || category == "theme") {
+        auto settings = ConfigStore::instance().get_settings();
+        sd_bus_emit_signal(bus,
+                           "/io/tinexus/Settings",
+                           "io.tinexus.Settings",
+                           "ThemeChanged",
+                           "s",
+                           settings.theme.c_str());
+
+        sd_bus_emit_signal(bus,
+                           "/Settings",
+                           "io.tinexus.Settings",
+                           "ThemeChanged",
+                           "s",
+                           settings.theme.c_str());
+
+        log::info("[settings] ThemeChanged signal broadcast sent (theme='{}')", settings.theme);
     }
+
+    sd_bus_flush_close_unref(bus);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// update_wallpaper — live wallpaper change with instant IPC propagation
+// update_wallpaper — live wallpaper change with instant D-Bus propagation
 //
 // Steps:
 //  1. Validate path exists on disk (empty path = use dynamic schedule).
 //  2. Update ConfigStore + atomically write settings.toml (write→fsync→rename).
-//  3. Build WallpaperChangedPayload (524 bytes), zero all reserved bytes.
-//  4. Connect to ipcd, send WALLPAPER_CHANGED frame, close socket.
-//     ipcd broadcasts to all subscribers — zero daemon restarts needed.
+//  3. Single authoritative trigger: Invoke io.tinexus.Wallpaper.SetWallpaper
+//     method over session bus to command the renderer directly.
 // ─────────────────────────────────────────────────────────────────────────────
 bool SettingsDaemon::update_wallpaper(const std::string& new_path,
                                       uint8_t  mode,
                                       uint16_t fade_ms,
                                       bool     is_dynamic) {
-    using namespace ipcd::protocol;
-
     // 1. Validate — non-empty paths must exist on disk right now
     if (!new_path.empty()) {
         std::error_code ec;
@@ -208,38 +145,53 @@ bool SettingsDaemon::update_wallpaper(const std::string& new_path,
         return false;
     }
 
-    // 3. Build WallpaperChangedPayload — EXACTLY 524 bytes on the wire
-    WallpaperChangedPayload pkt{};
-    std::memset(&pkt, 0, sizeof(pkt)); // Zeroes reserved[] and all padding
-
-    if (!new_path.empty()) {
-        // Guaranteed null-termination: strncpy copies up to 511 chars, [511] stays '\0'
-        std::strncpy(pkt.path, new_path.c_str(), sizeof(pkt.path) - 1);
-    }
-    pkt.mode    = mode;
-    pkt.dynamic = is_dynamic ? static_cast<uint8_t>(1) : static_cast<uint8_t>(0);
-    pkt.fade_ms = fade_ms;
-
-    // 4. Send to tinexus-ipcd — connect, send, close (fire-and-forget)
-    int ipc_fd = connect_to_ipcd();
-    if (ipc_fd < 0) {
-        // Non-fatal: settings are persisted; daemon will reload from TOML on next restart
-        log::warn("[settings] WALLPAPER_CHANGED not sent (ipcd unreachable); "
-                  "settings saved, wallpaper will apply on next daemon restart");
-        return false;
+    // 3. Single authoritative trigger: Invoke io.tinexus.Wallpaper.SetWallpaper
+    sd_bus* bus = nullptr;
+    int r = sd_bus_open_user(&bus);
+    if (r < 0 || !bus) {
+        log::warn("[settings] D-Bus session bus unreachable: {} "
+                  "(settings saved, wallpaper will apply on next restart)",
+                  std::strerror(-r));
+        return true;
     }
 
-    static uint32_t s_seq = 1000;
-    bool ok = write_ipc_frame(ipc_fd, MessageType::WALLPAPER_CHANGED, ++s_seq,
-                              reinterpret_cast<const uint8_t*>(&pkt),
-                              static_cast<uint32_t>(sizeof(pkt)));
-    ::close(ipc_fd);
-
-    if (ok) {
-        log::info("[settings] WALLPAPER_CHANGED sent (path='{}', mode={}, fade_ms={}, dynamic={})",
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    sd_bus_message* reply = nullptr;
+    r = sd_bus_call_method(bus,
+                           "io.tinexus.Wallpaper",
+                           "/io/tinexus/Wallpaper",
+                           "io.tinexus.Wallpaper",
+                           "SetWallpaper",
+                           &error,
+                           &reply,
+                           "sybq",
+                           new_path.c_str(),
+                           mode,
+                           is_dynamic ? 1 : 0,
+                           fade_ms);
+    if (r < 0) {
+        log::warn("[settings] SetWallpaper D-Bus call failed: {} "
+                  "(wallpaper daemon may not be running yet; settings saved)",
+                  error.message ? error.message : std::strerror(-r));
+    } else {
+        log::info("[settings] SetWallpaper invoked via D-Bus (path='{}', mode={}, fade_ms={}, dynamic={})",
                   new_path, mode, fade_ms, is_dynamic ? 1 : 0);
     }
-    return ok;
+
+    // Also broadcast ConfigChanged for UI binding
+    sd_bus_emit_signal(bus,
+                       "/io/tinexus/Settings",
+                       "io.tinexus.Settings",
+                       "ConfigChanged",
+                       "sv",
+                       "wallpaper",
+                       "s", new_path.c_str());
+
+    sd_bus_error_free(&error);
+    sd_bus_message_unref(reply);
+    sd_bus_flush_close_unref(bus);
+
+    return true;
 }
 
 bool SettingsDaemon::update_theme(const std::string& new_theme) {

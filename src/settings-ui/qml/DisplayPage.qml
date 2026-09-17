@@ -244,7 +244,7 @@ ScrollView {
 
                 MacSettingRow {
                     title: "Compositor Engine"
-                    subtitle: "tinexus-comp (wlroots 0.19.2 + Pixman Renderer)"
+                    subtitle: typeof bridge !== "undefined" ? bridge.compositorInfo : "tinexus-comp (wlroots 0.19.2)"
                     showSeparator: false
 
                     Text {

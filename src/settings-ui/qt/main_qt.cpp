@@ -109,6 +109,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (window) {
+        window->show();
+        window->raise();
+        window->requestActivate();
+        tinexus::log::info("[settings-ui-qt6] Window presented successfully: title='{}' size={}x{}",
+                           window->title().toStdString(), window->width(), window->height());
+    }
+
     // Check for automated verification flag
     bool autoTest = app.arguments().contains(QStringLiteral("--auto-test"));
     if (autoTest) {

@@ -2,18 +2,26 @@
 
 #include <string>
 #include <string_view>
+#include <algorithm>
+#include <cctype>
 
 namespace tinexus::common {
 
 inline std::string get_canonical_app_id(std::string_view name_or_cmd) {
-    if (name_or_cmd.find("settings") != std::string_view::npos) return "tinexus-settings";
-    if (name_or_cmd.find("about") != std::string_view::npos) return "tinexus-about";
-    if (name_or_cmd.find("monitor") != std::string_view::npos) return "tinexus-monitor";
-    if (name_or_cmd.find("launcher") != std::string_view::npos) return "tinexus-launcher";
-    if (name_or_cmd.find("files") != std::string_view::npos) return "tinexus-files";
-    if (name_or_cmd.find("terminal") != std::string_view::npos) return "tinexus-terminal";
-    if (name_or_cmd.find("store") != std::string_view::npos || name_or_cmd.find("pkg") != std::string_view::npos) return "tinexus-store";
-    if (name_or_cmd.find("lock") != std::string_view::npos) return "tinexus-lock";
+    std::string lower;
+    lower.reserve(name_or_cmd.size());
+    for (char c : name_or_cmd) {
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    if (lower.find("settings") != std::string::npos) return "tinexus-settings";
+    if (lower.find("about") != std::string::npos) return "tinexus-about";
+    if (lower.find("monitor") != std::string::npos) return "tinexus-monitor";
+    if (lower.find("launcher") != std::string::npos) return "tinexus-launcher";
+    if (lower.find("files") != std::string::npos) return "tinexus-files";
+    if (lower.find("terminal") != std::string::npos) return "tinexus-terminal";
+    if (lower.find("store") != std::string::npos || lower.find("pkg") != std::string::npos) return "tinexus-store";
+    if (lower.find("lock") != std::string::npos) return "tinexus-lock";
     return std::string(name_or_cmd);
 }
 

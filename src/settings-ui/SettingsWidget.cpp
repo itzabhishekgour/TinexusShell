@@ -503,77 +503,87 @@ void SettingsWidget::load_config() {
 }
 
 void SettingsWidget::save_config() {
-    const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
-    std::string config_dir = xdg_config ? xdg_config : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "/root") + "/.config");
-    std::filesystem::create_directories(config_dir + "/tinexus");
-    std::string config_path = config_dir + "/tinexus/settings.toml";
+    try {
+        const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
+        std::string config_dir = xdg_config ? xdg_config : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "/root") + "/.config");
+        std::error_code ec;
+        std::filesystem::create_directories(config_dir + "/tinexus", ec);
+        std::string config_path = config_dir + "/tinexus/settings.toml";
 
-    std::string tmp_path = config_path + ".tmp";
-    std::ofstream out(tmp_path);
-    if (!out.is_open()) return;
+        std::string tmp_path = config_path + ".tmp";
+        std::ofstream out(tmp_path);
+        if (!out.is_open()) return;
 
-    out << "# Tinexus Desktop Settings Configuration\n";
-    out << "accent_index = " << m_selected_accent_idx << "\n";
-    out << "theme_mode = \"" << m_theme_mode << "\"\n";
-    out << "display_scale_idx = " << m_display_scale_idx << "\n";
-    out << "night_light = " << (m_night_light_enabled ? "true" : "false") << "\n";
-    out << "vrr_enabled = " << (m_vrr_enabled ? "true" : "false") << "\n";
-    out << "screen_timeout_min = " << m_screen_timeout_min << "\n";
-    out << "sleep_after_min = " << m_sleep_after_min << "\n";
-    out << "power_profile_idx = " << m_power_profile_idx << "\n";
-    out << "lock_on_sleep = " << (m_lock_on_sleep ? "true" : "false") << "\n";
-    out << "pam_auth = " << (m_pam_auth ? "true" : "false") << "\n";
-    out << "clipboard_history_size = " << m_clipboard_history_size << "\n";
-    out.close();
+        out << "# Tinexus Desktop Settings Configuration\n";
+        out << "accent_index = " << m_selected_accent_idx << "\n";
+        out << "theme_mode = \"" << m_theme_mode << "\"\n";
+        out << "display_scale_idx = " << m_display_scale_idx << "\n";
+        out << "night_light = " << (m_night_light_enabled ? "true" : "false") << "\n";
+        out << "vrr_enabled = " << (m_vrr_enabled ? "true" : "false") << "\n";
+        out << "screen_timeout_min = " << m_screen_timeout_min << "\n";
+        out << "sleep_after_min = " << m_sleep_after_min << "\n";
+        out << "power_profile_idx = " << m_power_profile_idx << "\n";
+        out << "lock_on_sleep = " << (m_lock_on_sleep ? "true" : "false") << "\n";
+        out << "pam_auth = " << (m_pam_auth ? "true" : "false") << "\n";
+        out << "clipboard_history_size = " << m_clipboard_history_size << "\n";
+        out.close();
 
-    std::filesystem::rename(tmp_path, config_path);
+        std::filesystem::rename(tmp_path, config_path, ec);
+    } catch (...) {}
 }
 
 void SettingsWidget::refresh_unverified_apps() {
     m_unverified_apps.clear();
-    std::string app_dir = "/opt/tinexus-apps";
-    if (!std::filesystem::exists(app_dir)) return;
+    try {
+        std::string app_dir = "/opt/tinexus-apps";
+        std::error_code ec;
+        if (!std::filesystem::exists(app_dir, ec) || ec) return;
 
-    for (const auto& entry : std::filesystem::directory_iterator(app_dir)) {
-        if (!entry.is_regular_file()) continue;
-        std::string path = entry.path().string();
-        if (path.ends_with(".sig")) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(app_dir, ec)) {
+            if (ec) break;
+            if (!entry.is_regular_file(ec) || ec) continue;
+            std::string path = entry.path().string();
+            if (path.ends_with(".sig")) continue;
 
-        std::string sig_path = path + ".sig";
-        bool verified = false;
+            std::string sig_path = path + ".sig";
+            bool verified = false;
 
-        int bin_fd = open(path.c_str(), O_RDONLY);
-        if (bin_fd >= 0) {
-            std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(bin_fd);
-            close(bin_fd);
+            int bin_fd = open(path.c_str(), O_RDONLY);
+            if (bin_fd >= 0) {
+                std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(bin_fd);
+                close(bin_fd);
 
-            if (!hash.empty()) {
-                if (std::filesystem::exists(sig_path)) {
-                    verified = tinexus::guard::CryptoValidator::verify_signature(
-                        path, sig_path, "/etc/tinexus/keys/root.pub");
-                }
+                if (!hash.empty()) {
+                    if (std::filesystem::exists(sig_path, ec) && !ec) {
+                        verified = tinexus::guard::CryptoValidator::verify_signature(
+                            path, sig_path, "/etc/tinexus/keys/root.pub");
+                    }
 
-                if (!verified) {
-                    UnverifiedApp app;
-                    app.name = entry.path().filename().string();
-                    app.path = path;
-                    app.hash = hash;
-                    m_unverified_apps.push_back(app);
+                    if (!verified) {
+                        UnverifiedApp app;
+                        app.name = entry.path().filename().string();
+                        app.path = path;
+                        app.hash = hash;
+                        m_unverified_apps.push_back(app);
+                    }
                 }
             }
         }
-    }
+    } catch (...) {}
 }
 
 void SettingsWidget::trust_app(const std::string& hash) {
-    std::string trust_path = "/var/lib/tinexus/trust-overrides.conf";
-    std::filesystem::create_directories("/var/lib/tinexus");
-    std::ofstream out(trust_path, std::ios::app);
-    if (out.is_open()) {
-        out << hash << "\n";
-        out.close();
-    }
-    refresh_unverified_apps();
+    try {
+        std::string trust_path = "/var/lib/tinexus/trust-overrides.conf";
+        std::error_code ec;
+        std::filesystem::create_directories("/var/lib/tinexus", ec);
+        std::ofstream out(trust_path, std::ios::app);
+        if (out.is_open()) {
+            out << hash << "\n";
+            out.close();
+        }
+        refresh_unverified_apps();
+    } catch (...) {}
 }
 
 void SettingsWidget::trigger_session_action(int idx) {

@@ -1,5 +1,6 @@
 #include "SettingsBridge.hpp"
 #include "settings/WifiManager.hpp"
+#include "settings-ui/SettingsAdaptor.hpp"
 #include <common/NetUtils.hpp>
 #include <common/AudioUtils.hpp>
 #include <common/BacklightUtils.hpp>
@@ -7,6 +8,8 @@
 #include <common/version.hpp>
 #include <common/logger.hpp>
 #include <guard/crypto_validator.hpp>
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusVariant>
 
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
@@ -64,6 +67,17 @@ SettingsBridge::SettingsBridge(QObject* parent)
 
     connect(&m_audioSyncTimer, &QTimer::timeout, this, &SettingsBridge::syncAudioState);
     m_audioSyncTimer.start(300);
+
+    m_settingsAdaptor = new SettingsAdaptor(this);
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (bus.isConnected()) {
+        bus.registerService(QStringLiteral("io.tinexus.Settings"));
+        bus.registerObject(QStringLiteral("/Settings"), this);
+        bus.registerObject(QStringLiteral("/io/tinexus/Settings"), this);
+        tinexus::log::info("[SettingsBridge] Registered on session D-Bus as io.tinexus.Settings at /Settings");
+    } else {
+        tinexus::log::warn("[SettingsBridge] Session D-Bus not connected — running in standalone mode");
+    }
 }
 
 SettingsBridge::~SettingsBridge() = default;
@@ -251,6 +265,10 @@ void SettingsBridge::setThemeMode(const QString& mode) {
         m_themeMode = mode;
         saveConfig();
         emit themeModeChanged();
+        if (m_settingsAdaptor) {
+            emit m_settingsAdaptor->ThemeChanged(mode);
+            emit m_settingsAdaptor->ConfigChanged(QStringLiteral("CurrentTheme"), QDBusVariant(mode));
+        }
         emit toastNotification(QStringLiteral("Theme switched to %1").arg(m_themeMode), false);
     }
 }
@@ -289,30 +307,10 @@ void SettingsBridge::setSelectedWallpaperIndex(int index) {
         saveConfig();
         emit selectedWallpaperIndexChanged();
 
-        // Signal wallpaper daemon to reload immediately via direct kernel kill(pid, SIGUSR1)
-        bool signaled = false;
-        try {
-            for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
-                if (!entry.is_directory()) continue;
-                std::string fname = entry.path().filename().string();
-                if (!std::all_of(fname.begin(), fname.end(), ::isdigit)) continue;
-
-                std::ifstream comm_file(entry.path() / "comm");
-                std::string comm;
-                if (std::getline(comm_file, comm)) {
-                    if (comm.rfind("tinexus-wallpap", 0) == 0) {
-                        pid_t pid = std::stoi(fname);
-                        if (::kill(pid, SIGUSR1) == 0) {
-                            signaled = true;
-                        }
-                    }
-                }
-            }
-        } catch (...) {}
-
-        // Fallback to pkill if proc scan didn't deliver signal
-        if (!signaled) {
-            QProcess::startDetached(QStringLiteral("pkill"), {QStringLiteral("-USR1"), QStringLiteral("-f"), QStringLiteral("tinexus-wallpaper")});
+        // Notify via io.tinexus.Settings.ConfigChanged for UI/client state binding
+        if (m_settingsAdaptor) {
+            emit m_settingsAdaptor->ConfigChanged(QStringLiteral("SelectedWallpaperIndex"), QDBusVariant(index));
+            emit m_settingsAdaptor->ConfigChanged(QStringLiteral("wallpaper"), QDBusVariant(path));
         }
 
         emit toastNotification(QStringLiteral("Wallpaper applied: %1").arg(m_wallpapers[index].toMap().value(QStringLiteral("name")).toString()), false);
@@ -438,48 +436,55 @@ void SettingsBridge::sessionShutdown() {
 
 void SettingsBridge::rescanApps() {
     m_unverifiedApps.clear();
-    std::string app_dir = "/opt/tinexus-apps";
-    if (std::filesystem::exists(app_dir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(app_dir)) {
-            if (!entry.is_regular_file()) continue;
-            std::string path = entry.path().string();
-            if (path.ends_with(".sig")) continue;
+    try {
+        std::string app_dir = "/opt/tinexus-apps";
+        std::error_code ec;
+        if (std::filesystem::exists(app_dir, ec) && !ec) {
+            for (const auto& entry : std::filesystem::directory_iterator(app_dir, ec)) {
+                if (ec) break;
+                if (!entry.is_regular_file(ec) || ec) continue;
+                std::string path = entry.path().string();
+                if (path.ends_with(".sig")) continue;
 
-            int bin_fd = open(path.c_str(), O_RDONLY);
-            if (bin_fd >= 0) {
-                std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(bin_fd);
-                close(bin_fd);
+                int bin_fd = open(path.c_str(), O_RDONLY);
+                if (bin_fd >= 0) {
+                    std::string hash = tinexus::guard::CryptoValidator::compute_sha256_fd(bin_fd);
+                    close(bin_fd);
 
-                std::string sig_path = path + ".sig";
-                bool verified = false;
-                if (std::filesystem::exists(sig_path)) {
-                    verified = tinexus::guard::CryptoValidator::verify_signature(
-                        path, sig_path, "/etc/tinexus/keys/root.pub");
-                }
+                    std::string sig_path = path + ".sig";
+                    bool verified = false;
+                    if (std::filesystem::exists(sig_path, ec) && !ec) {
+                        verified = tinexus::guard::CryptoValidator::verify_signature(
+                            path, sig_path, "/etc/tinexus/keys/root.pub");
+                    }
 
-                if (!verified) {
-                    QVariantMap app;
-                    app["name"] = QString::fromStdString(entry.path().filename().string());
-                    app["path"] = QString::fromStdString(path);
-                    app["hash"] = QString::fromStdString(hash);
-                    m_unverifiedApps.append(app);
+                    if (!verified) {
+                        QVariantMap app;
+                        app["name"] = QString::fromStdString(entry.path().filename().string());
+                        app["path"] = QString::fromStdString(path);
+                        app["hash"] = QString::fromStdString(hash);
+                        m_unverifiedApps.append(app);
+                    }
                 }
             }
         }
-    }
+    } catch (...) {}
     emit unverifiedAppsChanged();
 }
 
 void SettingsBridge::trustApp(const QString& hash) {
-    std::string trust_path = "/var/lib/tinexus/trust-overrides.conf";
-    std::filesystem::create_directories("/var/lib/tinexus");
-    std::ofstream out(trust_path, std::ios::app);
-    if (out.is_open()) {
-        out << hash.toStdString() << "\n";
-        out.close();
-    }
-    emit toastNotification(QStringLiteral("Granted Capability Token to %1").arg(hash.left(12)), false);
-    rescanApps();
+    try {
+        std::string trust_path = "/var/lib/tinexus/trust-overrides.conf";
+        std::error_code ec;
+        std::filesystem::create_directories("/var/lib/tinexus", ec);
+        std::ofstream out(trust_path, std::ios::app);
+        if (out.is_open()) {
+            out << hash.toStdString() << "\n";
+            out.close();
+        }
+        emit toastNotification(QStringLiteral("Granted Capability Token to %1").arg(hash.left(12)), false);
+        rescanApps();
+    } catch (...) {}
 }
 
 void SettingsBridge::pollWifiStatus() {
@@ -649,38 +654,41 @@ void SettingsBridge::loadConfig() {
 }
 
 void SettingsBridge::saveConfig() {
-    const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
-    std::string config_dir = xdg_config ? xdg_config : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "/root") + "/.config");
-    std::filesystem::create_directories(config_dir + "/tinexus");
-    std::string config_path = config_dir + "/tinexus/settings.toml";
+    try {
+        const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
+        std::string config_dir = xdg_config ? xdg_config : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "/root") + "/.config");
+        std::error_code ec;
+        std::filesystem::create_directories(config_dir + "/tinexus", ec);
+        std::string config_path = config_dir + "/tinexus/settings.toml";
 
-    std::string tmp_path = config_path + ".tmp";
-    std::ofstream out(tmp_path);
-    if (!out.is_open()) return;
+        std::string tmp_path = config_path + ".tmp";
+        std::ofstream out(tmp_path);
+        if (!out.is_open()) return;
 
-    out << "# Tinexus Desktop Settings Configuration (Qt6/QML)\n";
-    out << "accent_index = " << m_accentIndex << "\n";
-    out << "selected_wallpaper_idx = " << m_selectedWallpaperIndex << "\n";
-    if (m_selectedWallpaperIndex >= 0 && m_selectedWallpaperIndex < m_wallpapers.size()) {
-        std::string wall_path = m_wallpapers[m_selectedWallpaperIndex].toMap().value(QStringLiteral("path")).toString().toStdString();
-        out << "wallpaper_path = \"" << wall_path << "\"\n";
-        out << "\n[wallpaper]\n";
-        out << "path = \"" << wall_path << "\"\n";
-        out << "mode = \"fill\"\n";
-    }
-    out << "theme_mode = \"" << m_themeMode.toStdString() << "\"\n";
-    out << "display_scale_idx = " << m_displayScaleIndex << "\n";
-    out << "night_light = " << (m_nightLight ? "true" : "false") << "\n";
-    out << "vrr_enabled = " << (m_vrrEnabled ? "true" : "false") << "\n";
-    out << "screen_timeout_min = " << m_screenTimeoutMin << "\n";
-    out << "sleep_after_min = " << m_sleepAfterMin << "\n";
-    out << "power_profile_idx = " << m_powerProfileIndex << "\n";
-    out << "lock_on_sleep = " << (m_lockOnSleep ? "true" : "false") << "\n";
-    out << "pam_auth = " << (m_pamAuth ? "true" : "false") << "\n";
-    out << "clipboard_history_size = " << m_clipboardHistorySize << "\n";
-    out.close();
+        out << "# Tinexus Desktop Settings Configuration (Qt6/QML)\n";
+        out << "accent_index = " << m_accentIndex << "\n";
+        out << "selected_wallpaper_idx = " << m_selectedWallpaperIndex << "\n";
+        if (m_selectedWallpaperIndex >= 0 && m_selectedWallpaperIndex < m_wallpapers.size()) {
+            std::string wall_path = m_wallpapers[m_selectedWallpaperIndex].toMap().value(QStringLiteral("path")).toString().toStdString();
+            out << "wallpaper_path = \"" << wall_path << "\"\n";
+            out << "\n[wallpaper]\n";
+            out << "path = \"" << wall_path << "\"\n";
+            out << "mode = \"fill\"\n";
+        }
+        out << "theme_mode = \"" << m_themeMode.toStdString() << "\"\n";
+        out << "display_scale_idx = " << m_displayScaleIndex << "\n";
+        out << "night_light = " << (m_nightLight ? "true" : "false") << "\n";
+        out << "vrr_enabled = " << (m_vrrEnabled ? "true" : "false") << "\n";
+        out << "screen_timeout_min = " << m_screenTimeoutMin << "\n";
+        out << "sleep_after_min = " << m_sleepAfterMin << "\n";
+        out << "power_profile_idx = " << m_powerProfileIndex << "\n";
+        out << "lock_on_sleep = " << (m_lockOnSleep ? "true" : "false") << "\n";
+        out << "pam_auth = " << (m_pamAuth ? "true" : "false") << "\n";
+        out << "clipboard_history_size = " << m_clipboardHistorySize << "\n";
+        out.close();
 
-    std::filesystem::rename(tmp_path, config_path);
+        std::filesystem::rename(tmp_path, config_path, ec);
+    } catch (...) {}
 }
 
 } // namespace tinexus::settings_ui

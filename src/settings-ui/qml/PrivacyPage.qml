@@ -44,8 +44,8 @@ ScrollView {
                 }
 
                 MacSettingRow {
-                    title: "Capability Token Sandboxing"
-                    subtitle: "Confines untrusted third-party apps via tinexus-ipcd broker"
+                    title: "Application Sandbox"
+                    subtitle: "Confines untrusted third-party apps via platform security sandbox"
                     showSeparator: true
 
                     MacSwitch {

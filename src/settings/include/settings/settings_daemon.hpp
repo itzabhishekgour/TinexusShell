@@ -19,7 +19,7 @@ public:
     bool update_scale(float new_scale);
     void broadcast_settings_changed(const std::string& category);
 
-    // Live wallpaper change — persists to TOML and notifies all daemons via ipcd.
+    // Live wallpaper change — persists to TOML and notifies all daemons via D-Bus.
     // new_path : absolute path to image or .twallpaper dir (empty = dynamic schedule)
     // mode     : 0=fill, 1=fit, 2=center, 3=tile, 4=stretch
     // fade_ms  : cross-fade duration in ms (0 = instant)
