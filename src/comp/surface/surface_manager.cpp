@@ -19,6 +19,15 @@ uint32_t SurfaceManager::create_surface(pid_t pid, const std::string& app_id) {
     return id;
 }
 
+bool SurfaceManager::remove_surface(uint32_t surface_id) {
+    auto it = m_surfaces.find(surface_id);
+    if (it == m_surfaces.end()) return false;
+
+    log::info("SURFACE={} LIFECYCLE=Destroyed (removed from SurfaceManager)", surface_id);
+    m_surfaces.erase(it);
+    return true;
+}
+
 bool SurfaceManager::assign_role(uint32_t surface_id, SurfaceRole role) {
     auto it = m_surfaces.find(surface_id);
     if (it == m_surfaces.end()) return false;

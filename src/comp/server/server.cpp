@@ -465,15 +465,15 @@ int TinexusServer::handle_ipc_fd(int fd, uint32_t mask, void* data) {
             recv(fd, &c, 1, 0);
             return 1;
         }
-        std::vector<uint8_t> payload(hdr.payload_len);
-        // read full message
-        n = recv(fd, nullptr, 0, MSG_PEEK); // just to check if data is available
-        // Need to read hdr + payload
+        // Bug 5: removed unused payload_vec (allocated but never used) and
+        // the dead recv(fd,nullptr,0,MSG_PEEK) (UB; no-op on Linux).
+        // buf is the sole read target for the full hdr+data frame.
         std::vector<uint8_t> buf(sizeof(hdr) + hdr.payload_len);
         n = recv(fd, buf.data(), buf.size(), MSG_DONTWAIT);
         if (n == static_cast<ssize_t>(buf.size())) {
             srv->process_ipc_message(hdr.msg_type, buf.data() + sizeof(hdr), hdr.payload_len);
         }
+
     } else if (n <= 0 && errno != EAGAIN) {
         log::warn("[Server] IPC socket closed");
         close(fd);

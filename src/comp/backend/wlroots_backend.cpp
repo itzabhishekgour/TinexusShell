@@ -52,6 +52,7 @@ extern "C" {
 #include "comp/animation/animation_manager.hpp"
 #include "comp/workspace/workspace_manager.hpp"
 #include "comp/surface/blur_manager.hpp"
+#include "comp/surface/surface_manager.hpp"
 #include "comp/renderer/blur_pass.hpp"
 #include "common/AppId.hpp"
 #include <unistd.h>
@@ -386,6 +387,21 @@ public:
             if (m_request_set_selection_listener.link.next) { wl_list_remove(&m_request_set_selection_listener.link); m_request_set_selection_listener.link.next = nullptr; }
             if (m_request_set_primary_selection_listener.link.next) { wl_list_remove(&m_request_set_primary_selection_listener.link); m_request_set_primary_selection_listener.link.next = nullptr; }
 
+            // Bug 1: explicit cleanup of layer surface wrappers before backend
+            // teardown so cleanup is deterministic and does not depend on wlroots
+            // firing destroy signals during wlr_backend_destroy.
+            for (auto* w : m_layer_surfaces) {
+                if (w->surface_id != 0) {
+                    SurfaceManager::instance().remove_surface(w->surface_id);
+                    w->surface_id = 0;
+                }
+                if (w->commit.link.next)  { wl_list_remove(&w->commit.link);  w->commit.link.next  = nullptr; }
+                if (w->destroy.link.next) { wl_list_remove(&w->destroy.link); w->destroy.link.next = nullptr; }
+                if (w->unmap.link.next)   { wl_list_remove(&w->unmap.link);   w->unmap.link.next   = nullptr; }
+                delete w;
+            }
+            m_layer_surfaces.clear();
+
             for (auto* p : m_popups) {
                 if (p->commit.link.next) { wl_list_remove(&p->commit.link); p->commit.link.next = nullptr; }
                 if (p->reposition.link.next) { wl_list_remove(&p->reposition.link); p->reposition.link.next = nullptr; }
@@ -451,6 +467,9 @@ private:
     struct wlr_scene_tree* m_scene_tree_normal{nullptr};
     struct wlr_scene_tree* m_scene_tree_top{nullptr};
     struct wlr_scene_tree* m_scene_tree_overlay{nullptr};
+    // Bug 3: track the single shared background fill rect so it can be
+    // destroyed and recreated on hotplug rather than stacking indefinitely.
+    struct wlr_scene_rect* m_bg_rect{nullptr};
 
     struct wl_listener m_new_output_listener;
     struct wl_listener m_new_input_listener;
@@ -514,6 +533,7 @@ private:
         struct wl_listener commit;
         struct wl_listener unmap;
         WlrootsBackend* backend{nullptr};
+        uint32_t surface_id{0};
     };
 
     struct ToplevelWrapper {
@@ -531,6 +551,7 @@ private:
         WlrootsBackend* backend{nullptr};
         TinexusWindowFrame* frame{nullptr};
         uint32_t workspace_id{1};
+        uint32_t surface_id{0};
 
         // Window states
         bool is_maximized{false};
@@ -612,6 +633,21 @@ private:
         wrapper->layer_surface = layer_surface;
         wrapper->scene_layer = scene_layer;
         wrapper->backend = self;
+
+        // Register layer surface with SurfaceManager to track lifecycle
+        pid_t client_pid = -1;
+        if (layer_surface->resource) {
+            struct wl_client* client = wl_resource_get_client(layer_surface->resource);
+            if (client) {
+                wl_client_get_credentials(client, &client_pid, nullptr, nullptr);
+            }
+        }
+        wrapper->surface_id = SurfaceManager::instance().create_surface(
+            client_pid,
+            layer_surface->wl_namespace ? layer_surface->wl_namespace : ""
+        );
+        SurfaceManager::instance().assign_role(wrapper->surface_id, SurfaceRole::LayerSurface);
+
         self->m_layer_surfaces.push_back(wrapper);
 
         const std::string ns = layer_surface->wl_namespace ? layer_surface->wl_namespace : "";
@@ -647,12 +683,17 @@ private:
                 }
             }
 
-            wl_list_remove(&w->destroy.link);
-            wl_list_remove(&w->commit.link);
-            if (w->unmap.link.next) {
-                wl_list_remove(&w->unmap.link);
-                w->unmap.link.next = nullptr;
+            // Remove surface record from SurfaceManager to prevent record accumulation
+            if (w->surface_id != 0) {
+                SurfaceManager::instance().remove_surface(w->surface_id);
+                w->surface_id = 0;
             }
+
+            // Bug 6: guard all three link removals to match the popup destroy
+            // handler pattern and prevent double-remove under reentrancy.
+            if (w->destroy.link.next) { wl_list_remove(&w->destroy.link); w->destroy.link.next = nullptr; }
+            if (w->commit.link.next)  { wl_list_remove(&w->commit.link);  w->commit.link.next  = nullptr; }
+            if (w->unmap.link.next)   { wl_list_remove(&w->unmap.link);   w->unmap.link.next   = nullptr; }
             delete w;
 
             // Only restore other surfaces AFTER w is deleted and erased from m_layer_surfaces!
@@ -703,10 +744,12 @@ private:
                 w->layer_surface->wl_namespace ? w->layer_surface->wl_namespace : "null",
                 w->layer_surface->surface->current.height);
 
-            // Check if this layer surface is tinexus-lock or exclusive overlay lock
+            // Bug 4: replaced std::string(ns) == "literal" with strcmp to
+            // eliminate heap allocations on every commit (~180/sec under normal
+            // shell+dock+wallpaper usage). "tinexus-launcher" exceeds SSO.
             const char* ns = w->layer_surface->wl_namespace;
-            bool is_lock = (ns && (std::string(ns) == "tinexus-lock" || std::string(ns) == "lock"));
-            bool is_launcher = (ns && (std::string(ns) == "launcher" || std::string(ns) == "tinexus-launcher"));
+            bool is_lock = (ns && (strcmp(ns, "tinexus-lock") == 0 || strcmp(ns, "lock") == 0));
+            bool is_launcher = (ns && (strcmp(ns, "launcher") == 0 || strcmp(ns, "tinexus-launcher") == 0));
             if (!is_lock && !is_launcher && w->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY &&
                 w->layer_surface->current.keyboard_interactive == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
                 is_lock = true;
@@ -744,7 +787,7 @@ private:
             }
 
             // Auto-focus heuristic for the unified shell
-            if (w->layer_surface->wl_namespace && std::string(w->layer_surface->wl_namespace) == "tinexus-shell") {
+            if (w->layer_surface->wl_namespace && strcmp(w->layer_surface->wl_namespace, "tinexus-shell") == 0) {
                 if (w->layer_surface->surface->current.height > 100) {
                     if (w->backend->m_lock_surface == nullptr && FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
                         log::info("[LayerShell] Height > 100. Granting keyboard focus to Pulse.");
@@ -967,7 +1010,7 @@ private:
         for (const auto* w : m_layer_surfaces) {
             if (w && w->layer_surface) {
                 const char* ns = w->layer_surface->wl_namespace;
-                if (ns && (std::string(ns) == "launcher" || std::string(ns) == "tinexus-launcher")) {
+                if (ns && (strcmp(ns, "launcher") == 0 || strcmp(ns, "tinexus-launcher") == 0)) {
                     if (w->scene_layer && w->scene_layer->tree) {
                         wlr_scene_node_raise_to_top(&w->scene_layer->tree->node);
                     }
@@ -1967,6 +2010,20 @@ private:
         wrapper->toplevel = xdg_toplevel;
         wrapper->backend  = self;
 
+        // Bug 2: Register surface with SurfaceManager to track lifecycle
+        pid_t client_pid = -1;
+        if (xdg_toplevel->base && xdg_toplevel->base->resource) {
+            struct wl_client* client = wl_resource_get_client(xdg_toplevel->base->resource);
+            if (client) {
+                wl_client_get_credentials(client, &client_pid, nullptr, nullptr);
+            }
+        }
+        wrapper->surface_id = SurfaceManager::instance().create_surface(
+            client_pid,
+            xdg_toplevel->app_id ? xdg_toplevel->app_id : ""
+        );
+        SurfaceManager::instance().assign_role(wrapper->surface_id, SurfaceRole::XdgToplevel);
+
         bool is_launcher = (xdg_toplevel->app_id &&
             (std::string(xdg_toplevel->app_id) == "tinexus-launcher" ||
              std::string(xdg_toplevel->app_id) == "launcher" ||
@@ -2326,6 +2383,12 @@ private:
 
         log::info("[XDGShell] handle_toplevel_destroy for wrapper={}", static_cast<void*>(wrapper));
 
+        // Bug 2: Remove surface record from SurfaceManager to prevent record accumulation
+        if (wrapper->surface_id != 0) {
+            SurfaceManager::instance().remove_surface(wrapper->surface_id);
+            wrapper->surface_id = 0;
+        }
+
         // 0. Cancel active animations immediately to prevent any callback or dereference
         AnimationManager::instance().cancel_animation(reinterpret_cast<uint64_t>(wrapper));
 
@@ -2441,10 +2504,19 @@ private:
                 log::info("[Backend] Scene output registered for '{}'", wlr_out->name);
             }
 
-            // Milestone 1: Draw a static blue background #0F172A
+            // Bug 3: destroy the previous bg_rect before creating a new one so
+            // hotplug cycles do not stack duplicate full-screen scene nodes.
+            if (self->m_bg_rect) {
+                log::info("[Backend] Hotplug: destroying previous bg_rect ({})", static_cast<void*>(self->m_bg_rect));
+                wlr_scene_node_destroy(&self->m_bg_rect->node);
+                self->m_bg_rect = nullptr;
+            }
             float color[4] = {0.059f, 0.09f, 0.165f, 1.0f}; // roughly #0F172A
-            struct wlr_scene_rect* bg_rect = wlr_scene_rect_create(self->m_scene_tree_background, 10000, 10000, color);
-            wlr_scene_node_set_position(&bg_rect->node, 0, 0);
+            self->m_bg_rect = wlr_scene_rect_create(self->m_scene_tree_background, 10000, 10000, color);
+            wlr_scene_node_set_position(&self->m_bg_rect->node, 0, 0);
+            int bg_node_count = wl_list_length(&self->m_scene_tree_background->children);
+            log::info("[Backend] Hotplug: active bg_rect={}, total background nodes={}",
+                      static_cast<void*>(self->m_bg_rect), bg_node_count);
 
             self->m_outputs.push_back(std::move(output));
 

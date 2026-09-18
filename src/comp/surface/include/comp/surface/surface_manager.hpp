@@ -99,6 +99,7 @@ public:
     ~SurfaceManager() = default;
 
     uint32_t create_surface(pid_t pid, const std::string& app_id);
+    bool remove_surface(uint32_t surface_id);
     bool assign_role(uint32_t surface_id, SurfaceRole role);
     bool transition_lifecycle(uint32_t surface_id, SurfaceLifecycle new_lifecycle);
     bool transition_state(uint32_t surface_id, SurfaceState new_state);
