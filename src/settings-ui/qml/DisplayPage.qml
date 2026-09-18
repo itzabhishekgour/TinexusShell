@@ -50,7 +50,7 @@ ScrollView {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "1920 × 1080"
+                            text: typeof bridge !== "undefined" ? bridge.displayResolution : "1920 × 1080"
                             color: "#ccffffff"
                             font.pixelSize: 10
                             font.bold: true
@@ -69,7 +69,7 @@ ScrollView {
 
                 Text {
                     Layout.alignment: Qt.AlignHCenter
-                    text: "Built-in Display  •  60 Hz"
+                    text: typeof bridge !== "undefined" ? bridge.displaySubtitle : "Primary Display  •  60 Hz"
                     color: "#86868b"
                     font.pixelSize: 11
                 }

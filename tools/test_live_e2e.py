@@ -24,7 +24,7 @@ PROJECT_DIR = Path(r"E:\Tinu's Technology\Tinexus Manager")
 BUILD_DIR = PROJECT_DIR / "build"
 ISO_PATH = BUILD_DIR / "Tinexus-x86_64.iso"
 SERIAL_LOG = BUILD_DIR / "serial_live_e2e.log"
-ARTIFACTS_DIR = Path(r"C:\Users\mrasg\.gemini\antigravity-ide\brain\c0b3b60a-cf20-4d45-aa1d-f13b364bea6a")
+ARTIFACTS_DIR = Path(r"C:\Users\mrasg\.gemini\antigravity-ide\brain\07cace62-ebf5-4206-914b-5c4a7d83eddf")
 
 QEMU_BIN = Path(r"C:\Program Files\qemu\qemu-system-x86_64.exe")
 OVMF_CODE = Path(r"C:\Program Files\qemu\share\edk2-x86_64-code.fd")

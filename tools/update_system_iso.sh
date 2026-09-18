@@ -1,61 +1,72 @@
 #!/bin/bash
+# ==============================================================================
+# Tinexus Platform — Fast Incremental ISO Updater
+# Injects compiled binaries & updated QML assets into live squashfs without full recompile
+# ==============================================================================
 set -euo pipefail
 
-ORIG_ISO="/workspace/build/Tinexus-x86_64.iso"
-NEW_ISO="/workspace/build/Tinexus-x86_64-updated.iso"
+hwclock -s 2>/dev/null || true
 
-if [ -f "/workspace/build/workdisk.img" ]; then
-    mkdir -p /mnt/workdisk
-    mountpoint -q /mnt/workdisk || mount -o loop "/workspace/build/workdisk.img" /mnt/workdisk 2>/dev/null || true
-fi
-
-NEW_SQUASHFS="/mnt/workdisk/rootfs.squashfs"
+PROJECT_DIR="/workspace"
+BUILD_DIR="$PROJECT_DIR/build"
+ORIG_ISO="$BUILD_DIR/Tinexus-x86_64.iso"
+NEW_ISO="$BUILD_DIR/Tinexus-x86_64-updated.iso"
 
 echo "[INFO] Ensuring mounts..."
 bash /workspace/tools/ensure_mounts.sh
 
+if mountpoint -q /mnt/workdisk; then
+    NEW_SQUASHFS="/mnt/workdisk/rootfs.squashfs"
+else
+    NEW_SQUASHFS="/dev/shm/rootfs.squashfs"
+fi
+
 echo "[INFO] Installing updated binaries into rootfs..."
-# 1. tinexus-settings (Pure C++20 daemon - ensure it's not a symlink)
-rm -f /mnt/rootfs/usr/bin/tinexus-settings
-cp -f /workspace/build/bin/tinexus-settings /mnt/rootfs/usr/bin/tinexus-settings
-chmod 755 /mnt/rootfs/usr/bin/tinexus-settings
-chroot /mnt/rootfs /usr/bin/strip /usr/bin/tinexus-settings 2>/dev/null || true
+CORE_BINARIES=(
+    "tinexus-settings"
+    "tinexus-settings-ui"
+    "tinexus-session"
+    "tinexus-notifications"
+    "tinexus-shell"
+    "tinexus-comp"
+    "tinexus-dock"
+    "tinexus-launcher"
+    "tinexus-wallpaper"
+    "tinexus-lock"
+    "tinexus-terminal"
+    "tinexus-serviced"
+    "tinexus-ipcd"
+    "tinexus-files"
+    "tinexus-monitor"
+    "tinexus-about"
+    "tinexus-store"
+)
 
-# 2. tinexus-settings-ui (Qt6 / QML settings application)
-cp -f /workspace/build/bin/tinexus-settings-ui /mnt/rootfs/usr/bin/tinexus-settings-ui
-chmod 755 /mnt/rootfs/usr/bin/tinexus-settings-ui
-chroot /mnt/rootfs /usr/bin/strip /usr/bin/tinexus-settings-ui 2>/dev/null || true
-
-# 3. tinexus-session (Platform session supervisor)
-cp -f /workspace/build/bin/tinexus-session /mnt/rootfs/usr/bin/tinexus-session
-chmod 755 /mnt/rootfs/usr/bin/tinexus-session
-chroot /mnt/rootfs /usr/bin/strip /usr/bin/tinexus-session 2>/dev/null || true
-
-# 4. tinexus-notifications (Pure C++20 sd-bus notification daemon)
-cp -f /workspace/build/bin/tinexus-notifications /mnt/rootfs/usr/bin/tinexus-notifications
-chmod 755 /mnt/rootfs/usr/bin/tinexus-notifications
-chroot /mnt/rootfs /usr/bin/strip /usr/bin/tinexus-notifications 2>/dev/null || true
-
-# 5. tinexus-shell (Qt6 / QML desktop shell with NotificationToast)
-cp -f /workspace/build/bin/tinexus-shell /mnt/rootfs/usr/bin/tinexus-shell
-chmod 755 /mnt/rootfs/usr/bin/tinexus-shell
-chroot /mnt/rootfs /usr/bin/strip /usr/bin/tinexus-shell 2>/dev/null || true
+for b in "${CORE_BINARIES[@]}"; do
+    if [ -f "/workspace/build/bin/$b" ]; then
+        echo "[INFO] Syncing $b -> /mnt/rootfs/usr/bin/$b"
+        rm -f "/mnt/rootfs/usr/bin/$b"
+        cp -f "/workspace/build/bin/$b" "/mnt/rootfs/usr/bin/$b"
+        chmod 755 "/mnt/rootfs/usr/bin/$b"
+        chroot /mnt/rootfs /usr/bin/strip "/usr/bin/$b" 2>/dev/null || true
+    fi
+done
 
 echo "[INFO] Syncing updated QML files into rootfs..."
-mkdir -p /mnt/rootfs/usr/share/tinexus/shell/qml
-mkdir -p /mnt/rootfs/usr/share/tinexus-shell/qml
-cp -rf /workspace/src/shell/qml/* /mnt/rootfs/usr/share/tinexus/shell/qml/
-cp -rf /workspace/src/shell/qml/* /mnt/rootfs/usr/share/tinexus-shell/qml/
+QML_MODULES=("shell" "settings-ui" "dock" "launcher" "lock" "wallpaper" "files" "monitor" "terminal" "common")
+for m in "${QML_MODULES[@]}"; do
+    if [ -d "/workspace/src/$m/qml" ]; then
+        mkdir -p "/mnt/rootfs/usr/share/tinexus/$m/qml"
+        cp -rf /workspace/src/$m/qml/* "/mnt/rootfs/usr/share/tinexus/$m/qml/"
+        # Sync legacy compatibility symlink/path if present
+        mkdir -p "/mnt/rootfs/usr/share/tinexus-$m/qml" 2>/dev/null || true
+        cp -rf /workspace/src/$m/qml/* "/mnt/rootfs/usr/share/tinexus-$m/qml/" 2>/dev/null || true
+    fi
+done
 
-mkdir -p /mnt/rootfs/usr/share/tinexus/settings-ui/qml
-mkdir -p /mnt/rootfs/usr/share/tinexus-settings/qml
-mkdir -p /mnt/rootfs/usr/share/tinexus-settings-ui/qml
-cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus/settings-ui/qml/
-cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings/qml/
-cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings-ui/qml/
-
-mkdir -p /mnt/rootfs/usr/share/tinexus/common/qml
-cp -rf /workspace/src/common/qml/* /mnt/rootfs/usr/share/tinexus/common/qml/
+# Ensure tinexus-settings compatibility path
+mkdir -p /mnt/rootfs/usr/share/tinexus-settings/qml 2>/dev/null || true
+cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings/qml/ 2>/dev/null || true
 
 echo "[INFO] Verifying rootfs binaries..."
 ls -lh /mnt/rootfs/usr/bin/tinexus-settings \
@@ -84,15 +95,26 @@ mksquashfs /mnt/rootfs "$NEW_SQUASHFS" \
     -wildcards \
     -e 'workspace/*' 'tmp/*' 'var/tmp/*'
 
-echo "[INFO] Updating ISO with new squashfs via xorriso..."
+echo "[INFO] Updating ISO with new squashfs via xorriso replay..."
 rm -f "$NEW_ISO"
 xorriso -indev "$ORIG_ISO" \
         -outdev "$NEW_ISO" \
         -update "$NEW_SQUASHFS" /live/rootfs.squashfs \
         -boot_image any replay
 
+echo "[INFO] Verifying updated ISO boot catalog..."
+xorriso -indev "$NEW_ISO" -report_el_torito plain
+
 echo "[INFO] Replacing original ISO with updated ISO..."
+cp -f "$ORIG_ISO" "$BUILD_DIR/Tinexus-x86_64.iso.bak" 2>/dev/null || true
 mv -f "$NEW_ISO" "$ORIG_ISO"
 rm -f "$NEW_SQUASHFS"
 
-echo "[SUCCESS] ISO successfully updated with all latest binaries and QML UI components!"
+echo "[INFO] Generating SHA256 checksum..."
+sha256sum "$ORIG_ISO" > "$ORIG_ISO.sha256"
+
+echo ""
+echo "[SUCCESS] Successfully rebuilt Tinexus-x86_64.iso with all fixes!"
+echo "[SUCCESS] ISO Path: $ORIG_ISO"
+echo "[SUCCESS] ISO Size: $(ls -lh "$ORIG_ISO" | awk '{print $5}')"
+echo "[SUCCESS] SHA256:   $(cat "$ORIG_ISO.sha256")"

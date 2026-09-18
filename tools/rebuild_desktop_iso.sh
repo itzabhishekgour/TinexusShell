@@ -353,24 +353,62 @@ rm -f /workspace/build/bin/tinexus-launcher
 /workspace/tools/compile_launcher.sh
 [ -f /workspace/build/bin/tinexus-launcher ] || fatal "tinexus-launcher compilation FAILED!"
 
+# 8c0. tinexus-settings (authoritative config daemon)
+info "Compiling tinexus-settings daemon..."
+rm -f /workspace/build/bin/tinexus-settings
+BUILD_START_SETTINGSD=$(date +%s)
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+  $COMMON_INC -I/workspace/src/settings/include -I/workspace/src/settings \
+  /workspace/src/settings/main.cpp \
+  /workspace/src/settings/config_store.cpp \
+  /workspace/src/settings/schema_validator.cpp \
+  /workspace/src/settings/settings_daemon.cpp \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lsystemd -lpthread \
+  -o /workspace/build/bin/tinexus-settings
+[ -f /workspace/build/bin/tinexus-settings ] || fatal "tinexus-settings compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-settings)" -ge "$BUILD_START_SETTINGSD" ] || fatal "tinexus-settings mtime is older than build start! Stale binary."
+cp -f /workspace/build/bin/tinexus-settings /mnt/rootfs/usr/bin/tinexus-settings
+chmod 0755 /mnt/rootfs/usr/bin/tinexus-settings
+
 # 8c. tinexus-settings-ui
 info "Compiling tinexus-settings-ui..."
 rm -f /workspace/build/bin/tinexus-settings-ui
 BUILD_START_SETTINGS=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/qt/SettingsBridge.hpp -o /tmp/build_apps/moc_SettingsBridge.cpp
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/include/settings-ui/SettingsAdaptor.hpp -o /tmp/build_apps/moc_SettingsAdaptor.cpp
+for ctl in DisplayController AudioController NetworkController PersonalizationController SystemController AboutController PrivacyController SearchController; do
+  chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/qt/controllers/${ctl}.hpp -o /tmp/build_apps/moc_${ctl}.cpp
+done
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/guard/include -I/workspace/src/settings-ui -I/workspace/src/settings-ui/qt -I/workspace/src/settings-ui/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/settings-ui/qt/main_qt.cpp \
   /workspace/src/settings-ui/qt/SettingsBridge.cpp \
   /workspace/src/settings-ui/qt/SettingsAdaptor.cpp \
+  /workspace/src/settings-ui/qt/controllers/DisplayController.cpp \
+  /workspace/src/settings-ui/qt/controllers/AudioController.cpp \
+  /workspace/src/settings-ui/qt/controllers/NetworkController.cpp \
+  /workspace/src/settings-ui/qt/controllers/PersonalizationController.cpp \
+  /workspace/src/settings-ui/qt/controllers/SystemController.cpp \
+  /workspace/src/settings-ui/qt/controllers/AboutController.cpp \
+  /workspace/src/settings-ui/qt/controllers/PrivacyController.cpp \
+  /workspace/src/settings-ui/qt/controllers/SearchController.cpp \
   /workspace/src/settings-ui/WifiManager.cpp \
   /tmp/build_apps/moc_SettingsBridge.cpp \
+  /tmp/build_apps/moc_DisplayController.cpp \
+  /tmp/build_apps/moc_AudioController.cpp \
+  /tmp/build_apps/moc_NetworkController.cpp \
+  /tmp/build_apps/moc_PersonalizationController.cpp \
+  /tmp/build_apps/moc_SystemController.cpp \
+  /tmp/build_apps/moc_AboutController.cpp \
+  /tmp/build_apps/moc_PrivacyController.cpp \
+  /tmp/build_apps/moc_SearchController.cpp \
   -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6DBus -lcrypto \
   -o /workspace/build/bin/tinexus-settings-ui
 [ -f /workspace/build/bin/tinexus-settings-ui ] || fatal "tinexus-settings-ui compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-settings-ui)" -ge "$BUILD_START_SETTINGS" ] || fatal "tinexus-settings-ui mtime is older than build start! Stale binary."
 strings /workspace/build/bin/tinexus-settings-ui | grep "libQt6Core" >/dev/null 2>&1 || fatal "tinexus-settings-ui not linked to Qt6!"
+cp -f /workspace/build/bin/tinexus-settings-ui /mnt/rootfs/usr/bin/tinexus-settings-ui
+chmod 0755 /mnt/rootfs/usr/bin/tinexus-settings-ui
 
 # 8d. tinexus-dock
 info "Compiling tinexus-dock via compile_dock.sh..."
@@ -538,9 +576,11 @@ EOF_TTYS0
         chmod 0644 /mnt/rootfs/etc/polkit-1/rules.d/*.rules 2>/dev/null || true
     fi
 
-    ln -sf /usr/bin/tinexus-settings-ui /mnt/rootfs/usr/bin/tinexus-settings
-
-
+    # tinexus-settings (daemon) and tinexus-settings-ui (Qt6 app) are independent binaries
+    cp -f /workspace/build/bin/tinexus-settings /mnt/rootfs/usr/bin/tinexus-settings 2>/dev/null || true
+    chmod 0755 /mnt/rootfs/usr/bin/tinexus-settings 2>/dev/null || true
+    cp -f /workspace/build/bin/tinexus-settings-ui /mnt/rootfs/usr/bin/tinexus-settings-ui 2>/dev/null || true
+    chmod 0755 /mnt/rootfs/usr/bin/tinexus-settings-ui 2>/dev/null || true
     chroot /mnt/rootfs /bin/bash -c "
         groupadd -r -f seat 2>/dev/null || true
         groupadd -r -f netdev 2>/dev/null || true

@@ -4,6 +4,17 @@ pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
 find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 DBus QUIET)
 
 if(Qt6_FOUND)
+    set(SETTINGS_CONTROLLER_SRCS
+        qt/controllers/DisplayController.cpp
+        qt/controllers/AudioController.cpp
+        qt/controllers/NetworkController.cpp
+        qt/controllers/PersonalizationController.cpp
+        qt/controllers/SystemController.cpp
+        qt/controllers/AboutController.cpp
+        qt/controllers/PrivacyController.cpp
+        qt/controllers/SearchController.cpp
+    )
+
     # Qt6 QML Settings Application
     add_executable(tinexus-settings-ui
         qt/main_qt.cpp
@@ -12,6 +23,7 @@ if(Qt6_FOUND)
         qt/SettingsAdaptor.hpp
         include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
+        ${SETTINGS_CONTROLLER_SRCS}
     )
 
     set_target_properties(tinexus-settings-ui PROPERTIES
@@ -42,6 +54,7 @@ if(Qt6_FOUND)
         qt/SettingsAdaptor.hpp
         include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
+        ${SETTINGS_CONTROLLER_SRCS}
     )
     set_target_properties(test-settings-render PROPERTIES
         AUTOMOC ON
@@ -67,6 +80,7 @@ if(Qt6_FOUND)
         qt/SettingsAdaptor.hpp
         include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
+        ${SETTINGS_CONTROLLER_SRCS}
     )
     set_target_properties(test-settings-wifi-render PROPERTIES
         AUTOMOC ON
@@ -84,6 +98,7 @@ if(Qt6_FOUND)
         tinexus_warnings
         tinexus-guard
     )
+
     add_executable(test-about-live
         qt/test_about_live.cpp
         qt/SettingsBridge.cpp
@@ -91,6 +106,7 @@ if(Qt6_FOUND)
         qt/SettingsAdaptor.hpp
         include/settings-ui/SettingsAdaptor.hpp
         WifiManager.cpp
+        ${SETTINGS_CONTROLLER_SRCS}
     )
     set_target_properties(test-about-live PROPERTIES
         AUTOMOC ON
@@ -124,4 +140,3 @@ target_link_libraries(test-wifi-backend-contracts PRIVATE
 set_target_properties(test-wifi-backend-contracts PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
-
