@@ -22,7 +22,7 @@ BUILD_DIR = PROJECT_DIR / "build"
 ISO_PATH = BUILD_DIR / "Tinexus-x86_64.iso"
 SERIAL_LOG = BUILD_DIR / "serial_live.log"
 SCREENSHOT_PPM = BUILD_DIR / "live_desktop_verified.ppm"
-SCREENSHOT_PNG = Path(r"C:\Users\mrasg\.gemini\antigravity-ide\brain\33b16752-e9a9-4ce4-95a5-95bc66b2340d\live_desktop_verified.png")
+SCREENSHOT_PNG = Path(r"C:\Users\mrasg\.gemini\antigravity-ide\brain\c0b3b60a-cf20-4d45-aa1d-f13b364bea6a\live_desktop_verified.png")
 QEMU_BIN = Path(r"C:\Program Files\qemu\qemu-system-x86_64.exe")
 OVMF_CODE = Path(r"C:\Program Files\qemu\share\edk2-x86_64-code.fd")
 QMP_PORT = 4444
@@ -141,7 +141,7 @@ def run_test():
             print(f"[!] Error converting screenshot: {e}")
 
     launcher_ppm = BUILD_DIR / "launcher_verified.ppm"
-    launcher_png = Path(r"C:\Users\mrasg\.gemini\antigravity-ide\brain\33b16752-e9a9-4ce4-95a5-95bc66b2340d\launcher_verified.png")
+    launcher_png = Path(r"C:\Users\mrasg\.gemini\antigravity-ide\brain\c0b3b60a-cf20-4d45-aa1d-f13b364bea6a\launcher_verified.png")
     if launcher_ppm.exists():
         print(f"[+] Converting {launcher_ppm} to PNG...")
         try:
