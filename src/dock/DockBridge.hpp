@@ -191,6 +191,7 @@ private:
     void setupDBus();
     void sendRaiseAndFocus(const QString& appId);
     void spawnApp(const QString& execCmd);
+    void launchWithFiles(const QString& execLine, const QStringList& uris);
     void recomputeLayout();
 
     std::vector<DockIconItem> m_icons;

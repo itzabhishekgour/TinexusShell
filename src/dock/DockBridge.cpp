@@ -376,11 +376,9 @@ void DockBridge::launchWithUris(const QString& appId, const QStringList& uris) {
     if (uris.isEmpty()) return;
 
     QString execCmd;
-    for (auto& icon : m_icons) {
-        if (icon.appId == appId || icon.appId.compare(appId, Qt::CaseInsensitive) == 0) {
+    for (const auto& icon : m_icons) {
+        if (icon.appId == appId && !icon.exec.isEmpty()) {
             execCmd = icon.exec;
-            icon.bounceSpring.reset(0.40, 0.0);
-            emit iconsChanged();
             break;
         }
     }
@@ -391,7 +389,31 @@ void DockBridge::launchWithUris(const QString& appId, const QStringList& uris) {
     tinexus::log::info("[DockBridge] Launching '{}' with {} URIs via file drop",
                        appId.toStdString(), uris.size());
 
-    QStringList args = QProcess::splitCommand(execCmd);
+    launchWithFiles(execCmd, uris);
+}
+
+static void enrichEnvironmentWithRuntime(QProcessEnvironment& env) {
+    env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    if (!env.contains(QStringLiteral("DISPLAY")) || !env.contains(QStringLiteral("WAYLAND_DISPLAY"))) {
+        QFile envFile(QStringLiteral("/run/tinexus/env"));
+        if (envFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!envFile.atEnd()) {
+                QByteArray line = envFile.readLine().trimmed();
+                int eq = line.indexOf('=');
+                if (eq > 0) {
+                    QString k = QString::fromUtf8(line.left(eq));
+                    QString v = QString::fromUtf8(line.mid(eq + 1));
+                    if (!env.contains(k)) {
+                        env.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void DockBridge::launchWithFiles(const QString& execLine, const QStringList& uris) {
+    QStringList args = QProcess::splitCommand(execLine);
     if (args.isEmpty()) return;
 
     QString program = args.takeFirst();
@@ -399,8 +421,7 @@ void DockBridge::launchWithUris(const QString& appId, const QStringList& uris) {
 
     QProcess process;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    // Strip layer-shell integration so launched application opens as normal window
-    env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    enrichEnvironmentWithRuntime(env);
     process.setProcessEnvironment(env);
 
     qint64 pid = 0;
@@ -594,7 +615,7 @@ void DockBridge::spawnApp(const QString& execCmd) {
 
     QProcess proc;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    enrichEnvironmentWithRuntime(env);
     QString pathEnv = env.value(QStringLiteral("PATH"));
     if (pathEnv.isEmpty()) {
         env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"));

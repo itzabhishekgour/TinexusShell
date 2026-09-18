@@ -177,19 +177,50 @@ void LauncherBridge::launchIndex(int idx) {
     closeLauncher();
 }
 
+static void enrichEnvironmentWithRuntime(QProcessEnvironment& env) {
+    env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    if (!env.contains(QStringLiteral("DISPLAY")) || !env.contains(QStringLiteral("WAYLAND_DISPLAY"))) {
+        QFile envFile(QStringLiteral("/run/tinexus/env"));
+        if (envFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!envFile.atEnd()) {
+                QByteArray line = envFile.readLine().trimmed();
+                int eq = line.indexOf('=');
+                if (eq > 0) {
+                    QString k = QString::fromUtf8(line.left(eq));
+                    QString v = QString::fromUtf8(line.mid(eq + 1));
+                    if (!env.contains(k)) {
+                        env.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void LauncherBridge::closeLauncher() {
     setQuery(QString());
     emit closeRequested();
 }
 
 void LauncherBridge::spawnApp(const QString& execCmd, bool inTerminal) {
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    enrichEnvironmentWithRuntime(env);
+
     if (inTerminal) {
-        QProcess::startDetached(QStringLiteral("tinexus-terminal"), {QStringLiteral("-e"), execCmd});
+        QProcess process;
+        process.setProgram(QStringLiteral("tinexus-terminal"));
+        process.setArguments({QStringLiteral("-e"), execCmd});
+        process.setProcessEnvironment(env);
+        process.startDetached();
     } else {
         QStringList args = QProcess::splitCommand(execCmd);
         if (!args.isEmpty()) {
             QString prog = args.takeFirst();
-            QProcess::startDetached(prog, args);
+            QProcess process;
+            process.setProgram(prog);
+            process.setArguments(args);
+            process.setProcessEnvironment(env);
+            process.startDetached();
         }
     }
 }
