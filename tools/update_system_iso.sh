@@ -76,6 +76,15 @@ ls -lh /mnt/rootfs/usr/bin/tinexus-settings \
        /mnt/rootfs/usr/bin/tinexus-shell
 
 echo "[INFO] Unmounting chroot bind mounts before squashfs..."
+umount -l /mnt/rootfs/mnt/rootfs/workspace 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/rootfs/proc 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/rootfs/sys 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/rootfs/dev 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/rootfs 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/squashfs 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/isomnt 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/workdisk 2>/dev/null || true
+umount -l /mnt/rootfs/mnt/* 2>/dev/null || true
 umount -l /mnt/rootfs/workspace 2>/dev/null || true
 umount -l /mnt/rootfs/dev/pts 2>/dev/null || true
 umount -l /mnt/rootfs/dev 2>/dev/null || true
@@ -83,7 +92,7 @@ umount -l /mnt/rootfs/proc 2>/dev/null || true
 umount -l /mnt/rootfs/sys 2>/dev/null || true
 umount -l /mnt/rootfs/tmp 2>/dev/null || true
 
-rm -rf /mnt/rootfs/tmp/* /mnt/rootfs/var/tmp/* /mnt/rootfs/root/.bash_history 2>/dev/null || true
+rm -rf /mnt/rootfs/mnt/* /mnt/rootfs/tmp/* /mnt/rootfs/var/tmp/* /mnt/rootfs/root/.bash_history 2>/dev/null || true
 
 echo "[INFO] Compressing updated rootfs into squashfs..."
 rm -f "$NEW_SQUASHFS"
@@ -93,7 +102,7 @@ mksquashfs /mnt/rootfs "$NEW_SQUASHFS" \
     -Xbcj x86 \
     -noappend \
     -wildcards \
-    -e 'workspace/*' 'tmp/*' 'var/tmp/*'
+    -e 'workspace' 'workspace/*' 'tmp/*' 'var/tmp/*' 'mnt/*' 'proc/*' 'sys/*' 'dev/*'
 
 echo "[INFO] Updating ISO with new squashfs via xorriso replay..."
 rm -f "$NEW_ISO"

@@ -20,16 +20,16 @@ fi
 
 mkdir -p /mnt/isomnt /mnt/squashfs /mnt/rootfs "$UPPER_DIR" "$WORK_DIR"
 
-if ! mount | grep -q '/mnt/isomnt'; then
-    mount -o loop,ro "$ORIG_ISO" /mnt/isomnt
+if ! mountpoint -q /mnt/isomnt; then
+    mount -o loop,ro "$ORIG_ISO" /mnt/isomnt 2>/dev/null || true
 fi
 
-if ! mount | grep -q '/mnt/squashfs'; then
-    mount -o loop,ro /mnt/isomnt/live/rootfs.squashfs /mnt/squashfs
+if ! mountpoint -q /mnt/squashfs; then
+    mount -o loop,ro /mnt/isomnt/live/rootfs.squashfs /mnt/squashfs 2>/dev/null || true
 fi
 
-if ! mount | grep -q '/mnt/rootfs'; then
-    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir="$UPPER_DIR",workdir="$WORK_DIR" /mnt/rootfs
+if ! mountpoint -q /mnt/rootfs; then
+    mount -t overlay overlay -o lowerdir=/mnt/squashfs,upperdir="$UPPER_DIR",workdir="$WORK_DIR" /mnt/rootfs 2>/dev/null || true
 fi
 
 mountpoint -q /mnt/rootfs/proc || mount --bind /proc /mnt/rootfs/proc 2>/dev/null || true
