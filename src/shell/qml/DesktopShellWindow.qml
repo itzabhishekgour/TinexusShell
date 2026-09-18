@@ -10,15 +10,16 @@ Window {
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
-    // Dynamically expand window height when a flyout opens or when Aura Notch expands
+    // Dynamically expand window height when a flyout opens, toast arrives, or when Aura Notch expands
     readonly property bool anyFlyoutOpen: typeof bridge !== "undefined" && (
         bridge.logoMenuOpen || bridge.appMenuOpen || bridge.calendarOpen || bridge.notificationsOpen ||
         bridge.volumeFlyoutOpen || bridge.brightnessFlyoutOpen ||
         bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen
     )
+    readonly property bool toastVisible: typeof bridge !== "undefined" && bridge.toastVisible
     readonly property bool notchExpanded: topBar.notchExpanded
 
-    height: anyFlyoutOpen ? 420 : (notchExpanded ? 84 : 46)
+    height: anyFlyoutOpen ? 420 : (toastVisible ? 120 : (notchExpanded ? 84 : 46))
 
     // Auto-dismiss open flyouts when shell window loses focus to an application window
     onActiveChanged: {
@@ -109,6 +110,15 @@ Window {
             anchors.horizontalCenter: parent.horizontalCenter
             y: 60
             visible: typeof bridge !== "undefined" && (bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen)
+        }
+
+        // ── Notification Toast Overlay (Top Right below TopBar) ─────
+        NotificationToast {
+            id: notifToast
+            anchors.right: parent.right
+            anchors.rightMargin: 12
+            y: 40
+            visible: typeof bridge !== "undefined" && bridge.toastVisible
         }
     }
 }

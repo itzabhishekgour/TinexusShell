@@ -69,6 +69,24 @@ ShellBridge::ShellBridge(QObject* parent)
     updateClock();
     connect(&m_clockTimer, &QTimer::timeout, this, &ShellBridge::updateClock);
     m_clockTimer.start(1000);
+
+    m_toastTimer.setSingleShot(true);
+    connect(&m_toastTimer, &QTimer::timeout, this, &ShellBridge::dismissToast);
+
+    // Subscribe to notification signals from tinexus-notifications daemon
+    bool connected = QDBusConnection::sessionBus().connect(
+        QString(),
+        QStringLiteral("/org/freedesktop/Notifications"),
+        QStringLiteral("org.freedesktop.Notifications"),
+        QStringLiteral("NotificationAdded"),
+        this,
+        SLOT(onNotificationAdded(uint,QString,QString,QString,QString,int))
+    );
+    if (!connected) {
+        tinexus::log::warn("[Shell] Failed to connect to org.freedesktop.Notifications NotificationAdded signal");
+    } else {
+        tinexus::log::info("[Shell] Connected to org.freedesktop.Notifications NotificationAdded signal");
+    }
 }
 
 void ShellBridge::resolveLogoUrl() {
@@ -586,6 +604,48 @@ void ShellBridge::dismissNotification(int index) {
         m_notifications.removeAt(index);
         emit notificationsChanged();
     }
+}
+
+void ShellBridge::setToastVisible(bool visible) {
+    if (m_toastVisible != visible) {
+        m_toastVisible = visible;
+        if (!visible) {
+            m_toastTimer.stop();
+        }
+        emit toastVisibleChanged();
+    }
+}
+
+void ShellBridge::dismissToast() {
+    setToastVisible(false);
+}
+
+void ShellBridge::onNotificationAdded(uint id, const QString& appName, const QString& appIcon,
+                                     const QString& summary, const QString& body, int expireTimeout) {
+    tinexus::log::info("[Shell] Received NotificationAdded: id={}, app='{}', summary='{}'",
+                       id, appName.toStdString(), summary.toStdString());
+
+    QVariantMap item;
+    item[QStringLiteral("id")] = id;
+    item[QStringLiteral("title")] = summary.isEmpty() ? (appName.isEmpty() ? QStringLiteral("Notification") : appName) : summary;
+    item[QStringLiteral("message")] = body;
+    item[QStringLiteral("time")] = QStringLiteral("Just now");
+    item[QStringLiteral("appId")] = appName;
+    item[QStringLiteral("icon")] = appIcon.isEmpty() ? QStringLiteral("dialog-information-symbolic") : appIcon;
+
+    m_notifications.prepend(item);
+    emit notificationsChanged();
+
+    // Show popup toast
+    m_toastTitle = item[QStringLiteral("title")].toString();
+    m_toastMessage = body;
+    m_toastIcon = item[QStringLiteral("icon")].toString();
+    emit toastContentChanged();
+
+    setToastVisible(true);
+
+    int duration = (expireTimeout > 0) ? expireTimeout : 5000;
+    m_toastTimer.start(duration);
 }
 
 void ShellBridge::toggleMediaPlayback() {

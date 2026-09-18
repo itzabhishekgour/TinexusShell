@@ -177,6 +177,9 @@ int main(int argc, char* argv[]) {
             if (bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen()) {
                 mask += QRect(cx - 180, 60, 360, 190);
             }
+            if (bridge.toastVisible()) {
+                mask += QRect(w - 370, 38, 360, 72);
+            }
 
             window->setMask(mask);
             tinexus::log::debug("[shell] Applied compound input mask (rect count={})", mask.rectCount());
@@ -191,6 +194,10 @@ int main(int argc, char* argv[]) {
 
         // Re-apply whenever flyout state changes
         QObject::connect(&bridge, &tinexus::shell::ShellBridge::flyoutStateChanged,
+                         window, applyInputMask);
+
+        // Re-apply whenever toast visibility changes
+        QObject::connect(&bridge, &tinexus::shell::ShellBridge::toastVisibleChanged,
                          window, applyInputMask);
 
         // Re-apply if window width changes (e.g. dynamic output resize)

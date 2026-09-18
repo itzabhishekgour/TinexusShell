@@ -13,6 +13,7 @@ static const sd_bus_vtable notifications_vtable[] = {
     SD_BUS_METHOD("GetServerInformation", "", "ssss", DBusServer::method_get_server_information, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_SIGNAL("NotificationClosed", "uu", 0),
     SD_BUS_SIGNAL("ActionInvoked", "us", 0),
+    SD_BUS_SIGNAL("NotificationAdded", "ussssi", 0),
     SD_BUS_VTABLE_END
 };
 
@@ -154,6 +155,21 @@ int DBusServer::method_notify(sd_bus_message *m, void *, sd_bus_error *ret_error
         urgency,
         expire_timeout
     );
+
+    sd_bus* bus = DBusServer::instance().bus();
+    if (bus) {
+        sd_bus_emit_signal(bus,
+                           "/org/freedesktop/Notifications",
+                           "org.freedesktop.Notifications",
+                           "NotificationAdded",
+                           "ussssi",
+                           id,
+                           app_name ? app_name : "",
+                           app_icon ? app_icon : "",
+                           summary ? summary : "",
+                           body ? body : "",
+                           expire_timeout);
+    }
 
     return sd_bus_reply_method_return(m, "u", id);
 }

@@ -48,6 +48,12 @@ class ShellBridge : public QObject {
     Q_PROPERTY(QVariantList notifications READ notifications NOTIFY notificationsChanged)
     Q_PROPERTY(QVariantList applicationsList READ applicationsList NOTIFY applicationsListChanged)
 
+    // Dynamic Toast Notification Properties
+    Q_PROPERTY(bool toastVisible READ toastVisible WRITE setToastVisible NOTIFY toastVisibleChanged)
+    Q_PROPERTY(QString toastTitle READ toastTitle NOTIFY toastContentChanged)
+    Q_PROPERTY(QString toastMessage READ toastMessage NOTIFY toastContentChanged)
+    Q_PROPERTY(QString toastIcon READ toastIcon NOTIFY toastContentChanged)
+
 public:
     explicit ShellBridge(QObject* parent = nullptr);
     ~ShellBridge() override = default;
@@ -83,6 +89,11 @@ public:
     QVariantList notifications() const { return m_notifications; }
     QVariantList applicationsList() const { return m_applicationsList; }
 
+    bool toastVisible() const { return m_toastVisible; }
+    QString toastTitle() const { return m_toastTitle; }
+    QString toastMessage() const { return m_toastMessage; }
+    QString toastIcon() const { return m_toastIcon; }
+
     // Setters
     void setVolume(int vol);
     void setSoundMuted(bool muted);
@@ -90,6 +101,7 @@ public:
     void setActiveAppName(const QString& name);
     void syncAudioState();
 
+    void setToastVisible(bool visible);
     void setNotchExpanded(bool exp);
     void setLogoMenuOpen(bool open);
     void setAppMenuOpen(bool open);
@@ -110,6 +122,7 @@ public:
     Q_INVOKABLE void toggleBrightness();
     Q_INVOKABLE void clearNotifications();
     Q_INVOKABLE void dismissNotification(int index);
+    Q_INVOKABLE void dismissToast();
     Q_INVOKABLE void toggleMediaPlayback();
     Q_INVOKABLE void nextMediaTrack();
     Q_INVOKABLE void prevMediaTrack();
@@ -125,6 +138,10 @@ public:
     Q_INVOKABLE void powerShutdown();
     Q_INVOKABLE void powerSleep();
 
+public slots:
+    void onNotificationAdded(uint id, const QString& appName, const QString& appIcon,
+                            const QString& summary, const QString& body, int expireTimeout);
+
 signals:
     void timeChanged();
     void batteryChanged();
@@ -137,6 +154,8 @@ signals:
     void applicationsListChanged();
     void notchExpandedChanged();
     void mediaStateChanged();
+    void toastVisibleChanged();
+    void toastContentChanged();
 
 private slots:
     void updateClock();
@@ -172,6 +191,12 @@ private:
     bool    m_brightnessFlyoutOpen{false};
     bool    m_rebootConfirmationOpen{false};
     bool    m_shutdownConfirmationOpen{false};
+
+    bool    m_toastVisible{false};
+    QString m_toastTitle;
+    QString m_toastMessage;
+    QString m_toastIcon;
+    QTimer  m_toastTimer;
 
     QVariantList m_notifications;
     QVariantList m_applicationsList;
