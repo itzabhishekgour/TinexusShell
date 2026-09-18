@@ -10,6 +10,7 @@
 #include <guard/crypto_validator.hpp>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusVariant>
+#include <QtDBus/QDBusMessage>
 
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
@@ -306,6 +307,16 @@ void SettingsBridge::setSelectedWallpaperIndex(int index) {
 
         saveConfig();
         emit selectedWallpaperIndexChanged();
+
+        // 4. Command the wallpaper renderer directly via D-Bus for instant live cross-fade
+        QDBusMessage wallMsg = QDBusMessage::createMethodCall(
+            QStringLiteral("io.tinexus.Wallpaper"),
+            QStringLiteral("/io/tinexus/Wallpaper"),
+            QStringLiteral("io.tinexus.Wallpaper"),
+            QStringLiteral("SetWallpaper")
+        );
+        wallMsg << path << static_cast<uchar>(0) << false << static_cast<ushort>(500);
+        QDBusConnection::sessionBus().send(wallMsg);
 
         // Notify via io.tinexus.Settings.ConfigChanged for UI/client state binding
         if (m_settingsAdaptor) {

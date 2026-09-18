@@ -39,8 +39,6 @@ class SettingsBridge : public QObject {
     Q_PROPERTY(int wallpaperIndex READ selectedWallpaperIndex WRITE setSelectedWallpaperIndex NOTIFY selectedWallpaperIndexChanged)
     Q_PROPERTY(QVariantList wallpapers READ wallpapers NOTIFY wallpapersChanged)
 
-    Q_INVOKABLE void setWallpaperIndex(int index) { setSelectedWallpaperIndex(index); }
-
     // ── Network & Wi-Fi ───────────────────────────────────────────────────
     Q_PROPERTY(bool wifiEnabled READ wifiEnabled WRITE setWifiEnabled NOTIFY wifiEnabledChanged)
     Q_PROPERTY(bool isScanning READ isScanning NOTIFY isScanningChanged)
@@ -143,6 +141,7 @@ public slots:
     void setAccentIndex(int index);
     void setThemeMode(const QString& mode);
     void setSelectedWallpaperIndex(int index);
+    void setWallpaperIndex(int index) { setSelectedWallpaperIndex(index); }
 
     void setWifiEnabled(bool enabled);
     void triggerWifiScan();

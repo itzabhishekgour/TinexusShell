@@ -284,7 +284,7 @@ ScrollView {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
                                     if (typeof bridge !== "undefined") {
-                                        bridge.setWallpaperIndex(index);
+                                        bridge.setSelectedWallpaperIndex(index);
                                     }
                                 }
                             }
