@@ -183,6 +183,9 @@ int main(int argc, char* argv[]) {
     // Launch Search Daemon
     launch_component("searchd");
 
+    // Launch Settings Daemon (io.tinexus.Settings authoritative config daemon)
+    launch_component("settings");
+
     // Launch Universal PipeWire / WirePlumber Audio Daemons (if present)
     if (fs::exists("/usr/bin/pipewire")) {
         log::info("[Session] Starting PipeWire daemon...");
