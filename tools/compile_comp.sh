@@ -50,7 +50,6 @@ INCLUDES=(
   -I/workspace/src/comp
   -I/workspace/src/comp/server/include
   -I/workspace/src/comp/backend/include
-  -I/workspace/src/comp/renderer/include
   -I/workspace/src/comp/output/include
   -I/workspace/src/comp/cursor/include
   -I/workspace/src/comp/window/include
@@ -80,23 +79,12 @@ SRCS=(
   $COMP_SRC/backend/headless_backend.cpp
   $COMP_SRC/backend/wlroots_backend.cpp
   $COMP_SRC/backend/drm_backend.cpp
-  $COMP_SRC/renderer/renderer.cpp
-  $COMP_SRC/renderer/render_surface.cpp
-  $COMP_SRC/renderer/pixman_renderer.cpp
   $COMP_SRC/surface/surface_state.cpp
   $COMP_SRC/surface/configure_serial.cpp
   $COMP_SRC/surface/buffer_manager.cpp
   $COMP_SRC/surface/frame_callback.cpp
   $COMP_SRC/surface/resource_cleanup.cpp
-  $COMP_SRC/surface/xdg_shell_manager.cpp
-  $COMP_SRC/window/scene_node.cpp
-  $COMP_SRC/window/window_node.cpp
-  $COMP_SRC/window/xdg_toplevel_node.cpp
-  $COMP_SRC/window/scene_graph.cpp
   $COMP_SRC/window/decoration_manager.cpp
-  $COMP_SRC/window/window_manager.cpp
-  $COMP_SRC/window/MinimizeAnimation.cpp
-  $COMP_SRC/window/RestoreAnimation.cpp
   $COMP_SRC/input/keymap_engine.cpp
   $COMP_SRC/input/interaction_controller.cpp
   $COMP_SRC/input/seat_manager.cpp
@@ -119,15 +107,7 @@ SRCS=(
   $COMP_SRC/surface/exclusive_zone_calculator.cpp
   /workspace/build/protocols/org-kde-kwin-blur-protocol.c
   $COMP_SRC/server/protocol_dispatcher.cpp
-  $COMP_SRC/window/layer_manager.cpp
   $COMP_SRC/render/damage_tracker.cpp
-  $COMP_SRC/renderer/renderer_factory.cpp
-  $COMP_SRC/renderer/render_target.cpp
-  $COMP_SRC/renderer/gpu_resource_manager.cpp
-  $COMP_SRC/renderer/vulkan_renderer.cpp
-  $COMP_SRC/renderer/opengl_renderer.cpp
-  $COMP_SRC/renderer/blur_pass.cpp
-  $COMP_SRC/renderer/shadow_generator.cpp
 )
 
 MAX_JOBS=8
@@ -170,7 +150,7 @@ BUILD_START_TIME=$(date +%s)
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   "${OBJS[@]}" \
   -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
-  -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lxkbcommon -lpixman-1 -lpthread \
+  -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lxkbcommon -lpixman-1 -lsystemd -lpthread \
   -o /workspace/build/bin/tinexus-comp
 
 # Post-link assertions

@@ -32,6 +32,8 @@ tinexusctl
 tinexus-comp-inspector
 unit_test_*
 integration_test_*
+tools/test_x11_client
+tools/test_wayland_globals
 
 # IDE & Editor files
 .vscode/

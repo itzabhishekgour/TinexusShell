@@ -147,7 +147,7 @@ Version: ${VERSION}
 Section: x11
 Priority: required
 Architecture: amd64
-Depends: tinexus-core (= ${VERSION}), libwayland-server0, libxkbcommon0, libpixman-1-0, libinput10, libseat1, libegl-mesa0, libgbm1, libwlroots-0.19, libliftoff0, libxcb-errors0, libxcb-ewmh2, libxcb-icccm4
+Depends: tinexus-core (= ${VERSION}), libwayland-server0, libxkbcommon0, libpixman-1-0, libinput10, libseat1, libegl-mesa0, libgbm1, libwlroots-0.19, libliftoff0, libxcb-errors0, libxcb-ewmh2, libxcb-icccm4, xdg-desktop-portal-wlr, pipewire, grim, xwayland
 Maintainer: Tinexus Engineering Team <team@tinexus.org>
 Description: Tinexus Wayland Compositor (wlroots based)
  Provides tinexus-comp compositor, hardware probe tools, and early splash.
@@ -166,6 +166,13 @@ done
 
 if [ -f "$PROJECT_DIR/assets/logo/tinexus-logo.png" ]; then
     cp -L "$PROJECT_DIR/assets/logo/tinexus-logo.png" "$COMP_DIR/tinexus-logo.png"
+fi
+
+# Stage portal configuration for xdg-desktop-portal
+mkdir -p "$COMP_DIR/usr/share/xdg-desktop-portal"
+if [ -f "$PROJECT_DIR/assets/portals/tinexus-portals.conf" ]; then
+    cp -L "$PROJECT_DIR/assets/portals/tinexus-portals.conf" "$COMP_DIR/usr/share/xdg-desktop-portal/tinexus-portals.conf"
+    chmod 0644 "$COMP_DIR/usr/share/xdg-desktop-portal/tinexus-portals.conf"
 fi
 
 cat << 'EOF' > "$COMP_DIR/etc/udev/rules.d/99-tinexus-seat.rules"

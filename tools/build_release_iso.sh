@@ -277,6 +277,8 @@ EOF_POLICY
             parted e2fsprogs dosfstools squashfs-tools grub-efi-amd64-bin \
             calamares calamares-settings-ubuntu-common \
             linux-firmware \
+            xdg-desktop-portal xdg-desktop-portal-wlr \
+            pipewire wireplumber grim slurp xwayland \
             firefox || true
 
     # Attempt to install signed bootloader packages if available in repository
@@ -391,6 +393,13 @@ EOF_FFDESKTOP
                 /tmp/debs/tinexus-desktop_1.0.0_amd64.deb \
                 /tmp/debs/tinexus-apps_1.0.0_amd64.deb
     rm -rf "$ROOTFS_DIR/tmp/debs"
+
+    # Ensure xdg-desktop-portal configuration is in place
+    mkdir -p "$ROOTFS_DIR/usr/share/xdg-desktop-portal"
+    if [ -f "$PROJECT_DIR/assets/portals/tinexus-portals.conf" ]; then
+        cp -L "$PROJECT_DIR/assets/portals/tinexus-portals.conf" "$ROOTFS_DIR/usr/share/xdg-desktop-portal/tinexus-portals.conf"
+        chmod 0644 "$ROOTFS_DIR/usr/share/xdg-desktop-portal/tinexus-portals.conf"
+    fi
 
     # Run ldconfig to update shared library cache inside rootfs
     info "Running ldconfig inside rootfs chroot..."

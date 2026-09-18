@@ -16,7 +16,8 @@ enum class SurfaceRole : uint8_t {
     LayerSurface = 3,
     Subsurface = 4,
     Cursor = 5,
-    DragIcon = 6
+    DragIcon = 6,
+    XwaylandSurface = 7
 };
 
 inline const char* surface_role_to_string(SurfaceRole role) noexcept {
@@ -28,6 +29,7 @@ inline const char* surface_role_to_string(SurfaceRole role) noexcept {
         case SurfaceRole::Subsurface: return "Subsurface";
         case SurfaceRole::Cursor: return "Cursor";
         case SurfaceRole::DragIcon: return "DragIcon";
+        case SurfaceRole::XwaylandSurface: return "XwaylandSurface";
         default: return "Unknown";
     }
 }
