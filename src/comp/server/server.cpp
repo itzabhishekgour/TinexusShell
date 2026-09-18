@@ -1,5 +1,4 @@
 #include "comp/server/server.hpp"
-#include "comp/window/RestoreAnimation.hpp"
 #include "comp/backend/backend.hpp"
 #include "comp/output/output_manager.hpp"
 #include "comp/cursor/cursor_manager.hpp"
@@ -27,10 +26,7 @@
 
 #include "ipcd/protocol/header.hpp"
 #include "ipcd/protocol/dock_protocol.hpp"
-#include "comp/window/window_manager.hpp"
-#include "comp/window/MinimizeAnimation.hpp"
 #include "comp/focus/focus_manager.hpp"
-#include "comp/window/scene_graph.hpp"
 
 #include <wayland-server-core.h>
 
@@ -404,11 +400,6 @@ const std::string& TinexusServer::wayland_display() const noexcept {
     return m_display_socket;
 }
 
-[[maybe_unused]] static int s_icon_query_timeout_handler(void* data) {
-    auto* srv = static_cast<TinexusServer*>(data);
-    srv->check_icon_query_timeout();
-    return 0;
-}
 
 void TinexusServer::setup_ipc_connection() {
     m_ipc_socket = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -484,49 +475,10 @@ int TinexusServer::handle_ipc_fd(int fd, uint32_t mask, void* data) {
 
 void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, uint32_t payload_len) {
     using namespace tinexus::ipcd::protocol;
-    if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_ICON_POSITION) && payload_len >= sizeof(DockIconPositionPayload)) {
-        const auto* p = static_cast<const DockIconPositionPayload*>(payload);
-        if (!m_pending_icon_query.active || m_pending_icon_query.app_id != p->app_id) {
-            log::warn("[Comp] DOCK_ICON_POSITION stale or mismatch — discarded");
-            return;
-        }
-        m_pending_icon_query.active = false;
-        auto win = WindowManager::instance().find_window(m_pending_icon_query.surface_id);
-        if (win && win->animation_phase == AnimationPhase::None) {
-            win->dock_icon_x = p->x + p->w / 2;
-            win->dock_icon_y = p->y;
-            win->animation_phase = AnimationPhase::Minimizing;
-            win->active_dock_anim = std::make_unique<MinimizeAnimation>(win, 1.0f, 1.0f, win->saved_x, win->saved_y);
-            win->active_dock_anim->start();
-        }
-    }
-    else if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RESTORE_REQUEST) && payload_len >= sizeof(DockNotifyPayload)) {
+    if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RESTORE_REQUEST) && payload_len >= sizeof(DockNotifyPayload)) {
         const auto* p = static_cast<const DockNotifyPayload*>(payload);
         if (m_backend) {
             m_backend->restore_window_by_app_id(p->app_id);
-        }
-        auto win = WindowManager::instance().find_window(p->surface_id);
-        if (win) {
-            float start_opacity = 0.0f;
-            float start_scale = 0.1f;
-            int32_t start_x = win->dock_icon_x;
-            int32_t start_y = win->dock_icon_y;
-
-            if (win->animation_phase == AnimationPhase::Restoring) return; // Ignore duplicate
-            if (win->animation_phase == AnimationPhase::Minimizing) {
-                // Mid-flight reversal
-                start_opacity = win->opacity;
-                start_scale = win->scale;
-                start_x = win->x;
-                start_y = win->y;
-                win->active_dock_anim.reset();
-            }
-
-            win->animation_phase = AnimationPhase::Restoring;
-            win->active_dock_anim = std::make_unique<RestoreAnimation>(
-                win, start_opacity, start_scale, start_x, start_y
-            );
-            win->active_dock_anim->start();
         }
     }
     else if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RAISE_AND_FOCUS) && payload_len >= sizeof(DockNotifyPayload)) {
@@ -551,64 +503,6 @@ void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, 
             msg.pld.is_focused = 1;
             send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
         }
-    }
-}
-
-void TinexusServer::check_icon_query_timeout() {
-    if (!m_pending_icon_query.active) return;
-    
-    log::warn("[Comp] DOCK_QUERY_ICON_POSITION timed out — using bottom-center fallback");
-    m_pending_icon_query.active = false;
-    auto win = WindowManager::instance().find_window(m_pending_icon_query.surface_id);
-    if (win && win->animation_phase == AnimationPhase::None) {
-        // fallback: bottom-center of window geometry
-        int32_t fallback_x = win->saved_x + static_cast<int32_t>(win->width > 0 ? win->width / 2 : 400);
-        int32_t fallback_y = win->saved_y + static_cast<int32_t>(win->height > 0 ? win->height : 600);
-        win->dock_icon_x = fallback_x;
-        win->dock_icon_y = fallback_y;
-        win->animation_phase = AnimationPhase::Minimizing;
-        win->active_dock_anim = std::make_unique<MinimizeAnimation>(win, 1.0f, 1.0f, win->saved_x, win->saved_y);
-        win->active_dock_anim->start();
-    }
-}
-
-void TinexusServer::trigger_minimize(uint64_t surface_id) {
-    auto win = WindowManager::instance().find_window(surface_id);
-    if (!win) return;
-
-    if (win->animation_phase == AnimationPhase::Minimizing) return;
-    if (win->animation_phase == AnimationPhase::Restoring) {
-        // Reverse mid-flight -> Minimize
-        win->active_dock_anim.reset();
-        win->animation_phase = AnimationPhase::Minimizing;
-        // Bypass IPC query, use cached icon position
-        win->active_dock_anim = std::make_unique<MinimizeAnimation>(
-            win, win->opacity, win->scale, win->x, win->y
-        );
-        win->active_dock_anim->start();
-        return;
-    }
-
-    // Fresh minimize
-    m_pending_icon_query.active = true;
-    m_pending_icon_query.surface_id = surface_id;
-    m_pending_icon_query.app_id = win->toplevel.app_id();
-    m_pending_icon_query.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-
-    if (m_ipc_socket < 0) {
-        setup_ipc_connection();
-    }
-    if (m_ipc_socket >= 0) {
-        struct {
-            tinexus::ipcd::protocol::Header hdr;
-            tinexus::ipcd::protocol::DockQueryIconPositionPayload pld;
-        } __attribute__((packed)) msg;
-        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
-        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
-        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION);
-        msg.hdr.payload_len = sizeof(msg.pld);
-        strncpy(msg.pld.app_id, win->toplevel.app_id().c_str(), sizeof(msg.pld.app_id) - 1);
-        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
 }
 

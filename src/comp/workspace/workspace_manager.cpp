@@ -1,5 +1,4 @@
 #include "comp/workspace/workspace_manager.hpp"
-#include "comp/window/window_manager.hpp"
 #include "comp/output/output_manager.hpp"
 #include "common/logger.hpp"
 #include <algorithm>
@@ -325,87 +324,6 @@ Workspace* WorkspaceManager::get_workspace(uint32_t workspace_id) noexcept {
 bool WorkspaceManager::toggle_overview() {
     m_overview_active = !m_overview_active;
     log::info("WorkspaceManager: Mission Control (Overview Mode) toggled: {}", m_overview_active ? "ON" : "OFF");
-
-    auto& win_mgr = WindowManager::instance();
-
-    if (m_overview_active) {
-        // Save current geometries of windows in the active workspace and arrange in a grid
-        m_saved_geometries.clear();
-        
-        const Workspace* active_ws = get_workspace(m_active_id);
-        if (!active_ws || active_ws->window_ids.empty()) return true;
-
-        const auto& win_ids = active_ws->window_ids;
-        size_t count = win_ids.size();
-
-        // Save original geometry first
-        for (uint64_t win_id : win_ids) {
-            auto info_opt = win_mgr.get_window(win_id);
-            if (info_opt) {
-                m_saved_geometries[win_id] = SavedGeometry{
-                    info_opt->x, info_opt->y, info_opt->width, info_opt->height
-                };
-            }
-        }
-
-        // Layout grid math: query active output dynamically
-        int32_t screen_w = 0;
-        int32_t screen_h = 0;
-        auto active_outputs = OutputManager::instance().get_active_outputs();
-        if (!active_outputs.empty()) {
-            screen_w = active_outputs[0].width;
-            screen_h = active_outputs[0].height;
-        }
-        if (screen_w <= 0 || screen_h <= 0) {
-            // Fallback to active window manager bounds
-            screen_w = 1280;
-            screen_h = 720;
-        }
-        int32_t pad_x = std::max<int32_t>(20, screen_w / 20);
-        int32_t pad_y = std::max<int32_t>(20, screen_h / 20);
-        int32_t usable_w = screen_w - 2 * pad_x;
-        int32_t usable_h = screen_h - 2 * pad_y;
-
-        size_t cols = 1;
-        size_t rows = 1;
-        if (count == 2) {
-            cols = 2; rows = 1;
-        } else if (count <= 4) {
-            cols = 2; rows = 2;
-        } else {
-            cols = 3; rows = static_cast<size_t>(std::ceil(static_cast<double>(count) / 3.0));
-        }
-
-        int32_t cell_w = usable_w / static_cast<int32_t>(cols);
-        int32_t cell_h = usable_h / static_cast<int32_t>(rows);
-
-        // Gap/Margin between windows: 20px
-        int32_t gap = 20;
-
-        for (size_t i = 0; i < count; ++i) {
-            uint64_t win_id = win_ids[i];
-            size_t r = i / cols;
-            size_t c = i % cols;
-
-            int32_t x = pad_x + static_cast<int32_t>(c) * cell_w + gap;
-            int32_t y = pad_y + static_cast<int32_t>(r) * cell_h + gap;
-            int32_t w = cell_w - 2 * gap;
-            int32_t h = cell_h - 2 * gap;
-
-            win_mgr.set_geometry(win_id, x, y, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-            log::info("WorkspaceManager: Mission Control positioned Window #{} at ({},{}) size {}x{}",
-                      win_id, x, y, w, h);
-        }
-    } else {
-        // Restore all geometries
-        for (const auto& [win_id, geom] : m_saved_geometries) {
-            win_mgr.set_geometry(win_id, geom.x, geom.y, geom.width, geom.height);
-            log::info("WorkspaceManager: Mission Control restored Window #{} to ({},{}) size {}x{}",
-                      win_id, geom.x, geom.y, geom.width, geom.height);
-        }
-        m_saved_geometries.clear();
-    }
-
     return true;
 }
 

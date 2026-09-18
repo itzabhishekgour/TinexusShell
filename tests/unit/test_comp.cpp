@@ -2,7 +2,6 @@
 #include <cassert>
 #include "common/logger.hpp"
 #include "comp/workspace/workspace_manager.hpp"
-#include "comp/window/window_manager.hpp"
 #include "comp/focus/focus_manager.hpp"
 #include "comp/shell/shell_state.hpp"
 #include "comp/render/frame_scheduler.hpp"
@@ -123,22 +122,16 @@ void test_workspace_gestures() {
 }
 
 void test_window_focus_manager() {
-    auto& win_mgr = tinexus::comp::WindowManager::instance();
     auto& focus_mgr = tinexus::comp::FocusManager::instance();
 
-    uint64_t w1 = win_mgr.register_window(1234, "org.mozilla.firefox", "Firefox Web Browser");
-    assert(w1 > 0);
-    assert(focus_mgr.current_surface_id() == w1);
+    focus_mgr.set_focus(tinexus::comp::FocusTargetType::Window, 1234, "org.mozilla.firefox");
+    assert(focus_mgr.current_surface_id() == 1234);
     assert(focus_mgr.current_target_id() == "org.mozilla.firefox");
+    assert(focus_mgr.current_focus_type() == tinexus::comp::FocusTargetType::Window);
 
-    win_mgr.set_geometry(w1, 0, 0, 1024, 768);
-    auto info = win_mgr.get_window(w1);
-    assert(info.has_value());
-    assert(info->width == 1024);
-    assert(info->height == 768);
-
-    win_mgr.unregister_window(w1);
-    assert(!win_mgr.get_window(w1).has_value());
+    focus_mgr.set_focus(tinexus::comp::FocusTargetType::Launcher, 0, "tinexus-launcher");
+    assert(focus_mgr.current_focus_type() == tinexus::comp::FocusTargetType::Launcher);
+    assert(focus_mgr.current_target_id() == "tinexus-launcher");
 
     std::cout << "[PASS] test_window_focus_manager\n";
 }

@@ -35,7 +35,7 @@ If a user asks you to do something that violates the documented design, you expl
 | **Language** | C++20 (primary), QML (UI layer only) |
 | **Build System** | CMake 3.28+ with CMakePresets.json |
 | **UI Framework** | Qt6 (Qt Quick / QML / Qt RHI) |
-| **Compositor** | wlroots + Vulkan (MANDATORY) |
+| **Compositor** | wlroots (hardware auto-detect GLES2/Vulkan/Pixman via `wlr_renderer_autocreate`) |
 | **IPC** | `tinexus-ipcd` (broker) + D-Bus (`io.tinexus.shell.*`) + Unix Sockets + Shared Memory |
 | **Supervisor** | `tinexus-serviced` (Platform Supervision Tree) |
 | **Search Daemon** | `tinexus-searchd` (Independent Search Engine + Ranking Pipeline) |
@@ -108,6 +108,9 @@ These are non-negotiable. Violating them is a blocking error.
 ❌ NEVER write separate 'demo' or 'test' UI classes (Rule #3: Production API exclusivity — examples use WaylandWindow)
 ❌ NEVER advance to a new slice without passing engineering gates (Rule #4: Every slice removes risk, not just adds features)
 ```
+
+> **Policy Correction (Compositor Rendering)**: Compositor display rendering is delegated directly to wlroots via `wlr_renderer_autocreate(m_wlr_backend)` and committed via `wlr_scene_output_commit(scene_output, nullptr)`. Standalone fake renderer stubs (`VulkanRenderer`, `OpenGLRenderer`, `PixmanRenderer`) were removed. Real hardware acceleration (Vulkan/GLES2) is managed natively by wlroots and Mesa.
+
 
 ### 3.2 Architecture Rules
 

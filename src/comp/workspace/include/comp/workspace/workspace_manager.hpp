@@ -67,17 +67,9 @@ public:
     [[nodiscard]] bool is_overview_active() const noexcept { return m_overview_active; }
 
 private:
-    struct SavedGeometry {
-        int32_t x;
-        int32_t y;
-        uint32_t width;
-        uint32_t height;
-    };
-
     std::vector<Workspace> m_workspaces;
     uint32_t m_active_id{1};
     std::unordered_map<uint64_t, uint32_t> m_window_to_workspace;
-    std::unordered_map<uint64_t, SavedGeometry> m_saved_geometries;
     bool m_overview_active{false};
 
     // Spaces horizontal slide spring physics

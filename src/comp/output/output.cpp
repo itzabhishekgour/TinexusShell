@@ -2,7 +2,6 @@
 #include "comp/output/output.hpp"
 #include "comp/output/output_manager.hpp"
 #include "comp/render/frame_scheduler.hpp"
-#include "comp/window/window_manager.hpp"
 #include "comp/workspace/workspace_manager.hpp"
 #include "common/RuntimePaths.hpp"
 #include "common/logger.hpp"
@@ -59,7 +58,8 @@ bool TinexusOutput::initialize() {
             mode->width, mode->height, mode->refresh, m_output->name);
         wlr_output_state_set_mode(&state, mode);
     } else {
-        log::info("OutputManager: No preferred mode for '{}'. Output might be custom.", m_output->name);
+        log::info("OutputManager: No preferred mode for '{}'. Setting custom mode 1280x720@60Hz.", m_output->name);
+        wlr_output_state_set_custom_mode(&state, 1280, 720, 60000);
     }
 
     wlr_output_state_set_enabled(&state, true);
@@ -164,7 +164,6 @@ void TinexusOutput::frame() {
     }
 
     bool has_anims = AnimationManager::instance().has_active_animations() ||
-                     WindowManager::instance().has_active_animations() ||
                      WorkspaceManager::instance().has_active_animation();
     if (!has_anims && !wlr_scene_output_needs_frame(scene_output)) {
         return;
@@ -179,9 +178,6 @@ void TinexusOutput::frame() {
         if (dt > 0.0) {
             if (AnimationManager::instance().has_active_animations()) {
                 AnimationManager::instance().tick(dt);
-            }
-            if (WindowManager::instance().has_active_animations()) {
-                WindowManager::instance().tick_animations(dt);
             }
             if (WorkspaceManager::instance().has_active_animation()) {
                 WorkspaceManager::instance().tick_animation(dt);
@@ -203,7 +199,6 @@ void TinexusOutput::frame() {
     wlr_scene_output_send_frame_done(scene_output, &now);
 
     if (AnimationManager::instance().has_active_animations() ||
-        WindowManager::instance().has_active_animations() ||
         WorkspaceManager::instance().has_active_animation()) {
         wlr_output_schedule_frame(m_output);
     }
