@@ -86,6 +86,8 @@ bool ToplevelTracker::init(struct wl_display* display) {
 }
 
 void ToplevelTracker::shutdown() {
+    const bool hadConnection = (m_display != nullptr || m_manager != nullptr);
+
     if (m_socketNotifier) {
         m_socketNotifier->setEnabled(false);
         m_socketNotifier.reset();
@@ -118,6 +120,10 @@ void ToplevelTracker::shutdown() {
         wl_display_disconnect(m_display);
         m_display = nullptr;
     }
+
+    if (hadConnection) {
+        emit managerFinished();
+    }
 }
 
 void ToplevelTracker::setupSocketNotifier() {
@@ -147,7 +153,7 @@ void ToplevelTracker::onWaylandSocketReadable() {
 
 // ── Window Actions ───────────────────────────────────────────────────────────
 void ToplevelTracker::activateWindow(struct zwlr_foreign_toplevel_handle_v1* handle, struct wl_seat* seat) {
-    if (!handle) return;
+    if (!handle || !m_manager || !m_display) return;
     struct wl_seat* targetSeat = seat ? seat : m_seat;
     if (!targetSeat) {
         tinexus::log::warn("[ToplevelTracker] activateWindow requested with no wl_seat available");
@@ -158,7 +164,7 @@ void ToplevelTracker::activateWindow(struct zwlr_foreign_toplevel_handle_v1* han
 }
 
 void ToplevelTracker::setMinimized(struct zwlr_foreign_toplevel_handle_v1* handle, bool minimized) {
-    if (!handle) return;
+    if (!handle || !m_manager || !m_display) return;
     if (minimized) {
         zwlr_foreign_toplevel_handle_v1_set_minimized(handle);
     } else {
@@ -168,7 +174,7 @@ void ToplevelTracker::setMinimized(struct zwlr_foreign_toplevel_handle_v1* handl
 }
 
 void ToplevelTracker::setMaximized(struct zwlr_foreign_toplevel_handle_v1* handle, bool maximized) {
-    if (!handle) return;
+    if (!handle || !m_manager || !m_display) return;
     if (maximized) {
         zwlr_foreign_toplevel_handle_v1_set_maximized(handle);
     } else {
@@ -178,7 +184,7 @@ void ToplevelTracker::setMaximized(struct zwlr_foreign_toplevel_handle_v1* handl
 }
 
 void ToplevelTracker::closeWindow(struct zwlr_foreign_toplevel_handle_v1* handle) {
-    if (!handle) return;
+    if (!handle || !m_manager || !m_display) return;
     zwlr_foreign_toplevel_handle_v1_close(handle);
     if (m_display) wl_display_flush(m_display);
 }
@@ -259,12 +265,16 @@ void ToplevelTracker::handleToplevelAppId(void* data, struct zwlr_foreign_toplev
     it.value().pending.appId = app_id ? QString::fromUtf8(app_id) : QString();
 }
 
-void ToplevelTracker::handleToplevelOutputEnter(void*, struct zwlr_foreign_toplevel_handle_v1*, struct wl_output*) {
-    // Reserved for multi-monitor dock output affinity
+void ToplevelTracker::handleToplevelOutputEnter(void* data, struct zwlr_foreign_toplevel_handle_v1* handle, struct wl_output* output) {
+    if (!data || !handle || !output) return;
+    tinexus::log::info("[ToplevelTracker] Toplevel handle {:p} entered output {:p}",
+                       static_cast<void*>(handle), static_cast<void*>(output));
 }
 
-void ToplevelTracker::handleToplevelOutputLeave(void*, struct zwlr_foreign_toplevel_handle_v1*, struct wl_output*) {
-    // Reserved for multi-monitor dock output affinity
+void ToplevelTracker::handleToplevelOutputLeave(void* data, struct zwlr_foreign_toplevel_handle_v1* handle, struct wl_output* output) {
+    if (!data || !handle || !output) return;
+    tinexus::log::info("[ToplevelTracker] Toplevel handle {:p} left output {:p}",
+                       static_cast<void*>(handle), static_cast<void*>(output));
 }
 
 void ToplevelTracker::handleToplevelState(void* data, struct zwlr_foreign_toplevel_handle_v1* handle,

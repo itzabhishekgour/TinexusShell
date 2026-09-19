@@ -126,6 +126,10 @@ public:
     void onToplevelRemoved(const QString& appId);
     void onFocusChanged(const QString& focusedAppId);
     void setBadgeCount(const QString& appId, uint32_t count);
+    void setNeedsAttention(const QString& appId, bool attention);
+
+    [[nodiscard]] bool autoHideEnabled() const { return m_autoHide; }
+    void setAutoHideEnabled(bool enabled);
 
     // Direct access for DockBridge animation layer
     [[nodiscard]] const QList<DockItemData>& pinnedItems() const { return m_pinned; }
@@ -143,8 +147,8 @@ public slots:
     void moveItem(int fromDisplayIndex, int toDisplayIndex);
     void commitMove();
 
-    /// Pin / Unpin management (Slice 3: Context Menu)
-    void pinApp(const QString& appId);
+    /// Pin / Unpin management (Slice 3: Context Menu & D-Bus)
+    void pinApp(const QString& appId, const QString& displayName = {}, const QString& execCmd = {}, const QString& iconType = {});
     void unpinApp(const QString& appId);
     void toggleKeepInDock(const QString& appId);
     void removeFromDock(const QString& appId);
@@ -155,12 +159,17 @@ public slots:
     void closeApp(const QString& appId);
     void activateToplevel(struct zwlr_foreign_toplevel_handle_v1* handle);
 
+    /// Compositor crash/disconnect handler (Slice 2 recovery)
+    void clearAllToplevels();
+
 signals:
     void itemActivationRequested(const QString& appId);
     void dockItemsChanged();
 
 private:
     void loadHardcodedPinnedItems();
+    void loadPinnedFromConfig();
+    void savePinnedToConfig();
     void appendSeparatorAndStacks();
     void rebuildMergedView();
 
@@ -183,6 +192,7 @@ private:
     QList<DockItemData> m_merged;
 
     ToplevelTracker* m_tracker{nullptr};
+    bool m_autoHide{false};
 };
 
 } // namespace tinexus::dock

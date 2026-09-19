@@ -29,32 +29,56 @@ Window {
             bridge.updateLayout(width)
             bridge.updateScreenGeometry(width, Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight : 1080)
         }
+        syncInputRegion()
+        if (rootWindow.autoHide && !rootWindow.mouseInDock) {
+            hideDebounceTimer.restart()
+        }
     }
 
     // ── Design constants ────────────────────────────────────────────────────
     QtObject {
         id: dockConstants
         readonly property real baseSize:       typeof bridge !== "undefined" ? bridge.baseSize : 48.0
-        readonly property real gap:            typeof bridge !== "undefined" ? bridge.gap      : 10.0
-        readonly property real dockPad:        typeof bridge !== "undefined" ? bridge.dockPad  : 10.0
+        readonly property real gap:            typeof bridge !== "undefined" ? bridge.gap      : 14.0
+        readonly property real dockPad:        typeof bridge !== "undefined" ? bridge.dockPad  : 16.0
         readonly property real botMargin:      typeof bridge !== "undefined" ? bridge.dockBotMargin : 8.0
-        readonly property real pillRadius:     20.0
-        readonly property real iconRadius:     11.0
-        readonly property real pillHeight:     baseSize + dockPad * 2.0          // 68px
-        readonly property real windowHeight:   pillHeight + baseSize * 0.68 + 40 // headroom for fisheye
+        readonly property real pillRadius:     22.0
+        readonly property real iconRadius:     11.5
+        readonly property real pillHeight:     typeof bridge !== "undefined" ? bridge.pillHeight : 68.0
+        readonly property real windowHeight:   pillHeight + baseSize * 0.85 + 50 // generous headroom for fisheye & floating tooltip
         readonly property real separatorWidth: 1.0
         readonly property real separatorHeight: baseSize * 0.55
     }
 
     // ── Mouse tracking (single MouseArea drives ALL fisheye) ─────────────────
-    property real globalMouseX: -1.0
+    property real globalMouseX: (typeof bridge !== "undefined" && bridge.hoveredIndex >= 0 && bridge.hoveredIndex < bridge.icons.length) ? bridge.icons[bridge.hoveredIndex].centerX : -1.0
     property real globalMouseY: -1.0
-    property bool mouseInDock:  false
+    property bool mouseInDock:  (typeof bridge !== "undefined" && bridge.hoveredIndex >= 0)
 
     // Derived pill geometry from bridge
     readonly property real pillWidth: typeof bridge !== "undefined" ? bridge.pillWidth : 380.0
     readonly property real pillX:     (width - pillWidth) / 2.0
     readonly property real pillY:     height - dockConstants.pillHeight - dockConstants.botMargin
+
+    // Synchronize native Wayland input region mask to the pill geometry
+    function syncInputRegion() {
+        if (typeof dockWindow === "undefined" || !dockWindow) return;
+        if (rootWindow.autoHideState === "HIDDEN") {
+            dockWindow.updateInputRegion(0, 0, 0, 0);
+        } else {
+            const rx = Math.max(0, Math.floor(rootWindow.pillX - 10));
+            const ry = Math.max(0, Math.floor(rootWindow.pillY - dockConstants.baseSize * 0.85 - 25));
+            const rw = Math.ceil(rootWindow.pillWidth + 20);
+            const rh = Math.ceil(rootWindow.height - ry);
+            dockWindow.updateInputRegion(rx, ry, rw, rh);
+        }
+    }
+
+    onPillWidthChanged: syncInputRegion()
+    onPillXChanged: syncInputRegion()
+    onPillYChanged: syncInputRegion()
+    onAutoHideStateChanged: syncInputRegion()
+    onHeightChanged: syncInputRegion()
 
     // ── Auto-Hide State Machine ─────────────────────────────────────────────
     readonly property bool autoHide: typeof bridge !== "undefined" ? bridge.autoHideEnabled : false
@@ -84,6 +108,7 @@ Window {
         }
     }
 
+
     // React to C++ bridge commands (e.g. edge tripwire contact)
     Connections {
         target: typeof bridge !== "undefined" ? bridge : null
@@ -100,6 +125,11 @@ Window {
             if (!enabled) {
                 hideDebounceTimer.stop()
                 rootWindow.autoHideState = "VISIBLE"
+                if (typeof bridge !== "undefined") bridge.setAutoHideState(0)
+            } else {
+                if (!rootWindow.mouseInDock) {
+                    hideDebounceTimer.restart()
+                }
             }
         }
     }
@@ -110,24 +140,33 @@ Window {
         anchors.fill: parent
 
         // ────────────────────────────────────────────────────────────────────
-        // 1. Single Global MouseArea — tracks pointer across entire dock
+        // 1. Single Scoped MouseArea — tracks pointer ONLY within pill active zone
         // ────────────────────────────────────────────────────────────────────
         MouseArea {
             id: globalHoverArea
-            anchors.fill: parent
+            x: Math.max(0, rootWindow.pillX - 10)
+            y: Math.max(0, rootWindow.pillY - dockConstants.baseSize * 0.85 - 25)
+            width: rootWindow.pillWidth + 20
+            height: rootWindow.height - y
             hoverEnabled: true
             acceptedButtons: Qt.NoButton
 
+            onEntered: {
+                rootWindow.mouseInDock = true
+                hideDebounceTimer.stop()
+                if (rootWindow.autoHide && (rootWindow.autoHideState === "HIDDEN" || rootWindow.autoHideState === "PEAKING")) {
+                    rootWindow.autoHideState = "VISIBLE"
+                    if (typeof bridge !== "undefined") bridge.setAutoHideState(0)
+                }
+            }
+
             onPositionChanged: function(mouse) {
-                rootWindow.globalMouseX = mouse.x
-                rootWindow.globalMouseY = mouse.y
-
-                const inPillBounds = (mouse.x >= rootWindow.pillX - 20 &&
-                                      mouse.x <= rootWindow.pillX + rootWindow.pillWidth + 20 &&
-                                      mouse.y >= rootWindow.pillY - 30 &&
-                                      mouse.y <= rootWindow.height)
-
-                rootWindow.mouseInDock = inPillBounds
+                // Map local coordinate to window coordinate
+                const winX = x + mouse.x
+                const winY = y + mouse.y
+                rootWindow.globalMouseX = winX
+                rootWindow.globalMouseY = winY
+                rootWindow.mouseInDock = true
 
                 // Cancel hide debounce if pointer is active in dock
                 hideDebounceTimer.stop()
@@ -138,7 +177,7 @@ Window {
                     if (typeof bridge !== "undefined") bridge.setAutoHideState(0)
                 }
 
-                if (typeof bridge !== "undefined") bridge.handleHover(mouse.x)
+                if (typeof bridge !== "undefined") bridge.handleHover(winX)
             }
 
             onExited: {
@@ -210,22 +249,60 @@ Window {
                 }
             ]
 
-            // ── Drop Shadows ────────────────────────────────────────────────
-            Rectangle {
-                x:      rootWindow.pillX - 6
-                y:      rootWindow.pillY + 14
-                width:  rootWindow.pillWidth + 12
+            // ── Soft Progressive Gaussian Drop Shadow (5 Layers) ───────────
+            Item {
+                id: pillShadow
+                x:      rootWindow.pillX
+                y:      rootWindow.pillY
+                width:  rootWindow.pillWidth
                 height: dockConstants.pillHeight
-                radius: dockConstants.pillRadius + 2
-                color:  Qt.rgba(0, 0, 0, 0.26)
-            }
-            Rectangle {
-                x:      rootWindow.pillX - 3
-                y:      rootWindow.pillY + 7
-                width:  rootWindow.pillWidth + 6
-                height: dockConstants.pillHeight
-                radius: dockConstants.pillRadius + 1
-                color:  Qt.rgba(0, 0, 0, 0.16)
+                z: -1
+
+                // Layer 1: Ambient deep core shadow
+                Rectangle {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 3
+                    width:  parent.width + 4
+                    height: parent.height + 2
+                    radius: dockConstants.pillRadius + 1
+                    color:  Qt.rgba(0, 0, 0, 0.18)
+                }
+                // Layer 2: Near shadow
+                Rectangle {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 6
+                    width:  parent.width + 10
+                    height: parent.height + 4
+                    radius: dockConstants.pillRadius + 3
+                    color:  Qt.rgba(0, 0, 0, 0.12)
+                }
+                // Layer 3: Mid penumbra
+                Rectangle {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 10
+                    width:  parent.width + 18
+                    height: parent.height + 6
+                    radius: dockConstants.pillRadius + 6
+                    color:  Qt.rgba(0, 0, 0, 0.08)
+                }
+                // Layer 4: Far soft shadow
+                Rectangle {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 15
+                    width:  parent.width + 28
+                    height: parent.height + 8
+                    radius: dockConstants.pillRadius + 10
+                    color:  Qt.rgba(0, 0, 0, 0.045)
+                }
+                // Layer 5: Outer ambient dispersion
+                Rectangle {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 22
+                    width:  parent.width + 42
+                    height: parent.height + 12
+                    radius: dockConstants.pillRadius + 14
+                    color:  Qt.rgba(0, 0, 0, 0.02)
+                }
             }
 
             // ── LiquidGlass Pill Body ───────────────────────────────────────
@@ -238,41 +315,61 @@ Window {
                 radius: dockConstants.pillRadius
                 clip:   false
 
-                // Frosted dark glass base
+                // Frosted translucent glass base (translucent for desktop backdrop visibility)
                 gradient: Gradient {
                     orientation: Gradient.Vertical
-                    GradientStop { position: 0.0;  color: Qt.rgba(0.085, 0.090, 0.140, 0.88) }
-                    GradientStop { position: 0.45; color: Qt.rgba(0.065, 0.068, 0.110, 0.90) }
-                    GradientStop { position: 1.0;  color: Qt.rgba(0.040, 0.042, 0.075, 0.94) }
+                    GradientStop { position: 0.0;  color: Qt.rgba(0.120, 0.135, 0.220, 0.62) }
+                    GradientStop { position: 0.45; color: Qt.rgba(0.080, 0.090, 0.160, 0.68) }
+                    GradientStop { position: 1.0;  color: Qt.rgba(0.045, 0.050, 0.100, 0.76) }
                 }
 
                 // Outer glass border
-                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.18)
+                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.24)
                 border.width: 1
+
+                // Right-click on pill background invokes dock-level options
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.RightButton
+                    onClicked: function(mouse) {
+                        if (typeof bridge !== "undefined") {
+                            bridge.requestContextMenu(-1, "__dock__", pillBody.x + mouse.x, rootWindow.height - dockConstants.botMargin)
+                        }
+                    }
+                }
             }
 
-            // Top specular highlight (11% shimmer)
+            // ── 1px Top-Edge Highlight (glossy macOS-style rim light) ───────
+            Rectangle {
+                x:      rootWindow.pillX + dockConstants.pillRadius
+                y:      rootWindow.pillY + 1
+                width:  rootWindow.pillWidth - 2 * dockConstants.pillRadius
+                height: 1
+                color:  Qt.rgba(1.0, 1.0, 1.0, 0.45)
+                z: 2
+            }
+
+            // Top specular highlight (16% shimmer)
             Rectangle {
                 x:      rootWindow.pillX + 1
                 y:      rootWindow.pillY + 1
                 width:  rootWindow.pillWidth - 2
-                height: dockConstants.pillHeight * 0.40
+                height: dockConstants.pillHeight * 0.42
                 radius: dockConstants.pillRadius - 1
                 gradient: Gradient {
                     orientation: Gradient.Vertical
-                    GradientStop { position: 0.0; color: Qt.rgba(1.0, 1.0, 1.0, 0.11) }
+                    GradientStop { position: 0.0; color: Qt.rgba(1.0, 1.0, 1.0, 0.16) }
                     GradientStop { position: 1.0; color: Qt.rgba(1.0, 1.0, 1.0, 0.00) }
                 }
             }
 
             // Inner bottom edge glow
             Rectangle {
-                x:      rootWindow.pillX + 2
-                y:      rootWindow.pillY + dockConstants.pillHeight - 3
-                width:  rootWindow.pillWidth - 4
-                height: 3
-                radius: 2
-                color:  Qt.rgba(1.0, 1.0, 1.0, 0.06)
+                x:      rootWindow.pillX + dockConstants.pillRadius
+                y:      rootWindow.pillY + dockConstants.pillHeight - 2
+                width:  rootWindow.pillWidth - 2 * dockConstants.pillRadius
+                height: 1
+                color:  Qt.rgba(1.0, 1.0, 1.0, 0.08)
             }
 
             // ────────────────────────────────────────────────────────────────
@@ -302,9 +399,9 @@ Window {
 
                     // Geometry
                     readonly property real baseSize: dockConstants.baseSize
+                    baseIconSize: dockConstants.baseSize
                     readonly property real iconSize: baseSize * scaleFactor
-                    readonly property real iconBaseY: rootWindow.pillY + dockConstants.pillHeight
-                                                     - dockConstants.dockPad - baseSize
+                    readonly property real iconBaseY: rootWindow.pillY + 7.0
                     readonly property real liftY: iconBaseY - (iconSize - baseSize) - (bounceOff * 40.0)
 
                     visible: true
@@ -339,7 +436,8 @@ Window {
                     isHovered:     typeof bridge !== "undefined" && bridge.hoveredIndex === index && !rootWindow.isDraggingIcon
                     badgeCount:    md.badgeCount !== undefined ? md.badgeCount : 0
                     isRunning:     md.isRunning !== undefined ? md.isRunning : (md.appState > 0)
-                    isActive:      md.isActive !== undefined ? md.isActive : (md.appState === 1 || md.appState === 2)
+                    isActive:      md.isActive !== undefined ? md.isActive : (md.appState === 1)
+                    needsAttention: md.needsAttention !== undefined ? md.needsAttention : false
                     toplevelCount: md.toplevelCount !== undefined ? md.toplevelCount : (md.appState > 0 ? 1 : 0)
                     isDropTarget:  md.isDropTarget !== undefined ? md.isDropTarget : (typeof bridge !== "undefined" && bridge.dropTargetIndex === index)
 
@@ -437,22 +535,38 @@ Window {
                                                    && bridge.icons[bridge.hoveredIndex].iconType !== "separator"
                                                    && rootWindow.mouseInDock
                                                    && rootWindow.autoHideState === "VISIBLE"
+                                                   && !rootWindow.isDraggingIcon
 
-                readonly property var  hovered:     shouldShow ? bridge.icons[bridge.hoveredIndex] : null
-                readonly property string tipText:   hovered ? hovered.label : ""
-                readonly property real  tipCenterX: hovered ? hovered.centerX : 0.0
-                readonly property real  iconTopY:   hovered
-                    ? (rootWindow.pillY + dockConstants.pillHeight
-                       - dockConstants.dockPad
-                       - dockConstants.baseSize * hovered.scale)
-                    : 0.0
+                readonly property var    activeItem: shouldShow && iconRepeater.count > bridge.hoveredIndex ? iconRepeater.itemAt(bridge.hoveredIndex) : null
+                readonly property string tipText:    shouldShow && bridge.icons[bridge.hoveredIndex] ? bridge.icons[bridge.hoveredIndex].label : ""
+                readonly property real   tipCenterX: (bridge.icons[bridge.hoveredIndex] && bridge.icons[bridge.hoveredIndex].centerX !== undefined)
+                                                     ? bridge.icons[bridge.hoveredIndex].centerX
+                                                     : (activeItem ? (activeItem.x + activeItem.width / 2.0) : 0.0)
+
+                // Accurate visual top of the active squircle
+                readonly property real   iconTopY: {
+                    if (typeof bridge === "undefined" || bridge.hoveredIndex < 0 || !bridge.icons[bridge.hoveredIndex]) {
+                        return rootWindow.pillY + 7.0
+                    }
+                    const iconData = bridge.icons[bridge.hoveredIndex]
+                    const curScale = (iconData.scale !== undefined && iconData.scale > 1.0) ? iconData.scale : 1.35
+                    const bounce   = (iconData.bounceOffset !== undefined) ? iconData.bounceOffset : 0.0
+                    const sz       = dockConstants.baseSize * curScale
+                    const computed = (rootWindow.pillY + 7.0) - (sz - dockConstants.baseSize) - (bounce * 40.0)
+                    if (activeItem && typeof activeItem.y === "number" && activeItem.y > 0) {
+                        return Math.min(computed, activeItem.y)
+                    }
+                    return computed
+                }
 
                 width:   tooltipMetrics.width + 24.0
                 height:  28.0
                 x:       tipCenterX - width / 2.0
-                y:       iconTopY - height - 8.0
+                y:       iconTopY - height - 14.0
                 visible: shouldShow
 
+                Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                Behavior on y { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
                 Behavior on opacity { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
                 opacity: shouldShow ? 1.0 : 0.0
 

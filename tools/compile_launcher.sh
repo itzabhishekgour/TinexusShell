@@ -60,7 +60,7 @@ fi
 
 echo "[INFO] Found moc at: $MOC_BIN"
 
-QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps"
+QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/x86_64-linux-gnu/qt6/QtDBus -I/usr/include/LayerShellQt -I/tmp/build_apps"
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
 echo "[INFO] Running moc on LauncherBridge.hpp..."
@@ -75,7 +75,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/indexer/include -I/workspace/src/launcher -I/workspace/src/launcher/include \
   /workspace/src/launcher/main.cpp \
   /workspace/src/launcher/LauncherBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -DHAVE_LAYERSHELL=1 \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lQt6DBus -lLayerShellQtInterface -DHAVE_LAYERSHELL=1 \
   -o /workspace/build/bin/tinexus-launcher
 
 # Post-build assertions
@@ -102,7 +102,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/indexer/include -I/workspace/src/launcher -I/workspace/src/launcher/include \
   /workspace/src/launcher/test_launcher_render.cpp \
   /workspace/src/launcher/LauncherBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lQt6DBus \
   -o /workspace/build/bin/test-launcher-render
 
 echo "[INFO] Running test-launcher-render harness..."

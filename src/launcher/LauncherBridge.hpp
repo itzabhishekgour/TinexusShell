@@ -52,6 +52,8 @@ public:
     Q_INVOKABLE void launchIndex(int idx);
     Q_INVOKABLE void tabComplete();
     Q_INVOKABLE void closeLauncher();
+    Q_INVOKABLE void pinToDock(int idx);
+    Q_INVOKABLE void pinToDockByAppId(const QString& appId);
 
     // Test Harness Support
     void setAllApps(const std::vector<LauncherItem>& apps);

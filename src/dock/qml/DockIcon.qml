@@ -17,6 +17,7 @@ Item {
     property bool   isHovered:       false
     property bool   isRunning:       false
     property bool   isActive:        false
+    property bool   needsAttention:  false
     property int    toplevelCount:   0
     property int    badgeCount:      0
     property bool   isDeleted:       false      // Show "?" badge
@@ -33,7 +34,7 @@ Item {
     property real cursorX:       -1.0
     property bool mouseInDock:   false
     property real centerX:       0.0
-    property real magnifySpread: 120.0
+    property real magnifySpread: 130.0
     property real maxScale:      1.35
 
     signal clicked()
@@ -76,9 +77,9 @@ Item {
     }
 
     // ── Derived geometry ─────────────────────────────────────────────────────
-    readonly property real baseIconSize: 48.0
+    property real baseIconSize:          48.0
     readonly property real iconSize:     baseIconSize * scaleFactor
-    readonly property real cornerRadius: 11.0 * scaleFactor
+    readonly property real cornerRadius: Math.round(11.5 * scaleFactor)
 
     width:  iconSize
     height: iconSize
@@ -127,6 +128,26 @@ Item {
         visible: isActive && root.iconType !== "separator"
 
         Behavior on border.color { ColorAnimation { duration: 150 } }
+    }
+
+    // Attention aura (pulsing amber glow when needsAttention is true)
+    Rectangle {
+        id: attentionAura
+        anchors.centerIn: parent
+        width:   iconSize + 8
+        height:  iconSize + 8
+        radius:  root.cornerRadius + 4
+        color:   "transparent"
+        border.color: Qt.rgba(1.0, 0.72, 0.12, root.needsAttention ? 0.90 : 0.0)
+        border.width: 2
+        visible: root.needsAttention && root.iconType !== "separator"
+
+        SequentialAnimation on opacity {
+            running: root.needsAttention
+            loops: Animation.Infinite
+            NumberAnimation { from: 0.35; to: 1.0; duration: 550; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 1.0; to: 0.35; duration: 550; easing.type: Easing.InOutQuad }
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -13,23 +13,42 @@
 
 #include <QtCore/QProcess>
 #include <QtCore/QFile>
+#include <QtCore/QDir>
+#include <QtCore/QUrl>
 #include <QtCore/QCoreApplication>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusMessage>
 #include <common/SingleInstance.hpp>
+#include <files/trash_manager.hpp>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <csignal>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <fstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 namespace tinexus::dock {
+
+static fs::path getDockConfigPath() {
+    const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
+    if (xdgConfig && *xdgConfig) {
+        return fs::path(xdgConfig) / "tinexus" / "dock.toml";
+    }
+    const char* home = std::getenv("HOME");
+    return fs::path(home ? home : "/tmp") / ".config" / "tinexus" / "dock.toml";
+}
 
 DockBridge::DockBridge(QObject* parent)
     : QObject(parent)
 {
+    loadConfig();
+
     m_icons = {
         DockIconItem{"tinexus-terminal",  "Terminal",  "tinexus-terminal",    "terminal", DockIconAppState::NotRunning},
         DockIconItem{"tinexus-files",     "Files",     "tinexus-files",       "folder",   DockIconAppState::NotRunning},
@@ -45,6 +64,14 @@ DockBridge::DockBridge(QObject* parent)
 
     recomputeLayout();
     setupDBus();
+
+    // Setup live filesystem watcher for Trash
+    QString trashFilesPath = QDir::homePath() + QStringLiteral("/.local/share/Trash/files");
+    QDir().mkpath(trashFilesPath);
+    QDir().mkpath(QDir::homePath() + QStringLiteral("/.local/share/Trash/info"));
+    m_trashWatcher.addPath(trashFilesPath);
+    connect(&m_trashWatcher, &QFileSystemWatcher::directoryChanged, this, &DockBridge::updateTrashBadge);
+    updateTrashBadge();
 
     connect(&m_animTimer, &QTimer::timeout, this, &DockBridge::onAnimationTimer);
     m_animTimer.start(16); // 60 FPS
@@ -85,6 +112,7 @@ QVariantList DockBridge::iconsList() const {
         map[QStringLiteral("badgeCount")]    = static_cast<quint32>(icon.badgeCount);
         map[QStringLiteral("isRunning")]     = (icon.toplevelCount > 0 || icon.appState != DockIconAppState::NotRunning);
         map[QStringLiteral("isActive")]      = (icon.appState == DockIconAppState::RunningFocused);
+        map[QStringLiteral("needsAttention")] = icon.needsAttention;
         map[QStringLiteral("isSeparator")]   = (icon.iconType == QStringLiteral("separator"));
         map[QStringLiteral("isDropTarget")]  = (m_dropTargetIndex == static_cast<int>(i));
         list.append(map);
@@ -142,6 +170,10 @@ void DockBridge::recomputeLayout() {
         double size = BASE_SIZE * scale;
         icon.centerX = curX + size / 2.0;
         curX += size + GAP;
+    }
+
+    if (m_dockWindow) {
+        m_dockWindow->setBaseExclusiveZone(static_cast<int>(exclusiveZone()));
     }
 }
 
@@ -226,6 +258,9 @@ void DockBridge::attachModel(DockModel* model) {
     m_model = model;
     if (!m_model) return;
 
+    m_autoHideEnabled = m_model->autoHideEnabled();
+    emit autoHideEnabledChanged(m_autoHideEnabled);
+
     connect(m_model, &DockModel::dockItemsChanged, this, &DockBridge::syncFromModel);
     connect(m_model, &QAbstractItemModel::dataChanged, this, &DockBridge::syncFromModel);
     connect(m_model, &QAbstractItemModel::rowsInserted, this, &DockBridge::syncFromModel);
@@ -234,6 +269,7 @@ void DockBridge::attachModel(DockModel* model) {
     connect(m_model, &QAbstractItemModel::modelReset, this, &DockBridge::syncFromModel);
 
     syncFromModel();
+    updateTrashBadge();
 }
 
 void DockBridge::syncFromModel() {
@@ -259,7 +295,7 @@ void DockBridge::syncFromModel() {
         }
 
         DockIconItem icon(item.appId, item.displayName, item.execCmd, item.iconType, st,
-                          item.toplevelCount, item.badgeCount);
+                          item.toplevelCount, item.badgeCount, item.needsAttention);
 
         auto it = prevSprings.find(item.appId.toStdString());
         if (it != prevSprings.end()) {
@@ -293,6 +329,10 @@ void DockBridge::attachDockWindow(DockWindow* dockWindow) {
     m_dockWindow = dockWindow;
     if (!m_dockWindow) return;
 
+    if (m_autoHideEnabled) {
+        m_dockWindow->setAutoHideEnabled(m_autoHideEnabled);
+    }
+
     connect(m_dockWindow, &DockWindow::revealRequested, this, &DockBridge::requestReveal);
     connect(m_dockWindow, &DockWindow::hideRequested, this, &DockBridge::requestHide);
     connect(m_dockWindow, &DockWindow::autoHideStateChanged, this, [this](int st) {
@@ -314,6 +354,7 @@ void DockBridge::attachStacksPopup(StacksPopup* popup) {
 void DockBridge::setAutoHideEnabled(bool val) {
     if (m_autoHideEnabled != val) {
         m_autoHideEnabled = val;
+        saveConfig();
         emit autoHideEnabledChanged(m_autoHideEnabled);
         if (m_dockWindow) {
             m_dockWindow->setAutoHideEnabled(m_autoHideEnabled);
@@ -374,6 +415,19 @@ void DockBridge::setDropTargetIndex(int idx) {
 
 void DockBridge::launchWithUris(const QString& appId, const QStringList& uris) {
     if (uris.isEmpty()) return;
+
+    if (appId == QStringLiteral("__trash__")) {
+        tinexus::log::info("[DockBridge] Moving {} URIs to Trash via TrashManager", uris.size());
+        for (const auto& uriStr : uris) {
+            QUrl url(uriStr);
+            QString localPath = url.isLocalFile() ? url.toLocalFile() : uriStr;
+            if (!localPath.isEmpty()) {
+                tinexus::files::TrashManager::instance().move_to_trash(localPath.toStdString());
+            }
+        }
+        updateTrashBadge();
+        return;
+    }
 
     QString execCmd;
     for (const auto& icon : m_icons) {
@@ -496,6 +550,11 @@ void DockBridge::activateApp(const QString& appId) {
         return;
     }
 
+    icon.needsAttention = false;
+    if (m_model) {
+        m_model->setNeedsAttention(icon.appId, false);
+    }
+
     spawnApp(icon.exec);
     if (!m_reducedMotion) icon.bounceSpring.reset(0.40, 0.0);
 }
@@ -555,11 +614,51 @@ void DockBridge::closeApp(const QString& appId) {
 void DockBridge::forceQuitApp(const QString& appId) {
     tinexus::log::info("[DockBridge] Force quitting app '{}'", appId.toStdString());
     closeApp(appId);
+
     QString binName = appId;
     if (binName.startsWith(QStringLiteral("io.tinexus.shell."))) {
         binName = binName.mid(17);
+    } else if (binName.contains(QLatin1Char('.'))) {
+        binName = binName.section(QLatin1Char('.'), -1);
     }
-    QProcess::startDetached(QStringLiteral("pkill"), {QStringLiteral("-9"), QStringLiteral("-f"), binName});
+
+    std::string target = binName.toStdString();
+    std::vector<pid_t> killedPids;
+
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator("/proc", ec)) {
+        if (!entry.is_directory()) continue;
+        std::string dirName = entry.path().filename().string();
+        if (dirName.empty() || !std::all_of(dirName.begin(), dirName.end(), ::isdigit)) {
+            continue;
+        }
+        pid_t pid = std::stoi(dirName);
+        if (pid <= 1 || pid == getpid()) continue;
+
+        std::ifstream commFile(entry.path() / "comm");
+        std::string comm;
+        if (commFile >> comm) {
+            if (comm == target) {
+                ::kill(pid, SIGKILL);
+                killedPids.push_back(pid);
+                continue;
+            }
+        }
+
+        auto exePath = fs::read_symlink(entry.path() / "exe", ec);
+        if (!ec && exePath.filename().string() == target) {
+            ::kill(pid, SIGKILL);
+            killedPids.push_back(pid);
+        }
+    }
+
+    if (!killedPids.empty()) {
+        tinexus::log::info("[DockBridge] Force quit sent SIGKILL to {} process(es) for app '{}'",
+                           killedPids.size(), appId.toStdString());
+    } else {
+        tinexus::log::info("[DockBridge] No processes found in /proc matching binary '{}' for app '{}'",
+                           target, appId.toStdString());
+    }
 }
 
 void DockBridge::onMenuActionTriggered(const QString& action, const QString& appId, const QVariantMap& params) {
@@ -594,7 +693,127 @@ void DockBridge::onMenuActionTriggered(const QString& action, const QString& app
     } else if (action == QStringLiteral("open_trash")) {
         spawnApp(QStringLiteral("tinexus-files trash://"));
     } else if (action == QStringLiteral("empty_trash")) {
-        spawnApp(QStringLiteral("rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/*"));
+        emptyTrash();
+    } else if (action == QStringLiteral("toggle_autohide")) {
+        toggleAutoHide();
+    }
+}
+
+void DockBridge::loadConfig() {
+    fs::path configPath = getDockConfigPath();
+    if (!fs::exists(configPath)) {
+        tinexus::log::info("[DockBridge] No dock.toml found at '{}' — using defaults", configPath.string());
+        return;
+    }
+
+    std::ifstream in(configPath);
+    if (!in.is_open()) {
+        tinexus::log::warn("[DockBridge] Could not open config file '{}'", configPath.string());
+        return;
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        std::string key = line.substr(0, pos);
+        std::string val = line.substr(pos + 1);
+
+        // Trim whitespace
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        val.erase(0, val.find_first_not_of(" \t\"'"));
+        val.erase(val.find_last_not_of(" \t\"'") + 1);
+
+        if (key == "auto_hide") {
+            m_autoHideEnabled = (val == "true" || val == "1");
+            tinexus::log::info("[DockBridge] Loaded auto_hide={} from {}", m_autoHideEnabled, configPath.string());
+        }
+    }
+}
+
+void DockBridge::emptyTrash() {
+    tinexus::log::info("[DockBridge] Emptying trash via native filesystem API");
+    const char* home = std::getenv("HOME");
+    fs::path base = home ? fs::path(home) : fs::path("/tmp");
+    auto trash_dir = base / ".local/share/Trash";
+    std::error_code ec;
+    fs::remove_all(trash_dir / "files", ec);
+    fs::create_directories(trash_dir / "files", ec);
+    fs::remove_all(trash_dir / "info", ec);
+    fs::create_directories(trash_dir / "info", ec);
+    updateTrashBadge();
+}
+
+void DockBridge::updateTrashBadge() {
+    QString trashPath = QDir::homePath() + QStringLiteral("/.local/share/Trash/files");
+    QDir dir(trashPath);
+    int count = 0;
+    if (dir.exists()) {
+        count = static_cast<int>(dir.entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot).count());
+    }
+    setBadgeCount(QStringLiteral("__trash__"), static_cast<uint32_t>(count));
+    if (m_model) {
+        m_model->setBadgeCount(QStringLiteral("__trash__"), static_cast<uint32_t>(count));
+    }
+    tinexus::log::info("[DockBridge] Trash badge count updated to {}", count);
+}
+
+void DockBridge::pinApp(const QString& appId) {
+    if (m_model) {
+        m_model->pinApp(appId);
+    }
+}
+
+void DockBridge::requestAttention(const QString& appId) {
+    tinexus::log::info("[DockBridge] Attention requested for app '{}'", appId.toStdString());
+    for (size_t i = 0; i < m_icons.size(); ++i) {
+        auto& icon = m_icons[i];
+        if (icon.appId == appId || icon.appId.endsWith(appId) || appId.endsWith(icon.appId)) {
+            icon.needsAttention = true;
+            if (!m_reducedMotion) {
+                icon.bounceSpring.reset(0.50, 0.0);
+            }
+            break;
+        }
+    }
+    if (m_model) {
+        m_model->setNeedsAttention(appId, true);
+    }
+    emit iconsChanged();
+}
+
+void DockBridge::saveConfig() {
+    if (m_model) {
+        m_model->setAutoHideEnabled(m_autoHideEnabled);
+    } else {
+        fs::path configPath = getDockConfigPath();
+        std::error_code ec;
+        fs::create_directories(configPath.parent_path(), ec);
+
+        fs::path tmpPath = configPath;
+        tmpPath += ".tmp." + std::to_string(getpid());
+
+        {
+            std::ofstream out(tmpPath, std::ios::trunc);
+            if (!out.is_open()) {
+                tinexus::log::error("[DockBridge] Failed to create temp config file '{}'", tmpPath.string());
+                return;
+            }
+            out << "# Tinexus Dock Configuration\n";
+            out << "[dock]\n";
+            out << "auto_hide = " << (m_autoHideEnabled ? "true" : "false") << "\n";
+            out.flush();
+        }
+
+        fs::rename(tmpPath, configPath, ec);
+        if (ec) {
+            tinexus::log::error("[DockBridge] Failed to atomically rename '{}' to '{}': {}",
+                                tmpPath.string(), configPath.string(), ec.message());
+        } else {
+            tinexus::log::info("[DockBridge] Persisted config (auto_hide={}) to '{}'",
+                               m_autoHideEnabled, configPath.string());
+        }
     }
 }
 
@@ -623,6 +842,8 @@ void DockBridge::spawnApp(const QString& execCmd) {
     proc.setProcessEnvironment(env);
     proc.setProgram(prog);
     proc.setArguments(parts);
+    const QString home = QDir::homePath();
+    proc.setWorkingDirectory(!home.isEmpty() ? home : QStringLiteral("/"));
     bool started = proc.startDetached();
     tinexus::log::info("[DockBridge] App '{}' startDetached result: {}", prog.toStdString(), started);
 }
@@ -715,6 +936,9 @@ void DockBridge::onDBusNotifyFocusChanged(const QString& appId, bool isFocused) 
                 updateIconState(icon.appId, DockIconAppState::RunningBg);
             }
         }
+        if (m_model) {
+            m_model->onFocusChanged(appId);
+        }
     } else {
         updateIconState(appId, DockIconAppState::RunningBg);
     }
@@ -723,11 +947,18 @@ void DockBridge::onDBusNotifyFocusChanged(const QString& appId, bool isFocused) 
 void DockBridge::onDBusNotifyAppStarted(const QString& appId, qulonglong surfaceId) {
     Q_UNUSED(surfaceId);
     updateIconState(appId, DockIconAppState::RunningFocused);
+    if (m_model) {
+        m_model->onToplevelAdded(appId);
+        m_model->onFocusChanged(appId);
+    }
 }
 
 void DockBridge::onDBusNotifyAppClosed(const QString& appId, qulonglong surfaceId) {
     Q_UNUSED(surfaceId);
     updateIconState(appId, DockIconAppState::NotRunning);
+    if (m_model) {
+        m_model->onToplevelRemoved(appId);
+    }
 }
 
 void DockBridge::onDBusQueryIconPosition(const QString& appId) {
@@ -761,6 +992,13 @@ QStringList DockBridge::runningApps() const {
 }
 
 QString DockBridge::focusedApp() const {
+    if (m_model) {
+        for (const auto& item : m_model->mergedItems()) {
+            if (item.appState == DockAppState::RunningFocused) {
+                return item.appId;
+            }
+        }
+    }
     for (const auto& icon : m_icons) {
         if (icon.appState == DockIconAppState::RunningFocused) {
             return icon.appId;

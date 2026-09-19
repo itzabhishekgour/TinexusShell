@@ -6,6 +6,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Gui
     Quick
     Qml
+    DBus
     Network
     WaylandClient
 )
@@ -37,6 +38,7 @@ target_link_libraries(tinexus-launcher PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
+    Qt6::DBus
     Qt6::Network
     Qt6::WaylandClient
     tinexus_warnings
@@ -73,6 +75,7 @@ target_link_libraries(test-launcher-render PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
+    Qt6::DBus
     tinexus_warnings
 )
 
@@ -90,6 +93,7 @@ target_include_directories(test-launcher-live PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_SOURCE_DIR}/src/indexer/include
 )
 target_link_libraries(test-launcher-live PRIVATE
     tinexus_common
@@ -98,8 +102,8 @@ target_link_libraries(test-launcher-live PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::Network
+    Qt6::DBus
     tinexus_warnings
 )
 set_target_properties(test-launcher-live PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-

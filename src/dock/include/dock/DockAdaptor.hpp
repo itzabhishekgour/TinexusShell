@@ -62,6 +62,30 @@ class DockAdaptor : public QDBusAbstractAdaptor {
 "      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
 "      <arg direction=\"out\" type=\"u\" name=\"count\"/>\n"
 "    </method>\n"
+"    <method name=\"PinApp\">\n"
+"      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
+"    </method>\n"
+"    <method name=\"UnpinApp\">\n"
+"      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
+"    </method>\n"
+"    <method name=\"RequestAttention\">\n"
+"      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
+"    </method>\n"
+"    <method name=\"MoveItem\">\n"
+"      <arg direction=\"in\" type=\"i\" name=\"fromIndex\"/>\n"
+"      <arg direction=\"in\" type=\"i\" name=\"toIndex\"/>\n"
+"    </method>\n"
+"    <method name=\"EmptyTrash\"/>\n"
+"    <method name=\"LaunchWithUris\">\n"
+"      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
+"      <arg direction=\"in\" type=\"as\" name=\"uris\"/>\n"
+"    </method>\n"
+"    <method name=\"SpawnApp\">\n"
+"      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
+"    </method>\n"
+"    <method name=\"ForceQuitApp\">\n"
+"      <arg direction=\"in\" type=\"s\" name=\"appId\"/>\n"
+"    </method>\n"
 "    <signal name=\"AppStateChanged\">\n"
 "      <arg type=\"s\" name=\"appId\"/>\n"
 "      <arg type=\"i\" name=\"state\"/>\n"
@@ -98,6 +122,14 @@ public slots:
     void RestoreWindow(const QString& appId);
     void SetBadgeCount(const QString& appId, uint count);
     uint GetBadgeCount(const QString& appId);
+    void PinApp(const QString& appId);
+    void UnpinApp(const QString& appId);
+    void RequestAttention(const QString& appId);
+    void MoveItem(int fromIndex, int toIndex);
+    void EmptyTrash();
+    void LaunchWithUris(const QString& appId, const QStringList& uris);
+    void SpawnApp(const QString& appId);
+    void ForceQuitApp(const QString& appId);
 
 signals:
     void AppStateChanged(const QString& appId, int state);

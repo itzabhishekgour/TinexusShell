@@ -16,6 +16,7 @@
 #include <QtCore/QVariantList>
 #include <QtCore/QVariantMap>
 #include <QtCore/QTimer>
+#include <QtCore/QFileSystemWatcher>
 #include <common/SpringStatePortable.hpp>
 #include <memory>
 #include <vector>
@@ -45,15 +46,16 @@ struct DockIconItem {
     DockIconAppState appState{DockIconAppState::NotRunning};
     int     toplevelCount{0};
     uint32_t badgeCount{0};
+    bool    needsAttention{false};
 
     tinexus::animation::SpringState scaleSpring{};
     tinexus::animation::SpringState bounceSpring{};
 
     double centerX{0.0};
 
-    DockIconItem(QString id, QString lbl, QString ex, QString icn, DockIconAppState st, int topCount = 0, uint32_t badge = 0)
+    DockIconItem(QString id, QString lbl, QString ex, QString icn, DockIconAppState st, int topCount = 0, uint32_t badge = 0, bool attention = false)
         : appId(std::move(id)), label(std::move(lbl)), exec(std::move(ex)), iconType(std::move(icn)),
-          appState(st), toplevelCount(topCount), badgeCount(badge) {}
+          appState(st), toplevelCount(topCount), badgeCount(badge), needsAttention(attention) {}
 };
 
 class DockModel;
@@ -83,12 +85,13 @@ class DockBridge : public QObject {
     Q_PROPERTY(int dropTargetIndex READ dropTargetIndex NOTIFY dropTargetChanged)
 
 public:
-    static constexpr double BASE_SIZE       = 40.0;
-    static constexpr double GAP             = 8.0;
-    static constexpr double DOCK_PAD        = 8.0;
+    static constexpr double BASE_SIZE       = 48.0;
+    static constexpr double GAP             = 14.0;
+    static constexpr double DOCK_PAD        = 16.0;
     static constexpr double DOCK_BOT_MARGIN = 8.0;
-    static constexpr double MAX_SCALE       = 1.68;
-    static constexpr double INFLUENCE_R     = 3.5 * BASE_SIZE; // 140.0
+    static constexpr double PILL_HEIGHT     = 68.0;
+    static constexpr double MAX_SCALE       = 1.35;
+    static constexpr double INFLUENCE_R     = 130.0;
 
     explicit DockBridge(QObject* parent = nullptr);
     ~DockBridge() override;
@@ -96,12 +99,12 @@ public:
     [[nodiscard]] QVariantList iconsList() const;
     [[nodiscard]] int hoveredIndex() const { return m_hoveredIndex; }
     [[nodiscard]] double pillWidth() const { return m_pillWidth; }
-    [[nodiscard]] double pillHeight() const { return BASE_SIZE + DOCK_PAD * 2.0; } // 56.0
+    [[nodiscard]] double pillHeight() const { return PILL_HEIGHT; }
     [[nodiscard]] double baseSize() const { return BASE_SIZE; }
     [[nodiscard]] double gap() const { return GAP; }
     [[nodiscard]] double dockPad() const { return DOCK_PAD; }
     [[nodiscard]] double dockBotMargin() const { return DOCK_BOT_MARGIN; }
-    [[nodiscard]] double exclusiveZone() const { return DOCK_BOT_MARGIN + (BASE_SIZE + DOCK_PAD * 2.0) + 8.0; } // 72.0
+    [[nodiscard]] double exclusiveZone() const { return DOCK_BOT_MARGIN + PILL_HEIGHT + 8.0; } // 84.0
     [[nodiscard]] bool reducedMotion() const { return m_reducedMotion; }
     void setReducedMotion(bool val);
 
@@ -124,6 +127,7 @@ public:
     Q_INVOKABLE void minimizeApp(const QString& appId);
     Q_INVOKABLE void closeApp(const QString& appId);
     Q_INVOKABLE void forceQuitApp(const QString& appId);
+    Q_INVOKABLE void spawnApp(const QString& execCmd);
 
     // Slice 4: Auto-Hide invokables
     Q_INVOKABLE void requestHide();
@@ -149,6 +153,12 @@ public:
     void updateIconState(const QString& appId, DockIconAppState state);
     void tickAnimations(double dt);
     const std::vector<DockIconItem>& rawIcons() const { return m_icons; }
+
+    // Pin & Attention management
+    void pinApp(const QString& appId);
+    void requestAttention(const QString& appId);
+    void updateTrashBadge();
+    void emptyTrash();
 
     // D-Bus query & notification helpers
     [[nodiscard]] QStringList runningApps() const;
@@ -190,8 +200,10 @@ private slots:
 private:
     void setupDBus();
     void sendRaiseAndFocus(const QString& appId);
-    void spawnApp(const QString& execCmd);
+    void launchWithFiles(const QString& execLine, const QStringList& uris);
     void recomputeLayout();
+    void loadConfig();
+    void saveConfig();
 
     std::vector<DockIconItem> m_icons;
     DockModel* m_model{nullptr};
@@ -210,6 +222,7 @@ private:
     int    m_autoHideState{0}; // 0=Visible, 1=Peaking, 2=Hidden
 
     QTimer m_animTimer;
+    QFileSystemWatcher m_trashWatcher;
     QDBusInterface* m_compIface{nullptr};
     DockAdaptor* m_dockAdaptor{nullptr};
     std::unordered_map<std::string, uint32_t> m_badgeMap;

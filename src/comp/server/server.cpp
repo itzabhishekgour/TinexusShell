@@ -44,6 +44,10 @@ static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
                     app_id.pop_back();
                 }
                 backend->focus_app(app_id);
+            } else if (cmd.starts_with("click_ssd")) {
+                tinexus::log::info("[Server] Simulating click at cursor position via FIFO");
+                backend->simulate_click(0x110, 1);
+                backend->simulate_click(0x110, 0);
             } else if (cmd.starts_with("click")) {
                 tinexus::log::info("[Server] Simulating pointer click via FIFO");
                 tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 1);
@@ -60,10 +64,6 @@ static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
                 if (sscanf(cmd.c_str() + 5, "%lf %lf", &x, &y) == 2) {
                     backend->warp_cursor(x, y);
                 }
-            } else if (cmd.starts_with("click_ssd")) {
-                tinexus::log::info("[Server] Simulating click at cursor position via FIFO");
-                backend->simulate_click(0x110, 1);
-                backend->simulate_click(0x110, 0);
             }
         }
     }

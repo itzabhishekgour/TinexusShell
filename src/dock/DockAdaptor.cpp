@@ -75,6 +75,38 @@ uint DockAdaptor::GetBadgeCount(const QString& appId) {
     return m_bridge ? m_bridge->badgeCount(appId) : 0u;
 }
 
+void DockAdaptor::PinApp(const QString& appId) {
+    if (m_bridge) m_bridge->pinApp(appId);
+}
+
+void DockAdaptor::UnpinApp(const QString& appId) {
+    if (m_bridge) m_bridge->unpinApp(appId);
+}
+
+void DockAdaptor::RequestAttention(const QString& appId) {
+    if (m_bridge) m_bridge->requestAttention(appId);
+}
+
+void DockAdaptor::MoveItem(int fromIndex, int toIndex) {
+    if (m_bridge) m_bridge->moveItem(fromIndex, toIndex);
+}
+
+void DockAdaptor::EmptyTrash() {
+    if (m_bridge) m_bridge->emptyTrash();
+}
+
+void DockAdaptor::LaunchWithUris(const QString& appId, const QStringList& uris) {
+    if (m_bridge) m_bridge->launchWithUris(appId, uris);
+}
+
+void DockAdaptor::SpawnApp(const QString& appId) {
+    if (m_bridge) m_bridge->spawnApp(appId);
+}
+
+void DockAdaptor::ForceQuitApp(const QString& appId) {
+    if (m_bridge) m_bridge->forceQuitApp(appId);
+}
+
 } // namespace tinexus::dock
 
 #include "moc_DockAdaptor.cpp"

@@ -20,7 +20,6 @@ find_package(LayerShellQt QUIET)
 add_executable(tinexus-dock
     main.cpp
     DockBridge.cpp
-    DockBridge.hpp
     DockModel.cpp
     include/dock/DockModel.hpp
     include/dock/DockBridge.hpp
@@ -41,6 +40,7 @@ add_executable(tinexus-dock
     DockAdaptor.cpp
     DockAdaptor.hpp
     include/dock/DockAdaptor.hpp
+    ${CMAKE_SOURCE_DIR}/src/files/trash_manager.cpp
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h
 )
@@ -51,6 +51,7 @@ target_include_directories(tinexus-dock PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/wayland/protocol
     ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_SOURCE_DIR}/src/files/include
     ${CMAKE_BINARY_DIR}/protocols
 )
 
@@ -80,7 +81,6 @@ set_target_properties(tinexus-dock PROPERTIES
 add_executable(test-dock-render
     test_dock_render.cpp
     DockBridge.cpp
-    DockBridge.hpp
     DockModel.cpp
     include/dock/DockModel.hpp
     include/dock/DockBridge.hpp
@@ -101,6 +101,7 @@ add_executable(test-dock-render
     DockAdaptor.cpp
     DockAdaptor.hpp
     include/dock/DockAdaptor.hpp
+    ${CMAKE_SOURCE_DIR}/src/files/trash_manager.cpp
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-protocol.c
     wayland/protocol/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h
 )
@@ -111,6 +112,7 @@ target_include_directories(test-dock-render PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/wayland/protocol
     ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_SOURCE_DIR}/src/files/include
     ${CMAKE_BINARY_DIR}/protocols
 )
 

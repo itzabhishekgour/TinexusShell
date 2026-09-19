@@ -7,6 +7,8 @@
 #include <QtCore/QFile>
 #include <QtCore/QTextStream>
 #include <QtCore/QRegularExpression>
+#include <QtDBus/QDBusMessage>
+#include <QtDBus/QDBusConnection>
 #include <sstream>
 #include <algorithm>
 
@@ -175,6 +177,35 @@ void LauncherBridge::launchIndex(int idx) {
 
     spawnApp(item.exec, item.isTerminal);
     closeLauncher();
+}
+
+void LauncherBridge::pinToDock(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(m_results.size())) return;
+    const auto& item = m_results[static_cast<size_t>(idx)];
+    if (item.kind == QStringLiteral("Calculator") || item.kind == QStringLiteral("Store")) return;
+
+    QString appId = item.exec;
+    if (appId.startsWith(QStringLiteral("env "))) {
+        QStringList p = appId.split(QLatin1Char(' '));
+        appId = p.last();
+    } else {
+        QStringList p = appId.split(QLatin1Char(' '));
+        if (!p.isEmpty()) appId = p.first();
+    }
+
+    pinToDockByAppId(appId);
+}
+
+void LauncherBridge::pinToDockByAppId(const QString& appId) {
+    if (appId.isEmpty()) return;
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        QStringLiteral("io.tinexus.Dock"),
+        QStringLiteral("/io/tinexus/Dock"),
+        QStringLiteral("io.tinexus.Dock"),
+        QStringLiteral("PinApp")
+    );
+    msg << appId;
+    QDBusConnection::sessionBus().send(msg);
 }
 
 static void enrichEnvironmentWithRuntime(QProcessEnvironment& env) {

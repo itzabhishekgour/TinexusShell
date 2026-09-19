@@ -19,6 +19,7 @@
 #include <QtQuick/QQuickWindow>
 #include <QtCore/QFileInfo>
 #include <QtCore/QUrl>
+#include <QtCore/QTimer>
 #include <iostream>
 #include <csignal>
 
@@ -71,6 +72,27 @@ int main(int argc, char* argv[]) {
                      &dockModel, &tinexus::dock::DockModel::onToplevelUpdatedWithHandle);
     QObject::connect(&tracker, &tinexus::dock::ToplevelTracker::toplevelRemoved,
                      &dockModel, &tinexus::dock::DockModel::onToplevelRemovedWithHandle);
+
+    // Compositor Loss & Reconnection Logic (Slice 2 recovery)
+    auto* reconnectTimer = new QTimer(&app);
+    reconnectTimer->setInterval(2000);
+    reconnectTimer->setSingleShot(false);
+
+    QObject::connect(&tracker, &tinexus::dock::ToplevelTracker::managerFinished, [&]() {
+        tinexus::log::warn("[tinexus-dock] Compositor connection lost — clearing window handles");
+        dockModel.clearAllToplevels();
+        if (!reconnectTimer->isActive()) {
+            reconnectTimer->start();
+        }
+    });
+
+    QObject::connect(reconnectTimer, &QTimer::timeout, [&]() {
+        tinexus::log::info("[tinexus-dock] Attempting to reconnect to foreign toplevel manager...");
+        if (tracker.init()) {
+            tinexus::log::info("[tinexus-dock] Successfully reconnected to foreign toplevel manager!");
+            reconnectTimer->stop();
+        }
+    });
 
     // Synchronize DockBridge with live DockModel items and running indicators
     bridge.attachModel(&dockModel);

@@ -7,14 +7,26 @@
 #include <common/logger.hpp>
 #include <common/AppId.hpp>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <unistd.h>
 
 namespace tinexus::dock {
+
+static std::filesystem::path getDockConfigPath() {
+    const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
+    if (xdgConfig && *xdgConfig) {
+        return std::filesystem::path(xdgConfig) / "tinexus" / "dock.toml";
+    }
+    const char* home = std::getenv("HOME");
+    return std::filesystem::path(home ? home : "/tmp") / ".config" / "tinexus" / "dock.toml";
+}
 
 // ── Constructor ──────────────────────────────────────────────────────────────
 DockModel::DockModel(QObject* parent)
     : QAbstractListModel(parent)
 {
-    loadHardcodedPinnedItems();
+    loadPinnedFromConfig();
     appendSeparatorAndStacks();
     rebuildMergedView();
 
@@ -47,6 +59,171 @@ void DockModel::loadHardcodedPinnedItems() {
              "env MOZ_ENABLE_WAYLAND=1 firefox",               "firefox"),
         make(5, DockItemKind::PinnedApp, "tinexus-appstore",  "App Store",   "tinexus-appstore",    "package"),
     };
+}
+
+void DockModel::loadPinnedFromConfig() {
+    auto configPath = getDockConfigPath();
+    if (!std::filesystem::exists(configPath)) {
+        tinexus::log::info("[DockModel] No dock.toml found at '{}' — loading hardcoded defaults", configPath.string());
+        loadHardcodedPinnedItems();
+        savePinnedToConfig();
+        return;
+    }
+
+    std::ifstream in(configPath);
+    if (!in.is_open()) {
+        tinexus::log::warn("[DockModel] Could not open config file '{}' — loading hardcoded defaults", configPath.string());
+        loadHardcodedPinnedItems();
+        return;
+    }
+
+    m_pinned.clear();
+    std::string line;
+    bool inDockSection = false;
+    bool inPinnedTable = false;
+    DockItemData currentItem;
+    currentItem.kind = DockItemKind::PinnedApp;
+    int parsedOrder = -1;
+
+    auto finishItem = [&]() {
+        if (inPinnedTable && !currentItem.appId.isEmpty()) {
+            if (currentItem.displayName.isEmpty()) {
+                currentItem.displayName = resolveDisplayName(currentItem.appId, QString());
+            }
+            if (currentItem.execCmd.isEmpty()) {
+                currentItem.execCmd = currentItem.appId;
+            }
+            if (currentItem.iconType.isEmpty()) {
+                currentItem.iconType = resolveIconType(currentItem.appId);
+            }
+            currentItem.configIndex = (parsedOrder >= 0) ? parsedOrder : static_cast<int>(m_pinned.size());
+            m_pinned.append(currentItem);
+        }
+        currentItem = DockItemData{};
+        currentItem.kind = DockItemKind::PinnedApp;
+        parsedOrder = -1;
+    };
+
+    while (std::getline(in, line)) {
+        auto start = line.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) continue;
+        auto end = line.find_last_not_of(" \t\r\n");
+        std::string trimmed = line.substr(start, end - start + 1);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+
+        if (trimmed == "[[pinned]]") {
+            finishItem();
+            inPinnedTable = true;
+            inDockSection = false;
+            continue;
+        } else if (trimmed == "[dock]") {
+            finishItem();
+            inPinnedTable = false;
+            inDockSection = true;
+            continue;
+        } else if (trimmed.front() == '[' && trimmed.back() == ']') {
+            finishItem();
+            inPinnedTable = false;
+            inDockSection = false;
+            continue;
+        }
+
+        auto eqPos = trimmed.find('=');
+        if (eqPos == std::string::npos) continue;
+
+        std::string key = trimmed.substr(0, eqPos);
+        std::string val = trimmed.substr(eqPos + 1);
+
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        val.erase(0, val.find_first_not_of(" \t\"'"));
+        val.erase(val.find_last_not_of(" \t\"'") + 1);
+
+        if (inDockSection) {
+            if (key == "auto_hide") {
+                m_autoHide = (val == "true" || val == "1");
+            }
+        } else if (inPinnedTable) {
+            if (key == "app_id" || key == "appId") {
+                currentItem.appId = QString::fromStdString(val);
+            } else if (key == "name" || key == "displayName") {
+                currentItem.displayName = QString::fromStdString(val);
+            } else if (key == "exec" || key == "execCmd") {
+                currentItem.execCmd = QString::fromStdString(val);
+            } else if (key == "icon" || key == "iconType") {
+                currentItem.iconType = QString::fromStdString(val);
+            } else if (key == "order" || key == "order_index") {
+                try {
+                    parsedOrder = std::stoi(val);
+                } catch (...) {
+                    parsedOrder = -1;
+                }
+            }
+        }
+    }
+    finishItem();
+
+    if (m_pinned.isEmpty()) {
+        tinexus::log::info("[DockModel] Config file '{}' had no [[pinned]] entries — using defaults", configPath.string());
+        loadHardcodedPinnedItems();
+        savePinnedToConfig();
+    } else {
+        std::stable_sort(m_pinned.begin(), m_pinned.end(), [](const DockItemData& a, const DockItemData& b) {
+            return a.configIndex < b.configIndex;
+        });
+        for (int i = 0; i < m_pinned.size(); ++i) {
+            m_pinned[i].configIndex = i;
+        }
+        tinexus::log::info("[DockModel] Successfully loaded {} pinned items from '{}'", m_pinned.size(), configPath.string());
+    }
+}
+
+void DockModel::savePinnedToConfig() {
+    auto configPath = getDockConfigPath();
+    std::error_code ec;
+    std::filesystem::create_directories(configPath.parent_path(), ec);
+
+    std::filesystem::path tmpPath = configPath;
+    tmpPath += ".tmp." + std::to_string(getpid());
+
+    {
+        std::ofstream out(tmpPath, std::ios::trunc);
+        if (!out.is_open()) {
+            tinexus::log::error("[DockModel] Failed to create temp config file '{}'", tmpPath.string());
+            return;
+        }
+        out << "# Tinexus Dock Configuration\n";
+        out << "[dock]\n";
+        out << "auto_hide = " << (m_autoHide ? "true" : "false") << "\n\n";
+
+        for (int i = 0; i < m_pinned.size(); ++i) {
+            const auto& item = m_pinned.at(i);
+            out << "[[pinned]]\n";
+            out << "app_id = \"" << item.appId.toStdString() << "\"\n";
+            out << "name = \"" << item.displayName.toStdString() << "\"\n";
+            out << "exec = \"" << item.execCmd.toStdString() << "\"\n";
+            out << "icon = \"" << item.iconType.toStdString() << "\"\n";
+            out << "order = " << i << "\n\n";
+        }
+        out.flush();
+    }
+
+    std::filesystem::rename(tmpPath, configPath, ec);
+    if (ec) {
+        tinexus::log::error("[DockModel] Failed to atomically rename '{}' -> '{}': {}",
+                           tmpPath.string(), configPath.string(), ec.message());
+        std::filesystem::remove(tmpPath, ec);
+    } else {
+        tinexus::log::info("[DockModel] Persisted {} pinned items (auto_hide={}) to '{}'",
+                           m_pinned.size(), m_autoHide, configPath.string());
+    }
+}
+
+void DockModel::setAutoHideEnabled(bool enabled) {
+    if (m_autoHide != enabled) {
+        m_autoHide = enabled;
+        savePinnedToConfig();
+    }
 }
 
 void DockModel::appendSeparatorAndStacks() {
@@ -478,8 +655,9 @@ void DockModel::onToplevelRemovedWithHandle(struct zwlr_foreign_toplevel_handle_
 
 // ── Legacy API ───────────────────────────────────────────────────────────────
 void DockModel::onToplevelAdded(const QString& appId) {
-    onToplevelAddedWithHandle(reinterpret_cast<zwlr_foreign_toplevel_handle_v1*>(1),
-                              appId, appId, false, false, false);
+    static quintptr nextHandle = 100;
+    auto* handle = reinterpret_cast<zwlr_foreign_toplevel_handle_v1*>(++nextHandle);
+    onToplevelAddedWithHandle(handle, appId, appId, false, false, false);
 }
 
 void DockModel::onToplevelRemoved(const QString& appId) {
@@ -523,6 +701,21 @@ void DockModel::setBadgeCount(const QString& appId, uint32_t count) {
     }
 }
 
+void DockModel::setNeedsAttention(const QString& appId, bool attention) {
+    auto* item = findMutableItem(appId);
+    if (!item) return;
+    if (item->needsAttention != attention) {
+        item->needsAttention = attention;
+        const int row = findItemIndex(appId);
+        if (row >= 0) {
+            m_merged[row].needsAttention = attention;
+            emit dataChanged(createIndex(row, 0), createIndex(row, 0), { DockRole::NeedsAttention });
+        }
+        emit dockItemsChanged();
+        tinexus::log::info("[DockModel] App '{}' needsAttention set to {}", appId.toStdString(), attention);
+    }
+}
+
 // ── Pin / Unpin Management (Slice 3) ─────────────────────────────────────────
 bool DockModel::isPinned(const QString& appId) const {
     for (const auto& item : m_pinned) {
@@ -540,30 +733,54 @@ DockItemData DockModel::getItemData(const QString& appId) const {
 
 void DockModel::moveItem(int fromDisplayIndex, int toDisplayIndex) {
     if (fromDisplayIndex == toDisplayIndex) return;
-    if (fromDisplayIndex < 0 || fromDisplayIndex >= m_pinned.size()) return;
-    if (toDisplayIndex < 0 || toDisplayIndex >= m_pinned.size()) return;
+    if (fromDisplayIndex < 0 || fromDisplayIndex >= m_merged.size()) return;
+    if (toDisplayIndex < 0 || toDisplayIndex >= m_merged.size()) return;
 
-    // The Qt way to animate rows natively in QML
-    int destChild = toDisplayIndex > fromDisplayIndex ? toDisplayIndex + 1 : toDisplayIndex;
-
-    beginMoveRows(QModelIndex(), fromDisplayIndex, fromDisplayIndex, QModelIndex(), destChild);
-
-    // Reorder in pinned and merged lists
-    DockItemData item = m_pinned.takeAt(fromDisplayIndex);
-    m_pinned.insert(toDisplayIndex, std::move(item));
-
-    DockItemData mergedItem = m_merged.takeAt(fromDisplayIndex);
-    m_merged.insert(toDisplayIndex, std::move(mergedItem));
-
-    // Update config indexes to maintain stable sort
+    const auto& fromItem = m_merged.at(fromDisplayIndex);
+    int fromPinnedIdx = -1;
     for (int i = 0; i < m_pinned.size(); ++i) {
-        m_pinned[i].configIndex = i;
-        m_merged[i].configIndex = i;
+        if (matchesAppId(m_pinned[i].appId, fromItem.appId)) {
+            fromPinnedIdx = i;
+            break;
+        }
+    }
+    if (fromPinnedIdx < 0) {
+        tinexus::log::warn("[DockModel] moveItem: item at display pos {} ({}) is not pinned",
+                           fromDisplayIndex, fromItem.appId.toStdString());
+        return;
     }
 
-    endMoveRows();
-    emit dockItemsChanged();
-    tinexus::log::info("[DockModel] Moved pinned item from {} to {}", fromDisplayIndex, toDisplayIndex);
+    int toPinnedIdx = -1;
+    const auto& toItem = m_merged.at(toDisplayIndex);
+    for (int i = 0; i < m_pinned.size(); ++i) {
+        if (matchesAppId(m_pinned[i].appId, toItem.appId)) {
+            toPinnedIdx = i;
+            break;
+        }
+    }
+
+    if (toPinnedIdx < 0) {
+        // Dragged outside pinned boundary (e.g. into transient or separator area)
+        if (toDisplayIndex < fromDisplayIndex) {
+            toPinnedIdx = 0;
+        } else {
+            toPinnedIdx = static_cast<int>(m_pinned.size()) - 1;
+        }
+    }
+
+    if (fromPinnedIdx == toPinnedIdx) return;
+
+    DockItemData item = m_pinned.takeAt(fromPinnedIdx);
+    m_pinned.insert(toPinnedIdx, std::move(item));
+
+    for (int i = 0; i < m_pinned.size(); ++i) {
+        m_pinned[i].configIndex = i;
+    }
+
+    rebuildMergedView();
+    savePinnedToConfig();
+    tinexus::log::info("[DockModel] Moved pinned item '{}' from pinned pos {} to {} (display pos {} -> {})",
+                       fromItem.appId.toStdString(), fromPinnedIdx, toPinnedIdx, fromDisplayIndex, toDisplayIndex);
 }
 
 void DockModel::commitMove() {
@@ -571,21 +788,45 @@ void DockModel::commitMove() {
     for (int i = 0; i < m_pinned.size(); ++i) {
         m_pinned[i].configIndex = i;
     }
+    savePinnedToConfig();
     emit dockItemsChanged();
 }
 
-void DockModel::pinApp(const QString& appId) {
-    if (isPinned(appId)) return;
+void DockModel::pinApp(const QString& appId, const QString& displayName, const QString& execCmd, const QString& iconType) {
+    if (appId.isEmpty() || isPinned(appId)) return;
+
+    // 1. Check if app is in m_transient (currently running)
     for (int i = 0; i < m_transient.size(); ++i) {
         if (matchesAppId(m_transient.at(i).appId, appId)) {
             DockItemData item = m_transient.takeAt(i);
             item.kind = (item.toplevelCount > 0) ? DockItemKind::PinnedRunning : DockItemKind::PinnedApp;
+            if (!displayName.isEmpty()) item.displayName = displayName;
+            if (!execCmd.isEmpty()) item.execCmd = execCmd;
+            if (!iconType.isEmpty()) item.iconType = iconType;
+            item.configIndex = static_cast<int>(m_pinned.size());
             m_pinned.append(std::move(item));
             rebuildMergedView();
-            tinexus::log::info("[DockModel] Pinned app '{}' to dock", appId.toStdString());
+            savePinnedToConfig();
+            tinexus::log::info("[DockModel] Pinned running app '{}' to dock", appId.toStdString());
             return;
         }
     }
+
+    // 2. Non-running app: create new pinned item
+    DockItemData item;
+    item.kind = DockItemKind::PinnedApp;
+    item.appId = appId;
+    item.displayName = !displayName.isEmpty() ? displayName : resolveDisplayName(appId, QString());
+    item.execCmd = !execCmd.isEmpty() ? execCmd : appId;
+    item.iconType = !iconType.isEmpty() ? iconType : resolveIconType(appId);
+    item.configIndex = static_cast<int>(m_pinned.size());
+    item.appState = DockAppState::NotRunning;
+    item.toplevelCount = 0;
+
+    m_pinned.append(std::move(item));
+    rebuildMergedView();
+    savePinnedToConfig();
+    tinexus::log::info("[DockModel] Pinned non-running app '{}' to dock", appId.toStdString());
 }
 
 void DockModel::unpinApp(const QString& appId) {
@@ -596,7 +837,11 @@ void DockModel::unpinApp(const QString& appId) {
                 item.kind = DockItemKind::RunningApp;
                 m_transient.append(std::move(item));
             }
+            for (int p = 0; p < m_pinned.size(); ++p) {
+                m_pinned[p].configIndex = p;
+            }
             rebuildMergedView();
+            savePinnedToConfig();
             tinexus::log::info("[DockModel] Unpinned app '{}' from dock", appId.toStdString());
             return;
         }
@@ -619,9 +864,9 @@ void DockModel::removeFromDock(const QString& appId) {
 void DockModel::activateApp(const QString& appId) {
     emit itemActivationRequested(appId);
 
-    if (!m_tracker) return;
+    if (!m_tracker || !m_tracker->isConnected()) return;
     auto* item = findMutableItem(appId);
-    if (!item || item->toplevels.isEmpty()) return;
+    if (!item || item->toplevels.isEmpty() || !item->toplevels.first().handle) return;
 
     if (item->appState == DockAppState::RunningFocused) {
         // App is already focused -> toggle minimization (Slice 3)
@@ -630,37 +875,59 @@ void DockModel::activateApp(const QString& appId) {
         // App is minimized or background -> unminimize and raise
         if (item->appState == DockAppState::Minimized) {
             for (const auto& t : item->toplevels) {
-                m_tracker->setMinimized(t.handle, false);
+                if (t.handle) m_tracker->setMinimized(t.handle, false);
             }
         }
-        m_tracker->activateWindow(item->toplevels.first().handle);
+        if (!item->toplevels.isEmpty() && item->toplevels.first().handle) {
+            m_tracker->activateWindow(item->toplevels.first().handle);
+        }
     }
 }
 
 void DockModel::minimizeApp(const QString& appId) {
-    if (!m_tracker) return;
+    if (!m_tracker || !m_tracker->isConnected()) return;
     auto* item = findMutableItem(appId);
     if (!item || item->toplevels.isEmpty()) return;
 
     const bool allMin = (item->appState == DockAppState::Minimized);
     for (const auto& t : item->toplevels) {
-        m_tracker->setMinimized(t.handle, !allMin);
+        if (t.handle) {
+            m_tracker->setMinimized(t.handle, !allMin);
+        }
     }
 }
 
 void DockModel::closeApp(const QString& appId) {
-    if (!m_tracker) return;
+    if (!m_tracker || !m_tracker->isConnected()) return;
     auto* item = findMutableItem(appId);
     if (!item || item->toplevels.isEmpty()) return;
 
     for (const auto& t : item->toplevels) {
-        m_tracker->closeWindow(t.handle);
+        if (t.handle) {
+            m_tracker->closeWindow(t.handle);
+        }
     }
 }
 
 void DockModel::activateToplevel(struct zwlr_foreign_toplevel_handle_v1* handle) {
-    if (!m_tracker || !handle) return;
+    if (!m_tracker || !m_tracker->isConnected() || !handle) return;
     m_tracker->activateWindow(handle);
+}
+
+void DockModel::clearAllToplevels() {
+    tinexus::log::warn("[DockModel] Compositor/manager disconnected: flushing all toplevel handles");
+
+    for (auto& item : m_pinned) {
+        item.toplevels.clear();
+        item.toplevelCount = 0;
+        item.appState = DockAppState::NotRunning;
+        item.kind = DockItemKind::PinnedApp;
+    }
+
+    m_transient.clear();
+
+    rebuildMergedView();
+    emit dockItemsChanged();
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

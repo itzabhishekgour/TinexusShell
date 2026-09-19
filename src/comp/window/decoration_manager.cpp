@@ -487,12 +487,14 @@ void TinexusDecorationManager::handle_new_toplevel_decoration(struct wl_listener
     wl_signal_add(&decoration->events.destroy, &ctx->destroy);
 
     // Initial negotiation policy evaluation:
-    if (is_native_csd_app(app_id)) {
-        log::info("[Decoration] App '{}' is native Tinexus app -> configuring CLIENT_SIDE", app_id ? app_id : "");
-        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
-    } else {
-        log::info("[Decoration] External client '{}' -> configuring SERVER_SIDE", app_id ? app_id : "");
-        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+    if (decoration->toplevel && decoration->toplevel->base && decoration->toplevel->base->initialized) {
+        if (is_native_csd_app(app_id)) {
+            log::info("[Decoration] App '{}' is native Tinexus app -> configuring CLIENT_SIDE", app_id ? app_id : "");
+            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+        } else {
+            log::info("[Decoration] External client '{}' -> configuring SERVER_SIDE", app_id ? app_id : "");
+            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        }
     }
 
     self->m_contexts.push_back(std::move(ctx));
@@ -510,15 +512,17 @@ void TinexusDecorationManager::handle_decoration_request_mode(struct wl_listener
     log::info("[Decoration] Client requested mode {} for app_id='{}'",
               static_cast<int>(decoration->requested_mode), app_id ? app_id : "unknown");
 
-    // 1. Native Tinexus Qt6/txui apps MUST remain CLIENT_SIDE
-    if (is_native_csd_app(app_id)) {
-        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
-    } else if (decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
-        // 2. Client explicitly requested CLIENT_SIDE
-        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
-    } else {
-        // 3. External applications (Firefox, foot, etc.) or clients requesting SERVER_SIDE
-        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+    if (decoration->toplevel->base && decoration->toplevel->base->initialized) {
+        // 1. Native Tinexus Qt6/txui apps MUST remain CLIENT_SIDE
+        if (is_native_csd_app(app_id)) {
+            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+        } else if (decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
+            // 2. Client explicitly requested CLIENT_SIDE
+            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+        } else {
+            // 3. External applications (Firefox, foot, etc.) or clients requesting SERVER_SIDE
+            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        }
     }
 
     if (ctx->manager && ctx->manager->m_action_handler) {

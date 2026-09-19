@@ -37,7 +37,7 @@ public:
     static constexpr double DOCK_BOT_MARGIN    = 8.0;
     static constexpr double PILL_RADIUS        = 18.0;
     static constexpr double ICON_RADIUS        = 10.0;
-    static constexpr double MAX_SCALE          = 1.68;
+    static constexpr double MAX_SCALE          = 1.35;
     static constexpr double INFLUENCE_R        = 3.5 * BASE_SIZE;
     static constexpr double INTENTIONAL_SPACING= 8.0;
 

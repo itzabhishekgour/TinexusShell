@@ -52,6 +52,9 @@ public:
     Q_INVOKABLE void requestPeak();
     Q_INVOKABLE void toggleAutoHide();
     Q_INVOKABLE void onTripwireEntered();
+    Q_INVOKABLE void updateInputRegion(int x, int y, int width, int height);
+
+    [[nodiscard]] QRect inputRegionRect() const { return m_inputRegionRect; }
 
 signals:
     void autoHideEnabledChanged(bool enabled);
@@ -73,6 +76,7 @@ private:
     AutoHideState m_autoHideState{AutoHideState::Visible};
     int m_baseExclusiveZone{72};
     int m_currentExclusiveZone{72};
+    QRect m_inputRegionRect{};
 };
 
 } // namespace tinexus::dock

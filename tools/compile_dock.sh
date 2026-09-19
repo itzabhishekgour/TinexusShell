@@ -55,7 +55,7 @@ QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
 echo "[INFO] Generating MOC for tinexus-dock..."
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/DockBridge.hpp -o /tmp/build_apps/moc_DockBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockBridge.hpp -o /tmp/build_apps/moc_DockBridge.cpp
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockModel.hpp -o /tmp/build_apps/moc_DockModel.cpp
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/ToplevelTracker.hpp -o /tmp/build_apps/moc_ToplevelTracker.cpp
 chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockMenuPopup.hpp -o /tmp/build_apps/moc_DockMenuPopup.cpp
@@ -76,7 +76,7 @@ rm -f /workspace/build/bin/tinexus-dock
 BUILD_START_TIME=$(date +%s)
 
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/dock/include -I/workspace/src/dock -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
+  $QT6_INC $COMMON_INC -I/workspace/src/dock/include -I/workspace/src/dock -I/workspace/src/files/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/dock/main.cpp \
   /workspace/src/dock/DockBridge.cpp \
   /workspace/src/dock/DockModel.cpp \
@@ -88,6 +88,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/dock/StacksPopup.cpp \
   /workspace/src/dock/DockIpcClient.cpp \
   /workspace/src/dock/DockAdaptor.cpp \
+  /workspace/src/files/trash_manager.cpp \
   /tmp/build_apps/wlr-foreign-toplevel.o \
   -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lwayland-client -lQt6DBus -DHAVE_LAYERSHELL=1 \
   -o /workspace/build/bin/tinexus-dock
@@ -115,7 +116,7 @@ echo "[SUCCESS] tinexus-dock compiled and verified successfully ($(ls -lh /works
 
 echo "[INFO] Compiling test-dock-render harness..."
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/dock/include -I/workspace/src/dock -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
+  $QT6_INC $COMMON_INC -I/workspace/src/dock/include -I/workspace/src/dock -I/workspace/src/files/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/dock/test_dock_render.cpp \
   /workspace/src/dock/DockBridge.cpp \
   /workspace/src/dock/DockModel.cpp \
@@ -127,9 +128,16 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/dock/StacksPopup.cpp \
   /workspace/src/dock/DockIpcClient.cpp \
   /workspace/src/dock/DockAdaptor.cpp \
+  /workspace/src/files/trash_manager.cpp \
   /tmp/build_apps/wlr-foreign-toplevel.o \
   -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lwayland-client -lQt6DBus -DHAVE_LAYERSHELL=1 \
   -o /workspace/build/bin/test-dock-render
 
 [ -f /workspace/build/bin/test-dock-render ] || { echo "[FATAL] test-dock-render failed!" >&2; exit 1; }
+
+echo "[INFO] Syncing QML files to rootfs..."
+mkdir -p /mnt/rootfs/usr/share/tinexus/dock/qml /mnt/rootfs/usr/share/tinexus-dock/qml
+cp -r /workspace/src/dock/qml/* /mnt/rootfs/usr/share/tinexus/dock/qml/
+cp -r /workspace/src/dock/qml/* /mnt/rootfs/usr/share/tinexus-dock/qml/
+
 echo "[SUCCESS] test-dock-render compiled successfully!"

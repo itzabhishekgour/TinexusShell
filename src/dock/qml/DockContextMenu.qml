@@ -547,6 +547,54 @@ Window {
                     font.family: "Inter, SF Pro Text, sans-serif"
                 }
             }
+
+            // ── Section 7: Dock Preferences / Auto-Hide ─────────────────────
+            Rectangle {
+                width: parent.width - 8
+                x: 4
+                height: 1
+                color: Qt.rgba(1.0, 1.0, 1.0, 0.12)
+            }
+
+            Item {
+                width: contentCol.width
+                height: 28
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 6
+                    color: autoHideHover.containsMouse ? Qt.rgba(0.24, 0.52, 0.95, 0.88) : "transparent"
+                }
+                MouseArea {
+                    id: autoHideHover
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (typeof menuPopup !== "undefined") menuPopup.triggerAction("toggle_autohide")
+                    }
+                }
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: (typeof bridge !== "undefined" && bridge.autoHideEnabled) ? "Turn Off Auto-Hide" : "Turn On Auto-Hide"
+                        color: "#FFFFFF"
+                        font.pixelSize: 12
+                        font.family: "Inter, SF Pro Text, sans-serif"
+                        width: parent.width - 24
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: (typeof bridge !== "undefined" && bridge.autoHideEnabled) ? "✓" : ""
+                        color: "#FFFFFF"
+                        font.pixelSize: 13
+                        font.bold: true
+                    }
+                }
+            }
         }
     }
 }

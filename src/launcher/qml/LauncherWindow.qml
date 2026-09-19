@@ -367,12 +367,43 @@ Window {
                             }
                         }
 
-                        // Right Badges (⌘1..9 or Action badge)
+                        // Right Badges (Pin button + ⌘1..9/Enter badge)
                         Item {
-                            width: 50
+                            width: 80
                             height: parent.height
 
                             Rectangle {
+                                id: pinBtn
+                                anchors.right: badgeRect.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 24
+                                height: 20
+                                radius: 4
+                                visible: (rowMouse.containsMouse || isSelected) && modelData.kind !== "Calculator" && modelData.kind !== "Store"
+                                color: pinMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.32) : Qt.rgba(1, 1, 1, 0.14)
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "📌"
+                                    font.pixelSize: 11
+                                }
+
+                                MouseArea {
+                                    id: pinMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (typeof bridge !== "undefined") {
+                                            bridge.pinToDock(index);
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                id: badgeRect
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: index < 9 ? 24 : 48
@@ -395,11 +426,18 @@ Window {
                         id: rowMouse
                         anchors.fill: parent
                         hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (typeof bridge !== "undefined") {
-                                bridge.launchIndex(index);
-                                rootWindow.dismissLauncher();
+                        onClicked: function(mouse) {
+                            if (mouse.button === Qt.RightButton) {
+                                if (typeof bridge !== "undefined") {
+                                    bridge.pinToDock(index);
+                                }
+                            } else {
+                                if (typeof bridge !== "undefined") {
+                                    bridge.launchIndex(index);
+                                    rootWindow.dismissLauncher();
+                                }
                             }
                         }
                     }

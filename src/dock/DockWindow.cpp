@@ -22,7 +22,8 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (event->type() == QEvent::Enter ||
             event->type() == QEvent::HoverEnter ||
-            event->type() == QEvent::MouseMove) {
+            event->type() == QEvent::MouseMove ||
+            event->type() == QEvent::MouseButtonPress) {
             if (m_owner) {
                 m_owner->onTripwireEntered();
             }
@@ -70,6 +71,14 @@ void DockWindow::setupMainWindowLayerShell() {
 #if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
     auto* lsWin = LayerShellQt::Window::get(m_mainWindow);
     if (lsWin) {
+        // Multi-monitor output affinity: bind explicitly to primary screen
+        QScreen* targetScreen = m_mainWindow->screen() ? m_mainWindow->screen() : QGuiApplication::primaryScreen();
+        if (targetScreen) {
+            m_mainWindow->setScreen(targetScreen);
+            lsWin->setScreen(targetScreen);
+            lsWin->setWantsToBeOnActiveScreen(false);
+        }
+
         // Decision A: LayerTop — dock sits above normal windows
         lsWin->setLayer(LayerShellQt::Window::LayerTop);
 
@@ -83,11 +92,29 @@ void DockWindow::setupMainWindowLayerShell() {
         lsWin->setScope(QStringLiteral("dock"));
         lsWin->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
 
-        tinexus::log::info("[DockWindow] MainWindow LayerShell configured: Layer=TOP, Scope=dock, ExclusiveZone={}",
+        tinexus::log::info("[DockWindow] MainWindow LayerShell configured: Layer=TOP, Scope=dock, Screen={}, ExclusiveZone={}",
+                           targetScreen ? targetScreen->name().toStdString() : "primary",
                            m_currentExclusiveZone);
     } else {
         tinexus::log::warn("[DockWindow] LayerShellQt::Window::get returned nullptr for mainWindow");
     }
+
+    // Connect primary screen change listener to maintain output affinity during hotplug
+    QObject::connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, [this](QScreen* newScreen) {
+        if (!newScreen || !m_mainWindow) return;
+        tinexus::log::info("[DockWindow] Primary screen changed to '{}' — updating LayerShell output affinity",
+                           newScreen->name().toStdString());
+        m_mainWindow->setScreen(newScreen);
+        auto* win = LayerShellQt::Window::get(m_mainWindow);
+        if (win) {
+            win->setScreen(newScreen);
+            win->setWantsToBeOnActiveScreen(false);
+        }
+        if (m_tripwireWindow) {
+            m_tripwireWindow->setScreen(newScreen);
+            m_tripwireWindow->resize(newScreen->geometry().width(), 2);
+        }
+    });
 #else
     tinexus::log::warn("[DockWindow] LayerShellQt not linked — standard QWindow fallback");
 #endif
@@ -156,8 +183,12 @@ void DockWindow::setAutoHideEnabled(bool enabled) {
         applyExclusiveZone(m_baseExclusiveZone);
         if (m_tripwireWindow) m_tripwireWindow->hide();
     } else {
-        // Enabled: if hidden, exclusive zone is 0
-        if (m_autoHideState == AutoHideState::Hidden) {
+        // Enabled: if currently Visible, do NOT zero exclusive zone!
+        // Windows should only overlap when the dock is actually Hidden.
+        if (m_autoHideState == AutoHideState::Visible) {
+            applyExclusiveZone(m_baseExclusiveZone);
+            if (m_tripwireWindow) m_tripwireWindow->hide();
+        } else if (m_autoHideState == AutoHideState::Hidden) {
             applyExclusiveZone(0);
             if (m_tripwireWindow) m_tripwireWindow->show();
         }
@@ -173,11 +204,18 @@ void DockWindow::setAutoHideState(AutoHideState state) {
 
     if (m_autoHideState == AutoHideState::Hidden) {
         applyExclusiveZone(0);
+        // Make main surface pass-through to pointer events
+        updateInputRegion(0, 0, 0, 0);
         if (m_autoHideEnabled && m_tripwireWindow) {
             m_tripwireWindow->show();
         }
     } else if (m_autoHideState == AutoHideState::Visible) {
-        applyExclusiveZone(m_autoHideEnabled ? 0 : m_baseExclusiveZone);
+        // Fix: always maintain baseExclusiveZone while Visible
+        applyExclusiveZone(m_baseExclusiveZone);
+        if (!m_inputRegionRect.isEmpty()) {
+            updateInputRegion(m_inputRegionRect.x(), m_inputRegionRect.y(),
+                              m_inputRegionRect.width(), m_inputRegionRect.height());
+        }
         if (m_tripwireWindow) {
             m_tripwireWindow->hide();
         }
@@ -195,9 +233,32 @@ void DockWindow::setAutoHideStateInt(int state) {
 void DockWindow::setBaseExclusiveZone(int zone) {
     if (m_baseExclusiveZone == zone) return;
     m_baseExclusiveZone = zone;
-    if (!m_autoHideEnabled && m_autoHideState == AutoHideState::Visible) {
+    tinexus::log::info("[DockWindow] setBaseExclusiveZone: {}", zone);
+    if (m_autoHideState == AutoHideState::Visible) {
         applyExclusiveZone(m_baseExclusiveZone);
     }
+}
+
+void DockWindow::updateInputRegion(int x, int y, int width, int height) {
+    if (!m_mainWindow) return;
+
+    if (m_autoHideState == AutoHideState::Hidden || width <= 0 || height <= 0) {
+        // Wayland protocol: passing empty wl_region to wl_surface.set_input_region
+        // makes surface accept no pointer events. Qt's setMask(QRegion()) calls
+        // set_input_region(nullptr) which resets to infinite/full window.
+        // Therefore, we pass a 1x1 offscreen pixel region to guarantee total pass-through.
+        const int offscreenY = m_mainWindow->height() > 0 ? (m_mainWindow->height() + 50) : 2000;
+        const QRect offscreen(0, offscreenY, 1, 1);
+        m_mainWindow->setMask(QRegion(offscreen));
+        tinexus::log::info("[DockWindow] Wayland input region set to pass-through (offscreen 1x1 at y={})", offscreenY);
+        return;
+    }
+
+    const QRect rect(x, y, width, height);
+    m_inputRegionRect = rect;
+    m_mainWindow->setMask(QRegion(rect));
+    tinexus::log::info("[DockWindow] Wayland input region mask updated: QRect(x={} y={} w={} h={})",
+                       x, y, width, height);
 }
 
 void DockWindow::requestHide() {
