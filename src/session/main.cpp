@@ -188,7 +188,13 @@ int main(int argc, char* argv[]) {
 
     // Launch Universal PipeWire / WirePlumber Audio Daemons (if present)
     if (fs::exists("/usr/bin/pipewire")) {
-        log::info("[Session] Starting PipeWire daemon...");
+        fs::path pulse_dir = runtime_dir / "pulse";
+        std::error_code ec;
+        fs::create_directories(pulse_dir, ec);
+        std::string pulse_server = "unix:" + (pulse_dir / "native").string();
+        setenv("PULSE_SERVER", pulse_server.c_str(), 1);
+
+        log::info("[Session] Starting PipeWire daemon (PULSE_SERVER={})...", pulse_server);
         pid_t pw_pid = fork();
         if (pw_pid == 0) {
             execl("/usr/bin/pipewire", "pipewire", nullptr);
@@ -199,6 +205,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (fs::exists("/usr/bin/pipewire-pulse")) {
+            log::info("[Session] Starting PipeWire-Pulse compatibility daemon...");
             pid_t pwp_pid = fork();
             if (pwp_pid == 0) {
                 execl("/usr/bin/pipewire-pulse", "pipewire-pulse", nullptr);
@@ -210,6 +217,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (fs::exists("/usr/bin/wireplumber")) {
+            log::info("[Session] Starting WirePlumber session manager...");
             pid_t wp_pid = fork();
             if (wp_pid == 0) {
                 execl("/usr/bin/wireplumber", "wireplumber", nullptr);

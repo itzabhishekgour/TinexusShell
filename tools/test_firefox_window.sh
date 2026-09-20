@@ -9,6 +9,17 @@ rm -rf /mnt/rootfs/tmp/tinexus-test-runtime/*
 rm -rf /mnt/rootfs/tmp/ff_test_profile
 mkdir -p /mnt/rootfs/tmp/ff_test_profile
 
+cat << 'EOF' > /mnt/rootfs/tmp/ff_test_profile/user.js
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.aboutwelcome.enabled", false);
+user_pref("startup.homepage_welcome_url", "");
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("browser.tabs.inTitlebar", 1);
+user_pref("browser.tabs.drawInTitlebar", true);
+user_pref("browser.startup.page", 0);
+user_pref("browser.newtabpage.enabled", false);
+EOF
+
 echo "[+] Starting tinexus-comp..."
 chroot /mnt/rootfs /bin/bash -c "
   export XDG_RUNTIME_DIR=/tmp/tinexus-test-runtime
@@ -55,8 +66,8 @@ for s in {1..15}; do
     fi
 done
 
-echo "[+] Waiting 6s for Firefox to paint client contents..."
-sleep 6
+echo "[+] Waiting 12s for Firefox to paint client contents (tabs, URL bar, controls)..."
+sleep 12
 
 echo "[+] Taking screendump..."
 echo "screenshot /workspace/build/firefox_rendered.ppm" > "$FIFO_PATH"

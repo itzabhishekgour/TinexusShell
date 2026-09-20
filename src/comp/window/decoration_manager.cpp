@@ -5,6 +5,9 @@
 
 extern "C" {
 #include <wlr/util/edges.h>
+#define class c_class
+#include <wlr/xwayland/xwayland.h>
+#undef class
 }
 
 namespace tinexus::comp {
@@ -247,6 +250,8 @@ bool TinexusDecorationManager::is_native_csd_app(const char* app_id) noexcept {
         return false;
     }
     std::string_view id(app_id);
+
+    // 1. Native Tinexus shell and UI components (Qt6 / txui client-side decoration)
     if (id.starts_with("tinexus-") ||
         id.starts_with("io.tinexus.") ||
         id.starts_with("txui-") ||
@@ -254,6 +259,16 @@ bool TinexusDecorationManager::is_native_csd_app(const char* app_id) noexcept {
         id == "launcher") {
         return true;
     }
+
+    // 2. Known external apps that reliably self-decorate (CSD) under Wayland
+    if (id == "firefox" ||
+        id == "org.mozilla.firefox" ||
+        id == "chromium" ||
+        id == "chromium-browser" ||
+        id == "google-chrome") {
+        return true;
+    }
+
     return false;
 }
 
@@ -281,9 +296,9 @@ bool TinexusDecorationManager::client_wants_ssd(struct wlr_xdg_toplevel* topleve
     return false;
 }
 
-TinexusWindowFrame* TinexusDecorationManager::create_frame(struct wlr_xdg_toplevel* toplevel, struct wlr_scene_tree* parent) {
+TinexusWindowFrame* TinexusDecorationManager::create_frame_impl(void* window_key, struct wlr_scene_tree* parent, const char* label) {
     struct wlr_scene_tree* root_tree = parent ? parent : m_scene_tree_normal;
-    if (!toplevel || !root_tree) return nullptr;
+    if (!window_key || !root_tree) return nullptr;
 
     auto frame = std::make_unique<TinexusWindowFrame>();
 
@@ -328,26 +343,62 @@ TinexusWindowFrame* TinexusDecorationManager::create_frame(struct wlr_xdg_toplev
     frame->set_active(true);
 
     TinexusWindowFrame* ptr = frame.get();
-    m_frames[toplevel] = std::move(frame);
-    log::info("[Decoration] Created Tinexus SSD frame for toplevel {} (app_id='{}')",
-              static_cast<void*>(toplevel), toplevel->app_id ? toplevel->app_id : "unknown");
+    m_frames[window_key] = std::move(frame);
+    log::info("[Decoration] Created Tinexus SSD frame for window {} ('{}')",
+              window_key, label ? label : "unknown");
     return ptr;
 }
 
-void TinexusDecorationManager::destroy_frame(struct wlr_xdg_toplevel* toplevel) {
-    auto it = m_frames.find(toplevel);
+void TinexusDecorationManager::destroy_frame_impl(void* window_key) {
+    auto it = m_frames.find(window_key);
     if (it != m_frames.end()) {
         if (it->second && it->second->frame_tree) {
             wlr_scene_node_destroy(&it->second->frame_tree->node);
         }
         m_frames.erase(it);
-        log::info("[Decoration] Destroyed SSD frame for toplevel {}", static_cast<void*>(toplevel));
+        log::info("[Decoration] Destroyed SSD frame for window {}", window_key);
     }
 }
 
-TinexusWindowFrame* TinexusDecorationManager::get_frame(struct wlr_xdg_toplevel* toplevel) const {
-    auto it = m_frames.find(toplevel);
+TinexusWindowFrame* TinexusDecorationManager::get_frame_impl(void* window_key) const {
+    auto it = m_frames.find(window_key);
     return (it != m_frames.end()) ? it->second.get() : nullptr;
+}
+
+TinexusWindowFrame* TinexusDecorationManager::create_frame(struct wlr_xdg_toplevel* toplevel, struct wlr_scene_tree* parent) {
+    const char* label = (toplevel && toplevel->app_id) ? toplevel->app_id : "wayland-toplevel";
+    return create_frame_impl(static_cast<void*>(toplevel), parent, label);
+}
+
+void TinexusDecorationManager::destroy_frame(struct wlr_xdg_toplevel* toplevel) {
+    destroy_frame_impl(static_cast<void*>(toplevel));
+}
+
+TinexusWindowFrame* TinexusDecorationManager::get_frame(struct wlr_xdg_toplevel* toplevel) const {
+    return get_frame_impl(static_cast<void*>(toplevel));
+}
+
+TinexusWindowFrame* TinexusDecorationManager::create_xwayland_frame(struct wlr_xwayland_surface* xsurface, struct wlr_scene_tree* parent) {
+    const char* label = (xsurface && xsurface->c_class) ? xsurface->c_class : "x11-surface";
+    return create_frame_impl(static_cast<void*>(xsurface), parent, label);
+}
+
+void TinexusDecorationManager::destroy_xwayland_frame(struct wlr_xwayland_surface* xsurface) {
+    destroy_frame_impl(static_cast<void*>(xsurface));
+}
+
+TinexusWindowFrame* TinexusDecorationManager::get_xwayland_frame(struct wlr_xwayland_surface* xsurface) const {
+    return get_frame_impl(static_cast<void*>(xsurface));
+}
+
+void TinexusDecorationManager::set_xwayland_active(struct wlr_xwayland_surface* xsurface, bool active) {
+    auto* f = get_xwayland_frame(xsurface);
+    if (f) f->set_active(active);
+}
+
+void TinexusDecorationManager::update_xwayland_geometry(struct wlr_xwayland_surface* xsurface, int32_t w, int32_t h) {
+    auto* f = get_xwayland_frame(xsurface);
+    if (f) f->update_geometry(w, h);
 }
 
 bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*node*/, double cursor_x, double cursor_y,
@@ -358,22 +409,22 @@ bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*nod
 
     // Find if the clicked window has an active SSD frame
     TinexusWindowFrame* frame = nullptr;
-    struct wlr_xdg_toplevel* toplevel = nullptr;
+    void* matched_key = nullptr;
 
-    for (const auto& [tl, f] : m_frames) {
+    for (const auto& [key, f] : m_frames) {
         if (f && f->frame_tree) {
             double local_x = cursor_x - f->frame_tree->node.x;
             double local_y = cursor_y - f->frame_tree->node.y;
             HitTarget target = f->hit_test(local_x, local_y);
             if (target != HitTarget::None) {
                 frame = f.get();
-                toplevel = tl;
+                matched_key = key;
                 break;
             }
         }
     }
 
-    if (!frame || !toplevel) {
+    if (!frame || !matched_key) {
         return false;
     }
 
@@ -383,19 +434,19 @@ bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*nod
 
     switch (target) {
         case HitTarget::CloseButton:
-            log::info("[Decoration] Hit Close button on toplevel {}", static_cast<void*>(toplevel));
+            log::info("[Decoration] Hit Close button on window {}", matched_key);
             m_action_handler->request_close(wrapper);
             return true;
 
         case HitTarget::MinimizeButton:
-            log::info("[Decoration] Hit Minimize button on toplevel {}", static_cast<void*>(toplevel));
+            log::info("[Decoration] Hit Minimize button on window {}", matched_key);
             m_action_handler->request_minimize(wrapper, true);
             return true;
 
         case HitTarget::MaximizeButton: {
             bool is_max = m_action_handler->is_window_maximized(wrapper);
-            log::info("[Decoration] Hit Maximize button on toplevel {} (currently max={})",
-                      static_cast<void*>(toplevel), is_max);
+            log::info("[Decoration] Hit Maximize button on window {} (currently max={})",
+                      matched_key, is_max);
             m_action_handler->request_maximize(wrapper, !is_max);
             return true;
         }
@@ -417,7 +468,7 @@ bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*nod
             m_last_click_time = now_ms;
             m_last_click_wrapper = wrapper;
 
-            log::info("[Decoration] Initiating titlebar drag for toplevel {}", static_cast<void*>(toplevel));
+            log::info("[Decoration] Initiating titlebar drag for window {}", matched_key);
             m_action_handler->request_move(wrapper);
             return true;
         }
@@ -442,23 +493,23 @@ bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*nod
 }
 
 void TinexusDecorationManager::set_toplevel_active(struct wlr_xdg_toplevel* toplevel, bool active) {
-    auto it = m_frames.find(toplevel);
-    if (it != m_frames.end() && it->second) {
-        it->second->set_active(active);
+    auto* f = get_frame(toplevel);
+    if (f) {
+        f->set_active(active);
     }
 }
 
 void TinexusDecorationManager::set_toplevel_fullscreen(struct wlr_xdg_toplevel* toplevel, bool fullscreen) {
-    auto it = m_frames.find(toplevel);
-    if (it != m_frames.end() && it->second) {
-        it->second->set_fullscreen(fullscreen);
+    auto* f = get_frame(toplevel);
+    if (f) {
+        f->set_fullscreen(fullscreen);
     }
 }
 
 void TinexusDecorationManager::update_toplevel_geometry(struct wlr_xdg_toplevel* toplevel, int32_t w, int32_t h) {
-    auto it = m_frames.find(toplevel);
-    if (it != m_frames.end() && it->second) {
-        it->second->update_geometry(w, h);
+    auto* f = get_frame(toplevel);
+    if (f) {
+        f->update_geometry(w, h);
     }
 }
 
@@ -486,15 +537,16 @@ void TinexusDecorationManager::handle_new_toplevel_decoration(struct wl_listener
     ctx->destroy.notify = handle_decoration_destroy;
     wl_signal_add(&decoration->events.destroy, &ctx->destroy);
 
-    // Initial negotiation policy evaluation:
-    if (decoration->toplevel && decoration->toplevel->base && decoration->toplevel->base->initialized) {
-        if (is_native_csd_app(app_id)) {
-            log::info("[Decoration] App '{}' is native Tinexus app -> configuring CLIENT_SIDE", app_id ? app_id : "");
-            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
-        } else {
-            log::info("[Decoration] External client '{}' -> configuring SERVER_SIDE", app_id ? app_id : "");
-            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
-        }
+    // Initial negotiation policy evaluation (honor CSD-preferring apps immediately)
+    if (is_native_csd_app(app_id)) {
+        log::info("[Decoration] App '{}' is CSD-preferred -> configuring CLIENT_SIDE", app_id ? app_id : "");
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    } else if (decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
+        log::info("[Decoration] Client '{}' requested CLIENT_SIDE -> configuring CLIENT_SIDE", app_id ? app_id : "");
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    } else if (decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE) {
+        log::info("[Decoration] Client '{}' requested SERVER_SIDE -> configuring SERVER_SIDE", app_id ? app_id : "");
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
     self->m_contexts.push_back(std::move(ctx));
@@ -512,17 +564,18 @@ void TinexusDecorationManager::handle_decoration_request_mode(struct wl_listener
     log::info("[Decoration] Client requested mode {} for app_id='{}'",
               static_cast<int>(decoration->requested_mode), app_id ? app_id : "unknown");
 
-    if (decoration->toplevel->base && decoration->toplevel->base->initialized) {
-        // 1. Native Tinexus Qt6/txui apps MUST remain CLIENT_SIDE
-        if (is_native_csd_app(app_id)) {
-            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
-        } else if (decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
-            // 2. Client explicitly requested CLIENT_SIDE
-            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
-        } else {
-            // 3. External applications (Firefox, foot, etc.) or clients requesting SERVER_SIDE
-            wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
-        }
+    // Immediately commit the mode without waiting for surface commit (KWin negotiation pattern)
+    if (is_native_csd_app(app_id)) {
+        log::info("[Decoration] App '{}' is CSD-preferred -> honoring CLIENT_SIDE", app_id ? app_id : "");
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    } else if (decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
+        // Client explicitly requested CLIENT_SIDE (e.g. Firefox, GTK, Chrome)
+        log::info("[Decoration] Client '{}' explicitly requested CLIENT_SIDE -> honoring CLIENT_SIDE", app_id ? app_id : "");
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    } else {
+        // Client explicitly requested SERVER_SIDE or has no CSD capability
+        log::info("[Decoration] App '{}' setting SERVER_SIDE", app_id ? app_id : "");
+        wlr_xdg_toplevel_decoration_v1_set_mode(decoration, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
     if (ctx->manager && ctx->manager->m_action_handler) {

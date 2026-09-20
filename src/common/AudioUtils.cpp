@@ -449,8 +449,31 @@ bool AudioUtils::set_output_device_by_index(int index) {
         int card_id = cards[index].id;
         std::ofstream ofs("/etc/asound.conf");
         if (ofs.is_open()) {
-            ofs << "defaults.pcm.card " << card_id << "\n";
-            ofs << "defaults.ctl.card " << card_id << "\n";
+            ofs << "# Tinexus Universal Audio Configuration\n"
+                << "defaults.pcm.card " << card_id << "\n"
+                << "defaults.ctl.card " << card_id << "\n\n"
+                << "# 1. Primary Default: Route ALSA applications through PipeWire-Pulse\n"
+                << "pcm.!default {\n"
+                << "    type pulse\n"
+                << "    fallback \"tinexus_hw\"\n"
+                << "    hint {\n"
+                << "        show on\n"
+                << "        description \"Default Audio Device (PipeWire-Pulse)\"\n"
+                << "    }\n"
+                << "}\n\n"
+                << "ctl.!default {\n"
+                << "    type pulse\n"
+                << "    fallback \"tinexus_hw\"\n"
+                << "}\n\n"
+                << "# 2. Hardware Fallback: Direct ALSA with dmix multi-stream mixing\n"
+                << "pcm.tinexus_hw {\n"
+                << "    type plug\n"
+                << "    slave.pcm \"dmix:" << card_id << ",0\"\n"
+                << "}\n\n"
+                << "ctl.tinexus_hw {\n"
+                << "    type hw\n"
+                << "    card " << card_id << "\n"
+                << "}\n";
             ofs.close();
         }
         s_detected_control.clear();

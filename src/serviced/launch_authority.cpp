@@ -106,31 +106,35 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
             chdir(req.working_dir.c_str());
         }
 
-        // Drop privileges to the target user (usually UID 1000 for Wayland session)
-        if (getuid() == 0) {
-            uid_t target_uid = 1000;
-            gid_t target_gid = 1000;
-            
-            // Try to lookup 'tinexus' or first non-root user
-            struct passwd* pw = getpwnam("tinexus");
-            if (pw) {
-                target_uid = pw->pw_uid;
-                target_gid = pw->pw_gid;
-            }
+        // 1. Resolve target user identity (defaults to tinexus: 1000:1000)
+        uid_t target_uid = 1000;
+        gid_t target_gid = 1000;
+        std::string home_dir = "/home/tinexus";
+        std::string user_name = "tinexus";
 
-            setgroups(0, nullptr);       // Clear supplementary groups
-            setgid(target_gid);          // GID must be set first
-            setuid(target_uid);          // UID set last
+        struct passwd* pw = getpwnam("tinexus");
+        if (!pw) {
+            pw = getpwuid(1000);
+        }
+        if (pw) {
+            target_uid = pw->pw_uid;
+            target_gid = pw->pw_gid;
+            if (pw->pw_dir && pw->pw_dir[0] != '\0') home_dir = pw->pw_dir;
+            if (pw->pw_name && pw->pw_name[0] != '\0') user_name = pw->pw_name;
         }
 
-        // Set minimal, sanitized environment
+        std::string runtime_dir = "/run/user/" + std::to_string(target_uid);
+
+        // 2. Set minimal, sanitized environment with target user runtime paths
         std::vector<std::string> clean_env_strings = {
-            "HOME=/home/tinexus",
-            "USER=tinexus",
-            "LOGNAME=tinexus",
+            "HOME=" + home_dir,
+            "USER=" + user_name,
+            "LOGNAME=" + user_name,
             "PATH=/usr/bin:/bin:/usr/local/bin:/opt/tinexus-apps",
-            "XDG_RUNTIME_DIR=/run/user/0",
+            "XDG_RUNTIME_DIR=" + runtime_dir,
             "WAYLAND_DISPLAY=wayland-0",
+            "PULSE_SERVER=unix:" + runtime_dir + "/pulse/native",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=" + runtime_dir + "/bus",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8",
             "QT_QPA_PLATFORM=wayland",
@@ -165,7 +169,7 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
         }
         args.push_back(nullptr);
 
-        // 1. Explicit FD Sanitization
+        // 3. Explicit FD Sanitization
 #ifdef __linux__
 #include <linux/close_range.h>
 #include <sys/syscall.h>
@@ -195,24 +199,23 @@ pid_t LaunchAuthority::execute_action(const ActionRequest& req) {
         }
 #endif
 
-        // 2. Strict Privilege Drop Sequence
-        constexpr uid_t TINEXUS_USER_UID = 1000;
-        constexpr gid_t TINEXUS_USER_GID = 1000;
-
-        // Clear root supplementary groups (Security Critical)
-        if (setgroups(0, nullptr) != 0) {
-            log::error("LaunchAuthority: FATAL: setgroups failed");
-            _exit(1); 
-        }
-        // Drop GID
-        if (setgid(TINEXUS_USER_GID) != 0) { 
-            log::error("LaunchAuthority: FATAL: setgid failed");
-            _exit(1); 
-        }
-        // Drop UID (Point of no return)
-        if (setuid(TINEXUS_USER_UID) != 0) { 
-            log::error("LaunchAuthority: FATAL: setuid failed");
-            _exit(1); 
+        // 4. Strict Privilege Drop Sequence (One-way, only if running as root)
+        if (getuid() == 0) {
+            // Clear root supplementary groups (Security Critical)
+            if (setgroups(0, nullptr) != 0) {
+                log::error("LaunchAuthority: FATAL: setgroups failed");
+                _exit(1); 
+            }
+            // Drop GID first
+            if (setgid(target_gid) != 0) { 
+                log::error("LaunchAuthority: FATAL: setgid failed");
+                _exit(1); 
+            }
+            // Drop UID last (Point of no return)
+            if (setuid(target_uid) != 0) { 
+                log::error("LaunchAuthority: FATAL: setuid failed");
+                _exit(1); 
+            }
         }
 
         // If we have an FD (third-party app or AppImage), use it to prevent TOCTOU

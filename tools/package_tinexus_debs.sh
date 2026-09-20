@@ -147,7 +147,7 @@ Version: ${VERSION}
 Section: x11
 Priority: required
 Architecture: amd64
-Depends: tinexus-core (= ${VERSION}), libwayland-server0, libxkbcommon0, libpixman-1-0, libinput10, libseat1, libegl-mesa0, libgbm1, libwlroots-0.19, libliftoff0, libxcb-errors0, libxcb-ewmh2, libxcb-icccm4, xdg-desktop-portal-wlr, pipewire, grim, xwayland
+Depends: tinexus-core (= ${VERSION}), libwayland-server0, libxkbcommon0, libpixman-1-0, libinput10, libseat1, libegl-mesa0, libgbm1, libwlroots-0.19, libliftoff0, libxcb-errors0, libxcb-ewmh2, libxcb-icccm4, xdg-desktop-portal-wlr, pipewire, pipewire-pulse, pipewire-alsa, pulseaudio-utils, libasound2-plugins, grim, xwayland
 Maintainer: Tinexus Engineering Team <team@tinexus.org>
 Description: Tinexus Wayland Compositor (wlroots based)
  Provides tinexus-comp compositor, hardware probe tools, and early splash.

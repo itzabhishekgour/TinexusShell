@@ -12,6 +12,7 @@ extern "C" {
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
+struct wlr_xwayland_surface;
 #define static
 #include <wlr/types/wlr_scene.h>
 #undef static
@@ -76,17 +77,24 @@ public:
     bool init(struct wl_display* display, IWindowActionHandler* action_handler, struct wlr_scene_tree* scene_tree_normal);
     void shutdown();
 
-    // Policy check: true for native Tinexus Qt6/txui apps that manage their own CSD
+    // Policy check: true for native Tinexus apps or CSD-preferring external apps (Firefox, Chromium)
     static bool is_native_csd_app(const char* app_id) noexcept;
 
     // Decoration negotiation queries
     [[nodiscard]] bool client_wants_csd(struct wlr_xdg_toplevel* toplevel) const;
     [[nodiscard]] bool client_wants_ssd(struct wlr_xdg_toplevel* toplevel) const;
 
-    // Frame lifecycle
+    // Frame lifecycle (Native Wayland toplevels)
     TinexusWindowFrame* create_frame(struct wlr_xdg_toplevel* toplevel, struct wlr_scene_tree* parent = nullptr);
     void destroy_frame(struct wlr_xdg_toplevel* toplevel);
     [[nodiscard]] TinexusWindowFrame* get_frame(struct wlr_xdg_toplevel* toplevel) const;
+
+    // Frame lifecycle (XWayland surfaces)
+    TinexusWindowFrame* create_xwayland_frame(struct wlr_xwayland_surface* xsurface, struct wlr_scene_tree* parent = nullptr);
+    void destroy_xwayland_frame(struct wlr_xwayland_surface* xsurface);
+    [[nodiscard]] TinexusWindowFrame* get_xwayland_frame(struct wlr_xwayland_surface* xsurface) const;
+    void set_xwayland_active(struct wlr_xwayland_surface* xsurface, bool active);
+    void update_xwayland_geometry(struct wlr_xwayland_surface* xsurface, int32_t w, int32_t h);
 
     // Handle cursor button on potential frame
     bool handle_cursor_button(struct wlr_scene_node* node, double cursor_x, double cursor_y,
@@ -105,6 +113,10 @@ private:
     TinexusDecorationManager() = default;
     ~TinexusDecorationManager() = default;
 
+    TinexusWindowFrame* create_frame_impl(void* window_key, struct wlr_scene_tree* parent, const char* label);
+    void destroy_frame_impl(void* window_key);
+    [[nodiscard]] TinexusWindowFrame* get_frame_impl(void* window_key) const;
+
     static void handle_new_toplevel_decoration(struct wl_listener* listener, void* data);
     static void handle_decoration_request_mode(struct wl_listener* listener, void* data);
     static void handle_decoration_destroy(struct wl_listener* listener, void* data);
@@ -122,7 +134,7 @@ private:
     struct wlr_xdg_decoration_manager_v1* m_manager_v1{nullptr};
     struct wl_listener m_new_decoration_listener{};
 
-    std::unordered_map<struct wlr_xdg_toplevel*, std::unique_ptr<TinexusWindowFrame>> m_frames;
+    std::unordered_map<void*, std::unique_ptr<TinexusWindowFrame>> m_frames;
     std::vector<std::unique_ptr<DecorationContext>> m_contexts;
 
     // Double-click detection on titlebar

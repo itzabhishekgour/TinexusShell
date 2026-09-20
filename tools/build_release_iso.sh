@@ -278,7 +278,7 @@ EOF_POLICY
             calamares calamares-settings-ubuntu-common \
             linux-firmware \
             xdg-desktop-portal xdg-desktop-portal-wlr \
-            pipewire wireplumber grim slurp xwayland \
+            pipewire pipewire-pulse pipewire-alsa pulseaudio-utils libasound2-plugins wireplumber grim slurp xwayland \
             firefox || true
 
     # Attempt to install signed bootloader packages if available in repository

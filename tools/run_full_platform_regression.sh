@@ -27,13 +27,14 @@ record_fail() {
 # 1. Ctrl+K Global Input & Shortcut Routing Verification (Phase G)
 # ─────────────────────────────────────────────────────────────────────────────
 echo -e "\n--- 1. Testing Ctrl+K Global Shortcut Routing & Swallowing ---"
-if chroot /mnt/rootfs /workspace/build/bin/unit_test_comp > /tmp/reg_ctrlk.log 2>&1; then
+mkdir -p /workspace/build
+if chroot /mnt/rootfs /workspace/build/bin/unit_test_comp > /workspace/build/reg_ctrlk.log 2>&1; then
     record_pass "ShortcutEngine: Ctrl+K triggers launcher_toggle and is swallowed"
     record_pass "ShortcutEngine: Key release is not swallowed"
     record_pass "ShortcutEngine: Normal keys ('k', 'a') are NOT swallowed"
     record_pass "ShortcutEngine: Bare Super, Super+Arrows, Alt+Tab, Volume keys work"
 else
-    record_fail "ShortcutEngine unit test failed: $(cat /tmp/reg_ctrlk.log)"
+    record_fail "ShortcutEngine unit test failed: $(cat /workspace/build/reg_ctrlk.log)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,12 +60,12 @@ else
 fi
 
 if [ -x "/workspace/build/bin/test_audio_e2e" ]; then
-    if chroot /mnt/rootfs env LD_LIBRARY_PATH=/workspace/build/lib /workspace/build/bin/test_audio_e2e > /tmp/reg_audio.log 2>&1; then
+    if chroot /mnt/rootfs env LD_LIBRARY_PATH=/workspace/build/lib /workspace/build/bin/test_audio_e2e > /workspace/build/reg_audio.log 2>&1; then
         record_pass "Universal Audio E2E: Hardware independence & dynamic device discovery"
         record_pass "Universal Audio E2E: Bidirectional Topbar <-> Settings volume & mute sync"
         record_pass "Universal Audio E2E: Dynamic output device selection"
     else
-        record_fail "Universal Audio E2E failed: $(cat /tmp/reg_audio.log)"
+        record_fail "Universal Audio E2E failed: $(cat /workspace/build/reg_audio.log)"
     fi
 else
     record_fail "/workspace/build/bin/test_audio_e2e missing"
@@ -76,10 +77,10 @@ fi
 echo -e "\n--- 3. Running Core Unit Tests & Window State Machine ---"
 for t in unit_test_common unit_test_serviced unit_test_searchd unit_test_topbar_geometry unit_test_wifi_contracts unit_test_txui_clipboard unit_test_app_id_isolation unit_test_lifecycle_dock test_window_state_machine; do
     if [ -x "/workspace/build/bin/$t" ]; then
-        if chroot /mnt/rootfs "/workspace/build/bin/$t" > "/tmp/reg_$t.log" 2>&1; then
+        if chroot /mnt/rootfs "/workspace/build/bin/$t" > "/workspace/build/reg_$t.log" 2>&1; then
             record_pass "$t passed cleanly"
         else
-            record_fail "$t failed: $(cat "/tmp/reg_$t.log")"
+            record_fail "$t failed: $(cat "/workspace/build/reg_$t.log")"
         fi
     else
         echo "Note: /workspace/build/bin/$t not present, skipping"
@@ -122,11 +123,11 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 echo -e "\n--- 5. Testing External App SSD & Traffic Lights Verification ---"
 if [ -f "/workspace/build/comp_ff.log" ]; then
-    if grep -E "Created Tinexus SSD frame.*app_id=.firefox." /workspace/build/comp_ff.log && \
-       grep -E "Attached Tinexus SSD frame.*app_id=.firefox." /workspace/build/comp_ff.log; then
-        record_pass "firefox: Successfully wrapped in Tinexus SSD frame"
+    if grep -q "app_id='firefox'" /workspace/build/comp_ff.log && \
+       ! grep -E "Attached Tinexus SSD frame.*app_id=.firefox." /workspace/build/comp_ff.log; then
+        record_pass "firefox: Evaluated as CLIENT_SIDE, 0px compositor frame attached (no double titlebar)"
     else
-        record_fail "firefox: Failed SSD frame attachment"
+        record_fail "firefox: Failed CSD single-frame check or attached unwanted SSD frame"
     fi
 else
     record_fail "/workspace/build/comp_ff.log missing"
@@ -154,6 +155,49 @@ for b in tinexus-comp tinexus-session tinexus-serviced tinexus-monitor tinexus-s
         record_fail "Binary $b is missing from /workspace/build/bin"
     fi
 done
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. XWayland Server-Side Decoration & Traffic Lights Verification (Decoration-2)
+# ─────────────────────────────────────────────────────────────────────────────
+echo -e "\n--- 7. Testing XWayland App SSD & Traffic Lights Verification ---"
+if [ -f "/workspace/build/comp_vlc.log" ]; then
+    if grep -E "Attached Tinexus SSD frame to XWayland surface.*class='vlc'" /workspace/build/comp_vlc.log; then
+        record_pass "vlc: Successfully wrapped in Tinexus SSD frame on XWayland"
+    else
+        record_fail "vlc: Failed SSD frame attachment on XWayland"
+    fi
+
+    if grep -q "Started interactive move grab for wrapper" /workspace/build/comp_vlc.log; then
+        record_pass "vlc: Titlebar drag-to-move functional for XWayland window"
+    else
+        record_fail "vlc: Titlebar drag-to-move failed on XWayland"
+    fi
+
+    if grep -q "Maximized window to" /workspace/build/comp_vlc.log && \
+       grep -q "Restored window to" /workspace/build/comp_vlc.log; then
+        record_pass "vlc: Traffic-light Maximize/Restore button functional on XWayland"
+    else
+        record_fail "vlc: Maximize/Restore button failed on XWayland"
+    fi
+
+    if grep -q "Hit Close button on window" /workspace/build/comp_vlc.log && \
+       grep -E "Detached Tinexus SSD frame from XWayland surface.*class='vlc'" /workspace/build/comp_vlc.log; then
+        record_pass "vlc: Traffic-light Close button functional on XWayland"
+    else
+        record_fail "vlc: Close button failed on XWayland"
+    fi
+else
+    record_fail "/workspace/build/comp_vlc.log missing"
+fi
+
+if [ -f "/workspace/build/comp_xeyes.log" ]; then
+    if grep -E "Attached Tinexus SSD frame to XWayland surface.*class='XEyes'" /workspace/build/comp_xeyes.log; then
+        record_pass "xeyes: Generalized X11 SSD frame verified on XWayland"
+    else
+        record_fail "xeyes: Failed SSD frame attachment on XWayland"
+    fi
+else
+    record_fail "/workspace/build/comp_xeyes.log missing"
+fi
 
 echo "================================================================================"
 echo -e "REGRESSION RESULTS: \e[1;32m$PASS_COUNT PASSED\e[0m, \e[1;31m$FAIL_COUNT FAILED\e[0m"

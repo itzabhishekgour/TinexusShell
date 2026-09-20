@@ -52,6 +52,13 @@ for b in "${CORE_BINARIES[@]}"; do
     fi
 done
 
+if [ -f "/workspace/build/lib/libtinexus_common.so.0.1.0" ]; then
+    echo "[INFO] Syncing libtinexus_common.so* -> /mnt/rootfs/usr/lib/"
+    cp -av /workspace/build/lib/libtinexus_common.so* /mnt/rootfs/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+    cp -av /workspace/build/lib/libtinexus_common.so* /mnt/rootfs/usr/lib/ 2>/dev/null || true
+    chroot /mnt/rootfs /sbin/ldconfig 2>/dev/null || true
+fi
+
 echo "[INFO] Syncing updated QML files into rootfs..."
 QML_MODULES=("shell" "settings-ui" "dock" "launcher" "lock" "wallpaper" "files" "monitor" "terminal" "common")
 for m in "${QML_MODULES[@]}"; do
