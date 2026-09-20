@@ -71,7 +71,8 @@ signals:
                        const QString& title,
                        bool isActivated,
                        bool isMinimized,
-                       bool isMaximized);
+                       bool isMaximized,
+                       bool isFullscreen = false);
 
     /// Emitted atomically when an existing toplevel window's state or properties change (on 'done').
     void toplevelUpdated(struct zwlr_foreign_toplevel_handle_v1* handle,
@@ -79,7 +80,8 @@ signals:
                          const QString& title,
                          bool isActivated,
                          bool isMinimized,
-                         bool isMaximized);
+                         bool isMaximized,
+                         bool isFullscreen = false);
 
     /// Emitted when a toplevel window is closed and destroyed.
     void toplevelRemoved(struct zwlr_foreign_toplevel_handle_v1* handle,

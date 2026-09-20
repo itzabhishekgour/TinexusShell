@@ -330,18 +330,20 @@ void ToplevelTracker::handleToplevelDone(void* data, struct zwlr_foreign_topleve
     }
 
     if (isFirstDone) {
-        tinexus::log::info("[ToplevelTracker] toplevelAdded: app_id='{}' title='{}' activated={} min={} max={}",
+        tinexus::log::info("[ToplevelTracker] toplevelAdded: app_id='{}' title='{}' activated={} min={} max={} fullscreen={}",
                            win.committed.appId.toStdString(),
                            win.committed.title.toStdString(),
                            win.committed.isActivated,
                            win.committed.isMinimized,
-                           win.committed.isMaximized);
+                           win.committed.isMaximized,
+                           win.committed.isFullscreen);
         emit self->toplevelAdded(handle,
                                  win.committed.appId,
                                  win.committed.title,
                                  win.committed.isActivated,
                                  win.committed.isMinimized,
-                                 win.committed.isMaximized);
+                                 win.committed.isMaximized,
+                                 win.committed.isFullscreen);
     } else {
         const bool stateChanged = (prev.isActivated  != win.committed.isActivated  ||
                                    prev.isMinimized  != win.committed.isMinimized  ||
@@ -355,7 +357,8 @@ void ToplevelTracker::handleToplevelDone(void* data, struct zwlr_foreign_topleve
                                        win.committed.title,
                                        win.committed.isActivated,
                                        win.committed.isMinimized,
-                                       win.committed.isMaximized);
+                                       win.committed.isMaximized,
+                                       win.committed.isFullscreen);
         }
     }
 }

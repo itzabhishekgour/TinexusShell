@@ -341,6 +341,12 @@ void DockBridge::attachDockWindow(DockWindow* dockWindow) {
             emit autoHideStateChanged(m_autoHideState);
         }
     });
+    connect(m_dockWindow, &DockWindow::autoHideEnabledChanged, this, [this](bool en) {
+        if (m_autoHideEnabled != en) {
+            m_autoHideEnabled = en;
+            emit autoHideEnabledChanged(m_autoHideEnabled);
+        }
+    });
 }
 
 void DockBridge::attachStacksPopup(StacksPopup* popup) {

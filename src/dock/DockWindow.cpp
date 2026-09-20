@@ -282,6 +282,19 @@ void DockWindow::onTripwireEntered() {
     requestReveal();
 }
 
+void DockWindow::onWindowStateChanged(bool hasMaximized) {
+    tinexus::log::info("[DockWindow] onWindowStateChanged: hasMaximized={}", hasMaximized);
+    if (hasMaximized) {
+        setAutoHideEnabled(true);
+        setAutoHideState(AutoHideState::Hidden);
+        requestHide();
+    } else {
+        setAutoHideEnabled(false);
+        setAutoHideState(AutoHideState::Visible);
+        requestReveal();
+    }
+}
+
 } // namespace tinexus::dock
 
 #include "moc_DockWindow.cpp"

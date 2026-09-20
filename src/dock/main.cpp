@@ -73,6 +73,10 @@ int main(int argc, char* argv[]) {
     QObject::connect(&tracker, &tinexus::dock::ToplevelTracker::toplevelRemoved,
                      &dockModel, &tinexus::dock::DockModel::onToplevelRemovedWithHandle);
 
+    // Auto-Hide / Intellihide: dock auto-hides when a window is maximized or fullscreen
+    QObject::connect(&dockModel, &tinexus::dock::DockModel::hasMaximizedWindowsChanged,
+                     &dockWindow, &tinexus::dock::DockWindow::onWindowStateChanged);
+
     // Compositor Loss & Reconnection Logic (Slice 2 recovery)
     auto* reconnectTimer = new QTimer(&app);
     reconnectTimer->setInterval(2000);

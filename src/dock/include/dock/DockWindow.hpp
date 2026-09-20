@@ -56,6 +56,9 @@ public:
 
     [[nodiscard]] QRect inputRegionRect() const { return m_inputRegionRect; }
 
+public slots:
+    void onWindowStateChanged(bool hasMaximized);
+
 signals:
     void autoHideEnabledChanged(bool enabled);
     void autoHideStateChanged(int state);

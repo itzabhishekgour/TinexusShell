@@ -58,6 +58,9 @@ static int handle_cmd_fifo(int fd, uint32_t mask, void* data) {
                 tinexus::log::info("[Server] Simulating pointer click via FIFO");
                 tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 1);
                 tinexus::comp::SeatManager::instance().notify_button(0, 0x110, 0);
+            } else if (cmd.starts_with("fullscreen")) {
+                tinexus::log::info("[Server] Fullscreen toggle via FIFO");
+                backend->fullscreen_active_window();
             } else if (cmd.starts_with("screenshot ")) {
                 std::string path = cmd.substr(11);
                 while (!path.empty() && (path.back() == '\n' || path.back() == '\r' || path.back() == ' ')) {
@@ -167,7 +170,9 @@ bool TinexusServer::initialize() {
     // Also support legacy /tinexus_comp_cmd in XDG_RUNTIME_DIR for backwards compatibility
     std::string legacy_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
     unlink(legacy_path.c_str());
-    symlink(fifo_path.c_str(), legacy_path.c_str());
+    if (symlink(fifo_path.c_str(), legacy_path.c_str()) != 0) {
+        // Legacy fallback link creation is best-effort
+    }
 
     // 3. Add Wayland socket
     const char* socket_name = wl_display_add_socket_auto(m_wl_display);
@@ -317,6 +322,11 @@ bool TinexusServer::initialize() {
             if (shortcut_name == "restore") {
                 log::info("[Server] restore — restoring focused window");
                 m_backend->restore_active_window();
+                return;
+            }
+            if (shortcut_name == "fullscreen") {
+                log::info("[Server] fullscreen — toggling fullscreen on focused window");
+                m_backend->fullscreen_active_window();
                 return;
             }
             if (shortcut_name == "close_window") {

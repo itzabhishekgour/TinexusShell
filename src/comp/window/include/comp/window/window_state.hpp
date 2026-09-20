@@ -257,6 +257,12 @@ public:
         m_geom.assigned_output = output;
     }
 
+    void update_work_area(const WorkArea& wa) noexcept {
+        if (m_state == WindowState::Maximized) {
+            m_geom.current_geom = {wa.x, wa.y, wa.width, wa.height};
+        }
+    }
+
 private:
     WindowState m_state{WindowState::Normal};
     WindowGeometryModel m_geom;

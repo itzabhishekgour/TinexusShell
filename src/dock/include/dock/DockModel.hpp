@@ -43,6 +43,7 @@ struct ToplevelRef {
     bool isActivated{false};
     bool isMinimized{false};
     bool isMaximized{false};
+    bool isFullscreen{false};
 };
 
 // ── Single dock item POD ─────────────────────────────────────────────────────
@@ -107,7 +108,8 @@ public:
                                   const QString& title,
                                   bool isActivated,
                                   bool isMinimized,
-                                  bool isMaximized);
+                                  bool isMaximized,
+                                  bool isFullscreen = false);
 
     /// Atomic toplevel update from ToplevelTracker on 'done'
     void onToplevelUpdatedWithHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
@@ -115,7 +117,8 @@ public:
                                     const QString& title,
                                     bool isActivated,
                                     bool isMinimized,
-                                    bool isMaximized);
+                                    bool isMaximized,
+                                    bool isFullscreen = false);
 
     /// Atomic toplevel removal from ToplevelTracker on 'closed'
     void onToplevelRemovedWithHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
@@ -130,6 +133,9 @@ public:
 
     [[nodiscard]] bool autoHideEnabled() const { return m_autoHide; }
     void setAutoHideEnabled(bool enabled);
+
+    [[nodiscard]] bool hasMaximizedOrFullscreenToplevel() const;
+    [[nodiscard]] bool hasMaximizedWindows() const { return m_hasMaximizedWindows; }
 
     // Direct access for DockBridge animation layer
     [[nodiscard]] const QList<DockItemData>& pinnedItems() const { return m_pinned; }
@@ -165,6 +171,7 @@ public slots:
 signals:
     void itemActivationRequested(const QString& appId);
     void dockItemsChanged();
+    void hasMaximizedWindowsChanged(bool hasMaximized);
 
 private:
     void loadHardcodedPinnedItems();
@@ -182,6 +189,7 @@ private:
     QString resolveIconType(const QString& appId) const;
     void recomputeItemState(DockItemData& item);
     void updateActiveStateAcrossAll(struct zwlr_foreign_toplevel_handle_v1* activeHandle);
+    void checkMaximizedWindowsState();
 
     // ── Data sources ─────────────────────────────────────────────────────────
     QList<DockItemData> m_pinned;     // Source 1: pinned apps
@@ -193,6 +201,7 @@ private:
 
     ToplevelTracker* m_tracker{nullptr};
     bool m_autoHide{false};
+    bool m_hasMaximizedWindows{false};
 };
 
 } // namespace tinexus::dock

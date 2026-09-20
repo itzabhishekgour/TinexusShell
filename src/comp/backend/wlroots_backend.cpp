@@ -43,6 +43,7 @@ extern "C" {
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
+#include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/xwayland/server.h>
 #define class c_class
 #include <wlr/xwayland/xwayland.h>
@@ -216,6 +217,7 @@ public:
 
         m_output_layout = wlr_output_layout_create(m_display);
         wlr_xdg_output_manager_v1_create(m_display, m_output_layout);
+        m_foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(m_display);
 
         // Create wlr_scene and scene tree structure
         m_scene = wlr_scene_create();
@@ -225,6 +227,7 @@ public:
         m_scene_tree_bottom     = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_normal     = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_top        = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_fullscreen = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_overlay    = wlr_scene_tree_create(&m_scene->tree);
 
         // Initialize per-workspace scene trees under m_scene_tree_normal
@@ -548,7 +551,9 @@ private:
     struct wlr_scene_tree* m_scene_tree_bottom{nullptr};
     struct wlr_scene_tree* m_scene_tree_normal{nullptr};
     struct wlr_scene_tree* m_scene_tree_top{nullptr};
+    struct wlr_scene_tree* m_scene_tree_fullscreen{nullptr};
     struct wlr_scene_tree* m_scene_tree_overlay{nullptr};
+    struct wlr_foreign_toplevel_manager_v1* m_foreign_toplevel_mgr{nullptr};
     // Bug 3: track the single shared background fill rect so it can be
     // destroyed and recreated on hotplug rather than stacking indefinitely.
     struct wlr_scene_rect* m_bg_rect{nullptr};
@@ -620,6 +625,7 @@ private:
         struct wl_listener unmap;
         WlrootsBackend* backend{nullptr};
         uint32_t surface_id{0};
+        int32_t last_exclusive_zone{-999};
     };
 
     enum class WrapperType : uint8_t { NativeToplevel, Xwayland };
@@ -663,6 +669,14 @@ private:
         double opacity{1.0};
         std::chrono::steady_clock::time_point fade_start_time{};
         struct wl_event_source* fade_timer{nullptr};
+
+        // Foreign toplevel management
+        struct wlr_foreign_toplevel_handle_v1* foreign_handle{nullptr};
+        struct wl_listener foreign_request_maximize{};
+        struct wl_listener foreign_request_minimize{};
+        struct wl_listener foreign_request_activate{};
+        struct wl_listener foreign_request_fullscreen{};
+        struct wl_listener foreign_request_close{};
     };
     struct PopupWrapper {
         struct wlr_xdg_popup* popup{nullptr};
@@ -697,12 +711,21 @@ private:
         uint32_t surface_id{0};
         WindowStateMachine state_machine;
         bool is_maximized{false};
+        bool is_fullscreen{false};
         int32_t saved_x{50};
         int32_t saved_y{100};
         int32_t saved_width{800};
         int32_t saved_height{600};
         bool is_closing{false};
         double opacity{1.0};
+
+        // Foreign toplevel management
+        struct wlr_foreign_toplevel_handle_v1* foreign_handle{nullptr};
+        struct wl_listener foreign_request_maximize{};
+        struct wl_listener foreign_request_minimize{};
+        struct wl_listener foreign_request_activate{};
+        struct wl_listener foreign_request_fullscreen{};
+        struct wl_listener foreign_request_close{};
     };
 
     struct XwaylandUnmanagedWrapper {
@@ -878,6 +901,13 @@ private:
                 struct wlr_box usable_area = full_area;
                 if (w->layer_surface->output && full_area.width > 0 && full_area.height > 0) {
                     wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+                }
+            }
+
+            if (w->layer_surface->current.exclusive_zone != w->last_exclusive_zone) {
+                w->last_exclusive_zone = w->layer_surface->current.exclusive_zone;
+                if (w->layer_surface->output) {
+                    w->backend->recalculate_output_work_area(w->layer_surface->output);
                 }
             }
 
@@ -1080,6 +1110,9 @@ private:
             return;
         }
         if (m_active_toplevel != nullptr) {
+            if (m_active_toplevel->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(m_active_toplevel->foreign_handle, false);
+            }
             wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
             if (m_active_toplevel->frame && m_active_toplevel->toplevel) {
                 TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
@@ -1088,6 +1121,9 @@ private:
         }
         for (auto& xw : m_xwayland_surfaces) {
             if (xw.get() != wrapper && xw->xsurface) {
+                if (xw->foreign_handle) {
+                    wlr_foreign_toplevel_handle_v1_set_activated(xw->foreign_handle, false);
+                }
                 wlr_xwayland_surface_activate(xw->xsurface, false);
                 if (xw->frame) {
                     xw->frame->set_active(false);
@@ -1108,6 +1144,9 @@ private:
             }
             wlr_xwayland_surface_activate(wrapper->xsurface, true);
             wlr_xwayland_surface_restack(wrapper->xsurface, nullptr, XCB_STACK_MODE_ABOVE);
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, true);
+            }
             if (wrapper->xsurface->surface) {
                 FocusManager::instance().set_keyboard_focus(wrapper->xsurface->surface);
             }
@@ -1124,6 +1163,9 @@ private:
         if (!wrapper || !wrapper->xsurface) return;
         if (minimized) {
             wrapper->state_machine.request_minimize();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, true);
+            }
             wlr_xwayland_surface_set_minimized(wrapper->xsurface, true);
             if (wrapper->scene_tree) {
                 wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
@@ -1136,6 +1178,9 @@ private:
             if (TinexusServer::instance()) TinexusServer::instance()->notify_window_minimized(app_id_str);
         } else {
             wrapper->state_machine.request_restore();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, false);
+            }
             wlr_xwayland_surface_set_minimized(wrapper->xsurface, false);
             if (wrapper->scene_tree) {
                 wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
@@ -1176,12 +1221,18 @@ private:
             if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id_str);
         }
         if (m_active_toplevel != nullptr && m_active_toplevel != wrapper) {
+            if (m_active_toplevel->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(m_active_toplevel->foreign_handle, false);
+            }
             wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
             if (m_active_toplevel->frame && m_active_toplevel->toplevel) {
                 TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
             }
         }
         if (m_active_xwayland != nullptr) {
+            if (m_active_xwayland->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(m_active_xwayland->foreign_handle, false);
+            }
             if (m_active_xwayland->xsurface) {
                 wlr_xwayland_surface_activate(m_active_xwayland->xsurface, false);
             }
@@ -1200,6 +1251,9 @@ private:
             wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
             if (wrapper->frame && wrapper->toplevel) {
                 TinexusDecorationManager::instance().set_toplevel_active(wrapper->toplevel, true);
+            }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, true);
             }
             FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
 
@@ -1320,18 +1374,34 @@ private:
     }
 
     void maximize_active_window() noexcept override {
-        if (m_active_toplevel) {
+        if (m_active_xwayland) {
+            xwayland_set_maximized(m_active_xwayland, true);
+        } else if (m_active_toplevel) {
             toplevel_set_maximized(m_active_toplevel, true);
         }
     }
 
     void restore_active_window() noexcept override {
-        if (m_active_toplevel) {
+        if (m_active_xwayland) {
+            if (m_active_xwayland->is_maximized) {
+                xwayland_set_maximized(m_active_xwayland, false);
+            } else if (m_active_xwayland->state_machine.snap_mode() != SnapMode::None) {
+                m_active_xwayland->state_machine.request_restore();
+            }
+        } else if (m_active_toplevel) {
             if (m_active_toplevel->state_machine.state() == WindowState::Maximized) {
                 toplevel_set_maximized(m_active_toplevel, false);
             } else if (m_active_toplevel->state_machine.snap_mode() != SnapMode::None) {
                 toplevel_restore_snap(m_active_toplevel);
             }
+        }
+    }
+
+    void fullscreen_active_window() noexcept override {
+        if (m_active_xwayland) {
+            xwayland_set_fullscreen(m_active_xwayland, !m_active_xwayland->is_fullscreen);
+        } else if (m_active_toplevel) {
+            toplevel_set_fullscreen(m_active_toplevel, !m_active_toplevel->is_fullscreen);
         }
     }
 
@@ -1633,8 +1703,7 @@ private:
         // Tinexus platform desktop invariants:
         // TopBar occupies y = 0..32 on LayerTop; windows must never maximize or snap underneath the topbar.
         top_margin = std::max(top_margin, 32);
-        // Reserve dock space when active (dock height ~64-72px at bottom)
-        bottom_margin = std::max(bottom_margin, 72);
+        // Note: bottom_margin is dynamically dictated by active layer-shell surfaces (e.g. tinexus-dock).
 
         geom.work_x = geom.global_x + left_margin;
         geom.work_y = geom.global_y + top_margin;
@@ -1647,6 +1716,195 @@ private:
 
     WorkArea get_output_work_area(struct wlr_output* out) const {
         return get_output_geometry(out).work_area();
+    }
+
+    void elevate_window_node(struct wlr_scene_tree* scene_tree) {
+        if (!scene_tree || !m_scene_tree_fullscreen) return;
+        wlr_scene_node_reparent(&scene_tree->node, m_scene_tree_fullscreen);
+        wlr_scene_node_raise_to_top(&scene_tree->node);
+    }
+
+    void restore_window_node(struct wlr_scene_tree* scene_tree, uint32_t workspace_id) {
+        if (!scene_tree) return;
+        struct wlr_scene_tree* ws_tree = WorkspaceManager::instance().get_workspace_scene_tree(workspace_id);
+        if (!ws_tree) ws_tree = m_scene_tree_normal;
+        if (ws_tree) {
+            wlr_scene_node_reparent(&scene_tree->node, ws_tree);
+        }
+    }
+
+    void recalculate_output_work_area(struct wlr_output* out) {
+        if (!out) return;
+        WorkArea wa = get_output_work_area(out);
+        if (wa.width <= 0 || wa.height <= 0) return;
+        log::info("[Output] Recalculating work area for output '{}': {}x{} at ({}, {})",
+                  out->name ? out->name : "unknown", wa.width, wa.height, wa.x, wa.y);
+
+        for (auto& top : m_toplevels) {
+            if (!top || !top->toplevel || !top->scene_tree) continue;
+            if (top->is_maximized && !top->is_fullscreen) {
+                struct wlr_output* top_out = get_output_for_toplevel(top.get());
+                if (top_out == out) {
+                    wlr_scene_node_set_position(&top->scene_tree->node, wa.x, wa.y);
+                    wlr_xdg_toplevel_set_size(top->toplevel, wa.width, wa.height);
+                    wlr_xdg_surface_schedule_configure(top->toplevel->base);
+                    top->state_machine.update_work_area(wa);
+                }
+            }
+        }
+
+        for (auto& xwrap : m_xwayland_surfaces) {
+            if (!xwrap || !xwrap->xsurface || !xwrap->scene_tree) continue;
+            if (xwrap->is_maximized && !xwrap->is_fullscreen) {
+                struct wlr_output* x_out = get_output_for_xwayland(xwrap.get());
+                if (!x_out && !m_outputs.empty()) x_out = m_outputs.front()->get_wlr_output();
+                if (x_out == out) {
+                    wlr_scene_node_set_position(&xwrap->scene_tree->node, wa.x, wa.y);
+                    wlr_xwayland_surface_configure(xwrap->xsurface, wa.x, wa.y, wa.width, wa.height);
+                    if (xwrap->frame) {
+                        xwrap->frame->update_geometry(wa.width, wa.height);
+                    }
+                    xwrap->state_machine.update_work_area(wa);
+                }
+            }
+        }
+    }
+
+    void setup_foreign_toplevel_for_native(ToplevelWrapper* wrapper) {
+        if (!wrapper || !m_foreign_toplevel_mgr || wrapper->foreign_handle) return;
+        wrapper->foreign_handle = wlr_foreign_toplevel_handle_v1_create(m_foreign_toplevel_mgr);
+        if (!wrapper->foreign_handle) return;
+
+        if (wrapper->toplevel->title) {
+            wlr_foreign_toplevel_handle_v1_set_title(wrapper->foreign_handle, wrapper->toplevel->title);
+        }
+        if (wrapper->toplevel->app_id) {
+            wlr_foreign_toplevel_handle_v1_set_app_id(wrapper->foreign_handle, wrapper->toplevel->app_id);
+        }
+
+        struct wlr_output* out = get_output_for_toplevel(wrapper);
+        if (out) {
+            wlr_foreign_toplevel_handle_v1_output_enter(wrapper->foreign_handle, out);
+        }
+
+        wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, wrapper->is_maximized);
+        wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, wrapper->is_fullscreen);
+        wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle,
+            wrapper->state_machine.state() == WindowState::Minimized);
+        wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, m_active_toplevel == wrapper);
+
+        wrapper->foreign_request_maximize.notify = [](struct wl_listener* l, void* data) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_maximize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_maximized_event*>(data);
+            if (w && w->backend) w->backend->toplevel_set_maximized(w, ev ? ev->maximized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_maximize, &wrapper->foreign_request_maximize);
+
+        wrapper->foreign_request_minimize.notify = [](struct wl_listener* l, void* data) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_minimize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_minimized_event*>(data);
+            if (w && w->backend) w->backend->toplevel_set_minimized(w, ev ? ev->minimized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_minimize, &wrapper->foreign_request_minimize);
+
+        wrapper->foreign_request_activate.notify = [](struct wl_listener* l, void* /*data*/) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_activate);
+            if (w && w->backend) w->backend->focus_toplevel(w);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_activate, &wrapper->foreign_request_activate);
+
+        wrapper->foreign_request_fullscreen.notify = [](struct wl_listener* l, void* data) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_fullscreen);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_fullscreen_event*>(data);
+            if (w && w->backend) w->backend->toplevel_set_fullscreen(w, ev ? ev->fullscreen : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_fullscreen, &wrapper->foreign_request_fullscreen);
+
+        wrapper->foreign_request_close.notify = [](struct wl_listener* l, void* /*data*/) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_close);
+            if (w && w->toplevel) wlr_xdg_toplevel_send_close(w->toplevel);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_close, &wrapper->foreign_request_close);
+    }
+
+    void setup_foreign_toplevel_for_xwayland(XwaylandWrapper* wrapper) {
+        if (!wrapper || !m_foreign_toplevel_mgr || wrapper->foreign_handle) return;
+        wrapper->foreign_handle = wlr_foreign_toplevel_handle_v1_create(m_foreign_toplevel_mgr);
+        if (!wrapper->foreign_handle) return;
+
+        if (wrapper->xsurface->title) {
+            wlr_foreign_toplevel_handle_v1_set_title(wrapper->foreign_handle, wrapper->xsurface->title);
+        }
+        if (wrapper->xsurface->c_class) {
+            wlr_foreign_toplevel_handle_v1_set_app_id(wrapper->foreign_handle, wrapper->xsurface->c_class);
+        }
+
+        struct wlr_output* out = get_output_for_xwayland(wrapper);
+        if (!out && !m_outputs.empty()) out = m_outputs.front()->get_wlr_output();
+        if (out) {
+            wlr_foreign_toplevel_handle_v1_output_enter(wrapper->foreign_handle, out);
+        }
+
+        wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, wrapper->is_maximized);
+        wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, wrapper->is_fullscreen);
+        wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle,
+            wrapper->state_machine.state() == WindowState::Minimized);
+        wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, m_active_xwayland == wrapper);
+
+        wrapper->foreign_request_maximize.notify = [](struct wl_listener* l, void* data) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_maximize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_maximized_event*>(data);
+            if (w && w->backend) w->backend->xwayland_set_maximized(w, ev ? ev->maximized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_maximize, &wrapper->foreign_request_maximize);
+
+        wrapper->foreign_request_minimize.notify = [](struct wl_listener* l, void* data) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_minimize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_minimized_event*>(data);
+            if (w && w->backend) w->backend->xwayland_set_minimized(w, ev ? ev->minimized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_minimize, &wrapper->foreign_request_minimize);
+
+        wrapper->foreign_request_activate.notify = [](struct wl_listener* l, void* /*data*/) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_activate);
+            if (w && w->backend) w->backend->focus_xwayland(w);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_activate, &wrapper->foreign_request_activate);
+
+        wrapper->foreign_request_fullscreen.notify = [](struct wl_listener* l, void* data) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_fullscreen);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_fullscreen_event*>(data);
+            if (w && w->backend) w->backend->xwayland_set_fullscreen(w, ev ? ev->fullscreen : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_fullscreen, &wrapper->foreign_request_fullscreen);
+
+        wrapper->foreign_request_close.notify = [](struct wl_listener* l, void* /*data*/) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_close);
+            if (w && w->xsurface) wlr_xwayland_surface_close(w->xsurface);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_close, &wrapper->foreign_request_close);
+    }
+
+    void cleanup_foreign_toplevel_native(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->foreign_handle) return;
+        if (wrapper->foreign_request_maximize.link.next) { wl_list_remove(&wrapper->foreign_request_maximize.link); wrapper->foreign_request_maximize.link.next = nullptr; }
+        if (wrapper->foreign_request_minimize.link.next) { wl_list_remove(&wrapper->foreign_request_minimize.link); wrapper->foreign_request_minimize.link.next = nullptr; }
+        if (wrapper->foreign_request_activate.link.next) { wl_list_remove(&wrapper->foreign_request_activate.link); wrapper->foreign_request_activate.link.next = nullptr; }
+        if (wrapper->foreign_request_fullscreen.link.next) { wl_list_remove(&wrapper->foreign_request_fullscreen.link); wrapper->foreign_request_fullscreen.link.next = nullptr; }
+        if (wrapper->foreign_request_close.link.next) { wl_list_remove(&wrapper->foreign_request_close.link); wrapper->foreign_request_close.link.next = nullptr; }
+        wlr_foreign_toplevel_handle_v1_destroy(wrapper->foreign_handle);
+        wrapper->foreign_handle = nullptr;
+    }
+
+    void cleanup_foreign_toplevel_xwayland(XwaylandWrapper* wrapper) {
+        if (!wrapper || !wrapper->foreign_handle) return;
+        if (wrapper->foreign_request_maximize.link.next) { wl_list_remove(&wrapper->foreign_request_maximize.link); wrapper->foreign_request_maximize.link.next = nullptr; }
+        if (wrapper->foreign_request_minimize.link.next) { wl_list_remove(&wrapper->foreign_request_minimize.link); wrapper->foreign_request_minimize.link.next = nullptr; }
+        if (wrapper->foreign_request_activate.link.next) { wl_list_remove(&wrapper->foreign_request_activate.link); wrapper->foreign_request_activate.link.next = nullptr; }
+        if (wrapper->foreign_request_fullscreen.link.next) { wl_list_remove(&wrapper->foreign_request_fullscreen.link); wrapper->foreign_request_fullscreen.link.next = nullptr; }
+        if (wrapper->foreign_request_close.link.next) { wl_list_remove(&wrapper->foreign_request_close.link); wrapper->foreign_request_close.link.next = nullptr; }
+        wlr_foreign_toplevel_handle_v1_destroy(wrapper->foreign_handle);
+        wrapper->foreign_handle = nullptr;
     }
 
     void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
@@ -1694,6 +1952,9 @@ private:
             wrapper->state_machine.set_assigned_output(out);
             wrapper->state_machine.request_maximize(work_area);
             wrapper->is_maximized = true;
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, true);
+            }
 
             // Update legacy saved fields for backward compatibility
             wrapper->saved_x = wrapper->state_machine.geometry().normal_geom.x;
@@ -1747,6 +2008,9 @@ private:
 
             wrapper->state_machine.request_restore();
             wrapper->is_maximized = false;
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, false);
+            }
 
             auto norm = wrapper->state_machine.geometry().normal_geom;
             if (norm.width <= 0) norm.width = wrapper->saved_width > 0 ? wrapper->saved_width : 800;
@@ -1809,6 +2073,9 @@ private:
                     wrapper->saved_width = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
                     wrapper->saved_height = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
                     wrapper->is_maximized = true;
+                    if (wrapper->foreign_handle) {
+                        wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, true);
+                    }
 
                     wlr_xwayland_surface_set_maximized(wrapper->xsurface, true, true);
                     wlr_xwayland_surface_configure(wrapper->xsurface, wa.x, wa.y, wa.width, wa.height);
@@ -1824,6 +2091,9 @@ private:
         } else {
             if (!wrapper->is_maximized) return;
             wrapper->is_maximized = false;
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, false);
+            }
             wlr_xwayland_surface_set_maximized(wrapper->xsurface, false, false);
             int32_t rx = wrapper->saved_x > 0 ? wrapper->saved_x : 50;
             int32_t ry = wrapper->saved_y > 0 ? wrapper->saved_y : 100;
@@ -1837,6 +2107,112 @@ private:
                 wrapper->frame->update_geometry(rw, rh);
             }
             log::info("[XWayland] Restored window to {}x{} at ({}, {})", rw, rh, rx, ry);
+        }
+    }
+
+    void xwayland_set_fullscreen(XwaylandWrapper* wrapper, bool fullscreen) {
+        if (!wrapper || !wrapper->xsurface || !wrapper->scene_tree) return;
+        if (wrapper->is_fullscreen == fullscreen) return;
+        wrapper->is_fullscreen = fullscreen;
+
+        if (fullscreen) {
+            if (!wrapper->is_maximized) {
+                wrapper->saved_x = wrapper->scene_tree->node.x;
+                wrapper->saved_y = wrapper->scene_tree->node.y;
+                wrapper->saved_width = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
+                wrapper->saved_height = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
+                wrapper->state_machine.update_floating_geometry(wrapper->saved_x, wrapper->saved_y,
+                                                               wrapper->saved_width, wrapper->saved_height);
+            }
+            struct wlr_output* out = get_output_for_xwayland(wrapper);
+            if (!out && !m_outputs.empty()) out = m_outputs.front()->get_wlr_output();
+            if (!out) return;
+            OutputGeometry out_geom = get_output_geometry(out);
+            WindowBox output_box = out_geom.full_box();
+            wrapper->state_machine.request_fullscreen(output_box);
+            elevate_window_node(wrapper->scene_tree);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, output_box.x, output_box.y);
+            wlr_xwayland_surface_configure(wrapper->xsurface, output_box.x, output_box.y, output_box.width, output_box.height);
+            wlr_xwayland_surface_set_fullscreen(wrapper->xsurface, true);
+            if (wrapper->frame) {
+                wrapper->frame->set_fullscreen(true);
+            }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, true);
+            }
+            log::info("[XWayland] Fullscreen window to {}x{} at ({}, {})", output_box.width, output_box.height, output_box.x, output_box.y);
+        } else {
+            restore_window_node(wrapper->scene_tree, wrapper->workspace_id);
+            if (wrapper->is_maximized) {
+                wrapper->is_maximized = false;
+                xwayland_set_maximized(wrapper, true);
+            } else {
+                wrapper->state_machine.request_restore();
+                int32_t rx = wrapper->saved_x > 0 ? wrapper->saved_x : 50;
+                int32_t ry = wrapper->saved_y > 0 ? wrapper->saved_y : 100;
+                int32_t rw = wrapper->saved_width > 0 ? wrapper->saved_width : 800;
+                int32_t rh = wrapper->saved_height > 0 ? wrapper->saved_height : 600;
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, rx, ry);
+                wlr_xwayland_surface_configure(wrapper->xsurface, rx, ry, rw, rh);
+                wlr_xwayland_surface_set_fullscreen(wrapper->xsurface, false);
+                if (wrapper->frame) {
+                    wrapper->frame->set_fullscreen(false);
+                    wrapper->frame->update_geometry(rw, rh);
+                }
+                log::info("[XWayland] Restored fullscreen window to {}x{} at ({}, {})", rw, rh, rx, ry);
+            }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, false);
+            }
+        }
+    }
+
+    void xwayland_set_snap(XwaylandWrapper* wrapper, SnapMode mode) {
+        if (!wrapper || !wrapper->xsurface || !wrapper->scene_tree) return;
+        if (mode == SnapMode::None) {
+            return;
+        }
+        if (mode == SnapMode::Top) {
+            xwayland_set_maximized(wrapper, true);
+            return;
+        }
+
+        struct wlr_output* out = get_output_for_xwayland(wrapper);
+        if (!out && !m_outputs.empty()) {
+            out = m_outputs.front()->get_wlr_output();
+        }
+        if (!out) return;
+        WorkArea work_area = get_output_work_area(out);
+        if (work_area.width <= 0 || work_area.height <= 0) return;
+
+        if (wrapper->state_machine.state() == WindowState::Normal &&
+            wrapper->state_machine.snap_mode() == SnapMode::None) {
+            int32_t cur_w = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
+            int32_t cur_h = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
+            wrapper->saved_x = wrapper->scene_tree->node.x;
+            wrapper->saved_y = wrapper->scene_tree->node.y;
+            wrapper->saved_width = cur_w;
+            wrapper->saved_height = cur_h;
+            wrapper->state_machine.update_floating_geometry(
+                wrapper->saved_x,
+                wrapper->saved_y,
+                cur_w,
+                cur_h
+            );
+        }
+
+        wrapper->state_machine.set_assigned_output(out);
+        wrapper->state_machine.request_snap(mode, work_area);
+
+        WindowBox snap_box = wrapper->state_machine.geometry().snap_geom;
+        log::info("[XWayland] Snap window (mode={}) to {}x{} at ({}, {}) on output '{}'",
+                  static_cast<int>(mode), snap_box.width, snap_box.height, snap_box.x, snap_box.y,
+                  out->name ? out->name : "unknown");
+
+        wlr_xwayland_surface_configure(wrapper->xsurface, snap_box.x, snap_box.y, snap_box.width, snap_box.height);
+        wlr_scene_node_set_position(&wrapper->scene_tree->node, snap_box.x, snap_box.y);
+        if (wrapper->frame) {
+            wrapper->frame->update_geometry(snap_box.width, snap_box.height);
         }
     }
 
@@ -2009,6 +2385,9 @@ private:
             }
 
             wrapper->state_machine.request_minimize();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, true);
+            }
             log::info("[Window] Minimized toplevel — animating minimize");
 
             std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ?
@@ -2056,6 +2435,9 @@ private:
             if (wrapper->state_machine.state() != WindowState::Minimized) return;
 
             wrapper->state_machine.request_restore();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, false);
+            }
             wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
             log::info("[Window] Restored toplevel — animating restore");
 
@@ -2171,7 +2553,9 @@ private:
         const int edge_thresh = 16;
         const int corner_thresh = 64;
 
-        if (cy <= out_geom.global_y + edge_thresh) {
+        // Top edge trigger: activate snap when cursor reaches the usable work area boundary (below TopBar) + threshold tolerance
+        const int32_t top_trigger_boundary = out_geom.work_y + edge_thresh;
+        if (cy <= top_trigger_boundary) {
             if (cx <= out_geom.global_x + corner_thresh) return SnapMode::TopLeft;
             if (cx >= out_geom.global_x + out_geom.logical_width - corner_thresh) return SnapMode::TopRight;
             return SnapMode::Top;
@@ -2221,11 +2605,16 @@ private:
             OutputGeometry out_geom = get_output_geometry(out);
             WindowBox output_box = out_geom.full_box();
             wrapper->state_machine.request_fullscreen(output_box);
+            elevate_window_node(wrapper->scene_tree);
             log::info("[Window] Fullscreen window to {}x{} at ({}, {})", output_box.width, output_box.height, output_box.x, output_box.y);
             wlr_scene_node_set_position(&wrapper->scene_tree->node, output_box.x, output_box.y);
             wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, true);
             wlr_xdg_toplevel_set_size(wrapper->toplevel, output_box.width, output_box.height);
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, true);
+            }
         } else {
+            restore_window_node(wrapper->scene_tree, wrapper->workspace_id);
             if (wrapper->is_maximized) {
                 wrapper->is_maximized = false; // reset flag to trigger correct resize logic
                 toplevel_set_maximized(wrapper, true);
@@ -2237,6 +2626,9 @@ private:
                 wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, false);
                 wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
             }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, false);
+            }
         }
         if (wrapper->frame && wrapper->toplevel) {
             TinexusDecorationManager::instance().set_toplevel_fullscreen(wrapper->toplevel, fullscreen);
@@ -2245,12 +2637,14 @@ private:
     }
 
     void begin_interactive_move(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->scene_tree) return;
         m_cursor_mode = CursorMode::Move;
         m_grabbed_toplevel = wrapper;
         m_grab_x = m_cursor->x;
         m_grab_y = m_cursor->y;
         m_grab_geo_x = wrapper->scene_tree->node.x;
         m_grab_geo_y = wrapper->scene_tree->node.y;
+        elevate_window_node(wrapper->scene_tree);
         log::info("[Window] Started interactive move grab");
     }
 
@@ -2299,6 +2693,7 @@ private:
         m_grab_geo_y = wrapper->scene_tree->node.y;
         m_grab_xwayland = wrapper;
         m_grabbed_toplevel = nullptr;
+        elevate_window_node(wrapper->scene_tree);
         log::info("[XWayland] Started interactive move grab for wrapper {}", static_cast<void*>(wrapper));
     }
 
@@ -2906,6 +3301,10 @@ private:
             });
         }
 
+        if (!is_launcher && wrapper->backend && wrapper->backend->m_foreign_toplevel_mgr && !wrapper->foreign_handle) {
+            wrapper->backend->setup_foreign_toplevel_for_native(wrapper);
+        }
+
         wrapper->backend->focus_toplevel(wrapper);
     }
 
@@ -2987,6 +3386,11 @@ private:
         // Clean up SSD frame if present
         if (wrapper->frame && wrapper->toplevel) {
             backend->detach_ssd_frame(wrapper);
+        }
+
+        // Clean up foreign toplevel handle
+        if (backend) {
+            backend->cleanup_foreign_toplevel_native(wrapper);
         }
 
         // 1. Cancel/disarm timers (F-03 safety)
@@ -3213,6 +3617,10 @@ private:
             });
         }
 
+        if (wrapper->backend && wrapper->backend->m_foreign_toplevel_mgr && !wrapper->foreign_handle) {
+            wrapper->backend->setup_foreign_toplevel_for_xwayland(wrapper);
+        }
+
         wrapper->backend->focus_xwayland(wrapper);
     }
 
@@ -3258,7 +3666,7 @@ private:
 
     static void handle_xwayland_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
         XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
-        wlr_xwayland_surface_set_fullscreen(wrapper->xsurface, !wrapper->xsurface->fullscreen);
+        wrapper->backend->xwayland_set_fullscreen(wrapper, !wrapper->is_fullscreen);
     }
 
     static void handle_xwayland_request_minimize(struct wl_listener* listener, void* data) {
@@ -3292,6 +3700,10 @@ private:
 
         if (wrapper->frame) {
             wrapper->backend->detach_xwayland_ssd_frame(wrapper);
+        }
+
+        if (wrapper->backend) {
+            wrapper->backend->cleanup_foreign_toplevel_xwayland(wrapper);
         }
 
         std::string app_id_str = (wrapper->xsurface && wrapper->xsurface->c_class)
@@ -3812,6 +4224,31 @@ private:
             m_pending_snap = detect_snap_zone(m_cursor->x, m_cursor->y, out);
             return;
         } else if (m_cursor_mode == CursorMode::Move && m_grab_xwayland != nullptr) {
+            double drag_dist = std::hypot(m_cursor->x - m_grab_x, m_cursor->y - m_grab_y);
+            if (drag_dist > 8.0) {
+                if (m_grab_xwayland->is_maximized) {
+                    xwayland_set_maximized(m_grab_xwayland, false);
+                    int32_t rw = m_grab_xwayland->saved_width > 0 ? m_grab_xwayland->saved_width : 800;
+                    m_grab_geo_x = static_cast<int>(m_cursor->x - (rw / 2.0));
+                    m_grab_geo_y = static_cast<int>(m_cursor->y - 15);
+                    m_grab_x = m_cursor->x;
+                    m_grab_y = m_cursor->y;
+                } else if (m_grab_xwayland->state_machine.snap_mode() != SnapMode::None) {
+                    m_grab_xwayland->state_machine.request_restore();
+                    const auto& norm = m_grab_xwayland->state_machine.geometry().normal_geom;
+                    int32_t rw = norm.width > 0 ? norm.width : (m_grab_xwayland->saved_width > 0 ? m_grab_xwayland->saved_width : 800);
+                    int32_t rh = norm.height > 0 ? norm.height : (m_grab_xwayland->saved_height > 0 ? m_grab_xwayland->saved_height : 600);
+                    wlr_xwayland_surface_configure(m_grab_xwayland->xsurface, m_grab_xwayland->saved_x, m_grab_xwayland->saved_y, rw, rh);
+                    if (m_grab_xwayland->frame) {
+                        m_grab_xwayland->frame->update_geometry(rw, rh);
+                    }
+                    m_grab_geo_x = static_cast<int>(m_cursor->x - (rw / 2.0));
+                    m_grab_geo_y = static_cast<int>(m_cursor->y - 15);
+                    m_grab_x = m_cursor->x;
+                    m_grab_y = m_cursor->y;
+                }
+            }
+
             int new_x = m_grab_geo_x + static_cast<int>(m_cursor->x - m_grab_x);
             int new_y = m_grab_geo_y + static_cast<int>(m_cursor->y - m_grab_y);
             if (m_grab_xwayland->scene_tree) {
@@ -3822,7 +4259,19 @@ private:
                                                m_grab_xwayland->xsurface->width,
                                                m_grab_xwayland->xsurface->height);
             }
-            log::info("[XWayland] Dragged window to ({}, {})", new_x, new_y);
+            if (m_grab_xwayland->state_machine.state() == WindowState::Normal &&
+                m_grab_xwayland->state_machine.snap_mode() == SnapMode::None) {
+                m_grab_xwayland->state_machine.update_floating_geometry(
+                    new_x,
+                    new_y,
+                    m_grab_xwayland->xsurface->width > 0 ? m_grab_xwayland->xsurface->width : 800,
+                    m_grab_xwayland->xsurface->height > 0 ? m_grab_xwayland->xsurface->height : 600
+                );
+            }
+
+            struct wlr_output* out = wlr_output_layout_output_at(m_output_layout, m_cursor->x, m_cursor->y);
+            if (!out) out = get_output_for_xwayland(m_grab_xwayland);
+            m_pending_snap = detect_snap_zone(m_cursor->x, m_cursor->y, out);
             return;
         } else if (m_cursor_mode == CursorMode::Resize && m_grab_xwayland != nullptr) {
             double dx = m_cursor->x - m_grab_x;
@@ -4000,13 +4449,28 @@ private:
                 }
             }
         } else if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
-            if (self->m_cursor_mode == CursorMode::Move && self->m_grabbed_toplevel != nullptr) {
-                if (self->m_pending_snap == SnapMode::Top) {
-                    self->toplevel_set_maximized(self->m_grabbed_toplevel, true);
-                } else if (self->m_pending_snap != SnapMode::None) {
-                    self->toplevel_set_snap(self->m_grabbed_toplevel, self->m_pending_snap);
+            if (self->m_cursor_mode == CursorMode::Move) {
+                if (self->m_grabbed_toplevel != nullptr) {
+                    if (self->m_pending_snap == SnapMode::Top) {
+                        self->toplevel_set_maximized(self->m_grabbed_toplevel, true);
+                    } else if (self->m_pending_snap != SnapMode::None) {
+                        self->toplevel_set_snap(self->m_grabbed_toplevel, self->m_pending_snap);
+                    }
+                    if (!self->m_grabbed_toplevel->is_fullscreen) {
+                        self->restore_window_node(self->m_grabbed_toplevel->scene_tree, self->m_grabbed_toplevel->workspace_id);
+                    }
+                    self->m_pending_snap = SnapMode::None;
+                } else if (self->m_grab_xwayland != nullptr) {
+                    if (self->m_pending_snap == SnapMode::Top) {
+                        self->xwayland_set_maximized(self->m_grab_xwayland, true);
+                    } else if (self->m_pending_snap != SnapMode::None) {
+                        self->xwayland_set_snap(self->m_grab_xwayland, self->m_pending_snap);
+                    }
+                    if (!self->m_grab_xwayland->is_fullscreen) {
+                        self->restore_window_node(self->m_grab_xwayland->scene_tree, self->m_grab_xwayland->workspace_id);
+                    }
+                    self->m_pending_snap = SnapMode::None;
                 }
-                self->m_pending_snap = SnapMode::None;
             } else if (self->m_cursor_mode == CursorMode::Resize && self->m_grabbed_toplevel != nullptr) {
                 wlr_xdg_toplevel_set_resizing(self->m_grabbed_toplevel->toplevel, false);
                 wlr_xdg_surface_schedule_configure(self->m_grabbed_toplevel->toplevel->base);

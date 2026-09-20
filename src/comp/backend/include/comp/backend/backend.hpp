@@ -27,6 +27,7 @@ public:
     virtual void snap_active_window(SnapMode mode) noexcept {}
     virtual void maximize_active_window() noexcept {}
     virtual void restore_active_window() noexcept {}
+    virtual void fullscreen_active_window() noexcept {}
     virtual void focus_app(const std::string& app_id) noexcept {}
     virtual bool restore_window_by_app_id(const std::string& app_id) noexcept { return false; }
     virtual bool minimize_window_by_app_id(const std::string& app_id) noexcept { return false; }

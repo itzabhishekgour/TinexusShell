@@ -478,7 +478,8 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
                                         const QString& title,
                                         bool isActivated,
                                         bool isMinimized,
-                                        bool isMaximized)
+                                        bool isMaximized,
+                                        bool isFullscreen)
 {
     if (!handle) return;
 
@@ -486,14 +487,14 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
     DockItemData* existingItem = nullptr;
     const int existingRow = findItemIndexForHandle(handle, &existingItem);
     if (existingRow >= 0 && existingItem) {
-        onToplevelUpdatedWithHandle(handle, appId, title, isActivated, isMinimized, isMaximized);
+        onToplevelUpdatedWithHandle(handle, appId, title, isActivated, isMinimized, isMaximized, isFullscreen);
         return;
     }
 
     // 1. Check pinned items
     for (auto& pinned : m_pinned) {
         if (matchesAppId(pinned.appId, appId)) {
-            pinned.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized});
+            pinned.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized, isFullscreen});
             recomputeItemState(pinned);
 
             const int row = findItemIndex(pinned.appId);
@@ -507,6 +508,7 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
             tinexus::log::info("[DockModel] Pinned app '{}' updated with new toplevel (total: {})",
                                pinned.appId.toStdString(), pinned.toplevelCount);
             emit dockItemsChanged();
+            checkMaximizedWindowsState();
             return;
         }
     }
@@ -514,7 +516,7 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
     // 2. Check transient items
     for (auto& trans : m_transient) {
         if (matchesAppId(trans.appId, appId)) {
-            trans.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized});
+            trans.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized, isFullscreen});
             recomputeItemState(trans);
 
             const int row = findItemIndex(trans.appId);
@@ -528,6 +530,7 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
             tinexus::log::info("[DockModel] Transient app '{}' updated with new toplevel (total: {})",
                                trans.appId.toStdString(), trans.toplevelCount);
             emit dockItemsChanged();
+            checkMaximizedWindowsState();
             return;
         }
     }
@@ -539,7 +542,7 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
     transient.displayName  = resolveDisplayName(appId, title);
     transient.execCmd      = appId;
     transient.iconType     = resolveIconType(appId);
-    transient.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized});
+    transient.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized, isFullscreen});
     recomputeItemState(transient);
     transient.configIndex  = 5000 + static_cast<int>(m_transient.size());
 
@@ -554,6 +557,7 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
     tinexus::log::info("[DockModel] Dynamically inserted transient app '{}' at row {}",
                        appId.toStdString(), insertRow);
     emit dockItemsChanged();
+    checkMaximizedWindowsState();
 }
 
 void DockModel::onToplevelUpdatedWithHandle(struct zwlr_foreign_toplevel_handle_v1* handle,
@@ -561,7 +565,8 @@ void DockModel::onToplevelUpdatedWithHandle(struct zwlr_foreign_toplevel_handle_
                                           const QString& title,
                                           bool isActivated,
                                           bool isMinimized,
-                                          bool isMaximized)
+                                          bool isMaximized,
+                                          bool isFullscreen)
 {
     if (!handle) return;
 
@@ -572,10 +577,11 @@ void DockModel::onToplevelUpdatedWithHandle(struct zwlr_foreign_toplevel_handle_
     bool modified = false;
     for (auto& t : targetItem->toplevels) {
         if (t.handle == handle) {
-            t.title       = title;
-            t.isActivated = isActivated;
-            t.isMinimized = isMinimized;
-            t.isMaximized = isMaximized;
+            t.title        = title;
+            t.isActivated  = isActivated;
+            t.isMinimized  = isMinimized;
+            t.isMaximized  = isMaximized;
+            t.isFullscreen = isFullscreen;
             modified = true;
             break;
         }
@@ -589,6 +595,7 @@ void DockModel::onToplevelUpdatedWithHandle(struct zwlr_foreign_toplevel_handle_
                            DockRole::DisplayName, DockRole::ToplevelCount });
         if (isActivated) updateActiveStateAcrossAll(handle);
         emit dockItemsChanged();
+        checkMaximizedWindowsState();
     }
 }
 
@@ -614,6 +621,7 @@ void DockModel::onToplevelRemovedWithHandle(struct zwlr_foreign_toplevel_handle_
                 tinexus::log::info("[DockModel] Toplevel removed from pinned app '{}' (remaining: {})",
                                    pinned.appId.toStdString(), pinned.toplevelCount);
                 emit dockItemsChanged();
+                checkMaximizedWindowsState();
                 return;
             }
         }
@@ -647,6 +655,7 @@ void DockModel::onToplevelRemovedWithHandle(struct zwlr_foreign_toplevel_handle_
                     }
                 }
                 emit dockItemsChanged();
+                checkMaximizedWindowsState();
                 return;
             }
         }
@@ -657,7 +666,7 @@ void DockModel::onToplevelRemovedWithHandle(struct zwlr_foreign_toplevel_handle_
 void DockModel::onToplevelAdded(const QString& appId) {
     static quintptr nextHandle = 100;
     auto* handle = reinterpret_cast<zwlr_foreign_toplevel_handle_v1*>(++nextHandle);
-    onToplevelAddedWithHandle(handle, appId, appId, false, false, false);
+    onToplevelAddedWithHandle(handle, appId, appId, false, false, false, false);
 }
 
 void DockModel::onToplevelRemoved(const QString& appId) {
@@ -928,6 +937,34 @@ void DockModel::clearAllToplevels() {
 
     rebuildMergedView();
     emit dockItemsChanged();
+    checkMaximizedWindowsState();
+}
+
+bool DockModel::hasMaximizedOrFullscreenToplevel() const {
+    for (const auto& item : m_pinned) {
+        for (const auto& t : item.toplevels) {
+            if (t.isMaximized || t.isFullscreen) {
+                return true;
+            }
+        }
+    }
+    for (const auto& item : m_transient) {
+        for (const auto& t : item.toplevels) {
+            if (t.isMaximized || t.isFullscreen) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void DockModel::checkMaximizedWindowsState() {
+    const bool state = hasMaximizedOrFullscreenToplevel();
+    if (state != m_hasMaximizedWindows) {
+        m_hasMaximizedWindows = state;
+        tinexus::log::info("[DockModel] hasMaximizedWindowsChanged: {}", m_hasMaximizedWindows);
+        emit hasMaximizedWindowsChanged(m_hasMaximizedWindows);
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
