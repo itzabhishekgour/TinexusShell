@@ -265,6 +265,9 @@ public:
         m_seat = wlr_seat_create(m_display, "seat0");
         SeatManager::instance().bind_seat(m_seat, "seat0");
 
+        // Advertise seat capabilities early so clients know keyboard and pointer exist
+        wlr_seat_set_capabilities(m_seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
+
         m_cursor = wlr_cursor_create();
         wlr_cursor_attach_output_layout(m_cursor, m_output_layout);
         m_cursor_mgr = wlr_xcursor_manager_create(nullptr, 24);
@@ -901,7 +904,7 @@ private:
                 if (w->scene_layer && w->scene_layer->tree) {
                     wlr_scene_node_raise_to_top(&w->scene_layer->tree->node);
                 }
-                if (w->layer_surface->surface && w->layer_surface->surface->mapped) {
+                if (w->layer_surface->surface) {
                     if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
                         log::info("[LayerShell] Granting keyboard focus to Launcher");
                         FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
@@ -3409,6 +3412,9 @@ private:
 
         wlr_seat_set_keyboard(m_seat, keyboard);
         m_keyboards.push_back(std::move(wrapper));
+
+        // Immediately re-assert keyboard focus to the active surface (e.g. lockscreen or active window)
+        FocusManager::instance().reassert_keyboard_focus();
     }
 
     static void handle_keyboard_modifiers(struct wl_listener* listener, void* data) {

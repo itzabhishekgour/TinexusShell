@@ -68,6 +68,14 @@ done
 mkdir -p /mnt/rootfs/usr/share/tinexus-settings/qml 2>/dev/null || true
 cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings/qml/ 2>/dev/null || true
 
+# Ensure seatd and device groups
+echo "[INFO] Ensuring seatd and device permissions..."
+chroot /mnt/rootfs /bin/bash -c "
+    groupadd -r -f seat 2>/dev/null || true
+    usermod -aG video,input,render,seat tinexus 2>/dev/null || true
+    systemctl enable seatd.service 2>/dev/null || true
+"
+
 echo "[INFO] Verifying rootfs binaries..."
 ls -lh /mnt/rootfs/usr/bin/tinexus-settings \
        /mnt/rootfs/usr/bin/tinexus-settings-ui \
