@@ -1722,6 +1722,10 @@ private:
         if (!scene_tree || !m_scene_tree_fullscreen) return;
         wlr_scene_node_reparent(&scene_tree->node, m_scene_tree_fullscreen);
         wlr_scene_node_raise_to_top(&scene_tree->node);
+        log::info("[FullscreenDebug] elevate_window_node: node={}, parent={}, m_scene_tree_fullscreen={}",
+                  static_cast<void*>(&scene_tree->node),
+                  static_cast<void*>(scene_tree->node.parent),
+                  static_cast<void*>(m_scene_tree_fullscreen));
     }
 
     void restore_window_node(struct wlr_scene_tree* scene_tree, uint32_t workspace_id) {
@@ -2111,8 +2115,18 @@ private:
     }
 
     void xwayland_set_fullscreen(XwaylandWrapper* wrapper, bool fullscreen) {
+        log::info("[FullscreenDebug] xwayland_set_fullscreen() called: wrapper={}, class='{}', requested_fullscreen={}, is_fullscreen={}",
+                  static_cast<void*>(wrapper),
+                  (wrapper && wrapper->xsurface && wrapper->xsurface->c_class) ? wrapper->xsurface->c_class : "unknown",
+                  fullscreen,
+                  wrapper ? wrapper->is_fullscreen : false);
         if (!wrapper || !wrapper->xsurface || !wrapper->scene_tree) return;
-        if (wrapper->is_fullscreen == fullscreen) return;
+        if (wrapper->is_fullscreen == fullscreen) {
+            if (fullscreen && wrapper->scene_tree && wrapper->scene_tree->node.parent != m_scene_tree_fullscreen) {
+                elevate_window_node(wrapper->scene_tree);
+            }
+            return;
+        }
         wrapper->is_fullscreen = fullscreen;
 
         if (fullscreen) {
@@ -2580,9 +2594,17 @@ private:
     }
 
     void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
+        log::info("[FullscreenDebug] toplevel_set_fullscreen() called: wrapper={}, app_id='{}', requested_fullscreen={}, is_fullscreen={}",
+                  static_cast<void*>(wrapper),
+                  (wrapper && wrapper->toplevel && wrapper->toplevel->app_id) ? wrapper->toplevel->app_id : "unknown",
+                  fullscreen,
+                  wrapper ? wrapper->is_fullscreen : false);
         if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->initialized || !wrapper->scene_tree) return;
         if (wrapper->is_fullscreen == fullscreen) {
             if (fullscreen && wrapper->scene_tree) {
+                if (wrapper->scene_tree->node.parent != m_scene_tree_fullscreen) {
+                    elevate_window_node(wrapper->scene_tree);
+                }
                 struct wlr_output* out = get_output_for_toplevel(wrapper);
                 OutputGeometry out_geom = get_output_geometry(out);
                 wlr_scene_node_set_position(&wrapper->scene_tree->node, out_geom.global_x, out_geom.global_y);
@@ -3272,6 +3294,7 @@ private:
             wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
             wrapper->backend->toplevel_set_fullscreen(wrapper, true);
         } else if (wrapper->is_fullscreen) {
+            wrapper->backend->elevate_window_node(wrapper->scene_tree);
             wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
         } else if (wrapper->toplevel && wrapper->scene_tree && !wrapper->backend->m_is_locked) {
             uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
@@ -3318,6 +3341,7 @@ private:
             if (wrapper->is_maximized || toplevel->requested.maximized) {
                 wrapper->backend->toplevel_set_maximized(wrapper, true);
             } else if (wrapper->is_fullscreen || toplevel->requested.fullscreen) {
+                wrapper->is_fullscreen = false;
                 wrapper->backend->toplevel_set_fullscreen(wrapper, true);
             } else {
                 wlr_xdg_surface_schedule_configure(toplevel->base);
@@ -3347,7 +3371,10 @@ private:
     static void handle_toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
-        log::info("[XDGShell] Request fullscreen state={}", toplevel->requested.fullscreen);
+        log::info("[FullscreenDebug] handle_toplevel_request_fullscreen: toplevel={}, app_id='{}', requested={}",
+                  static_cast<void*>(toplevel),
+                  (toplevel && toplevel->app_id) ? toplevel->app_id : "unknown",
+                  toplevel ? toplevel->requested.fullscreen : false);
         if (!toplevel->base->initialized) {
             log::info("[XDGShell] Surface not initialized yet — deferring fullscreen to initial commit");
             wrapper->is_fullscreen = toplevel->requested.fullscreen;
@@ -3666,6 +3693,10 @@ private:
 
     static void handle_xwayland_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
         XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
+        log::info("[FullscreenDebug] handle_xwayland_request_fullscreen: wrapper={}, class='{}', current_is_fullscreen={}",
+                  static_cast<void*>(wrapper),
+                  (wrapper && wrapper->xsurface && wrapper->xsurface->c_class) ? wrapper->xsurface->c_class : "unknown",
+                  wrapper ? wrapper->is_fullscreen : false);
         wrapper->backend->xwayland_set_fullscreen(wrapper, !wrapper->is_fullscreen);
     }
 
