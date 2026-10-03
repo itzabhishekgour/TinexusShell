@@ -39,6 +39,7 @@
 #include "common/HardwareConfig.hpp"
 #include "common/AudioUtils.hpp"
 #include "common/BacklightUtils.hpp"
+#include "common/RuntimePaths.hpp"
 #include <iostream>
 #include <fstream>
 #include <csignal>
@@ -58,7 +59,9 @@ tinexus::serviced::ProcessManager* g_pm{nullptr};
 // If a previous session was SIGKILLed, AppImage extraction dirs may linger.
 // Sweep on session start to prevent OOM accumulation across reboots.
 void sweep_stale_appimage_dirs() {
-    for (const auto& path : {"/tmp", "/run/user/1000"}) {
+    std::string user_run = tinexus::common::RuntimePaths::get_user_runtime_dir();
+    std::vector<std::string> paths = {"/tmp", user_run};
+    for (const auto& path : paths) {
         if (!std::filesystem::exists(path)) continue;
         try {
             for (const auto& entry : std::filesystem::directory_iterator(path)) {

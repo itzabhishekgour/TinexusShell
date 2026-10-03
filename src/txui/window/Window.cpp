@@ -3,6 +3,7 @@
 #include <txui/render/CanvasRenderTarget.hpp>
 #include <txui/wayland/WaylandClipboard.hpp>
 #include <txui/widgets/ChromeWidget.hpp>
+#include <common/DBusNames.hpp>
 #include <wayland-client.h>
 #include <xdg-shell-client-protocol.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -215,7 +216,7 @@ Ref<Window> Window::create(uint32 width, uint32 height, std::string_view title, 
                             xdg_toplevel_add_listener(win->m_xdg_toplevel, &xdg_toplevel_listener, win.get());
                             xdg_toplevel_set_title(win->m_xdg_toplevel, win->m_title.c_str());
                             
-                            std::string effective_app_id = "io.tinexus.shell";
+                            std::string effective_app_id = tinexus::common::dbus::app_id::Shell;
                             if (!win->m_app_id.empty()) {
                                 effective_app_id = win->m_app_id;
                             } else if (win->m_title == "Tinexus Lock") effective_app_id = "tinexus-lock";

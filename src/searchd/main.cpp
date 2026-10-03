@@ -1,5 +1,6 @@
 #include "common/logger.hpp"
 #include "common/version.hpp"
+#include "common/DBusNames.hpp"
 #include "searchd/normalizer.hpp"
 #include "searchd/intent_detector.hpp"
 #include "searchd/cache.hpp"
@@ -92,7 +93,7 @@ int main(int argc, char** argv) {
                            "queries will not be served until ipcd starts");
     }
 
-    tinexus::log::info("[searchd] Daemon ready. D-Bus name: io.tinexus.shell.Search1");
+    tinexus::log::info("[searchd] Daemon ready. D-Bus name: {}", tinexus::common::dbus::service::Search);
 
     // -----------------------------------------------------------------------
     // Main thread idle loop — signal handler sets g_running = false

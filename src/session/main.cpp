@@ -183,7 +183,7 @@ int main(int argc, char* argv[]) {
     // Launch Search Daemon
     launch_component("searchd");
 
-    // Launch Settings Daemon (io.tinexus.Settings authoritative config daemon)
+    // Launch Settings Daemon (io.tinexus.shell.Settings authoritative config daemon)
     launch_component("settings");
 
     // Launch Universal PipeWire / WirePlumber Audio Daemons (if present)

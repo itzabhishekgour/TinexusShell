@@ -5,6 +5,7 @@
 #include <txui/math/Point.hpp>
 #include <txui/input/Event.hpp>
 #include <common/logger.hpp>
+#include <common/DBusNames.hpp>
 #include <openssl/evp.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -114,7 +115,7 @@ void StoreWidget::init_catalog() {
             true
         },
         {
-            "io.tinexus.monitor",
+            tinexus::common::dbus::app_id::Monitor,
             "Activity Monitor",
             "Native real-time telemetry, CPU, Memory, Disk, and Process Tree",
             "The core Tinexus platform Activity Monitor. Ultra-low overhead (10MB RAM), sub-millisecond CPU graph updates, and process management.",
@@ -135,7 +136,7 @@ void StoreWidget::init_catalog() {
             false
         },
         {
-            "io.tinexus.terminal",
+            tinexus::common::dbus::app_id::Terminal,
             "Tinexus Terminal",
             "GPU-accelerated native Wayland command terminal with PTY emulation",
             "Ultra-responsive terminal built in pure C++20. Sub-1ms input latency, full ANSI color palette, and native font smoothing.",
