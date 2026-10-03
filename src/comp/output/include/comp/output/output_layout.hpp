@@ -13,9 +13,9 @@ struct OutputSpec {
     std::string name;
     int32_t x{0};
     int32_t y{0};
-    uint32_t width{1920};
-    uint32_t height{1080};
-    uint32_t refresh_hz{60};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t refresh_hz{0};
     float scale{1.0f};
     int32_t transform{0};
     bool enabled{true};

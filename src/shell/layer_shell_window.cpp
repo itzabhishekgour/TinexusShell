@@ -60,8 +60,8 @@ LayerShellWindow::LayerShellWindow(uint32_t height) noexcept : m_height(height) 
     }
 
     // 3. Create RenderTarget
-    // Assume full screen width for now (e.g. 1920) or wait for configure
-    m_width = 1920; 
+    // Initial baseline buffer width (adapts to actual output upon configure)
+    m_width = 800; 
     auto target_opt = txui::WaylandRenderTarget::create(m_connection, m_width, m_height);
     if (!target_opt) {
         log::error("LayerShellWindow: Failed to create WaylandRenderTarget");

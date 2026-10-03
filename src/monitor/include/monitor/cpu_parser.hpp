@@ -22,9 +22,11 @@ public:
     CpuParser() = default;
     ~CpuParser() = default;
 
-    std::vector<CpuCoreMetrics> parse_cpu_usage();
+    std::vector<CpuCoreMetrics> parse_cpu_usage(float& out_aggregate_percent);
 
 private:
+    CpuStatRaw m_prev_aggregate;
+    bool m_has_prev_aggregate{false};
     std::vector<CpuStatRaw> m_prev_stats;
 };
 

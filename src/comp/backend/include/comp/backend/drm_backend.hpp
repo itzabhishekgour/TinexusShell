@@ -20,22 +20,22 @@ struct DrmConnectorInfo {
     uint32_t connector_id{0};
     std::string name;
     bool connected{false};
-    uint32_t width{1920};
-    uint32_t height{1080};
-    uint32_t refresh_hz{60};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t refresh_hz{0};
 };
 
 struct GbmBuffer {
     uint32_t fb_id{0};
-    uint32_t width{1920};
-    uint32_t height{1080};
-    uint32_t stride{7680};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stride{0};
     std::vector<uint32_t> pixels; // ARGB8888
 };
 
 class DrmBackend {
 public:
-    explicit DrmBackend(std::string device_path = "/dev/dri/card0");
+    explicit DrmBackend(std::string device_path = "");
     ~DrmBackend() = default;
 
     bool initialize();

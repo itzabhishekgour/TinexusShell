@@ -529,9 +529,21 @@ namespace {
     }
 }
 
+[[nodiscard]] inline int normalize_font_size(double font_size) noexcept {
+    if (font_size <= 0.0) {
+        return 14;
+    }
+    if (font_size <= 5.0) {
+        // Compatibility with legacy callers passing scale multipliers (e.g. 1.0 -> 16px, 0.88 -> 14px)
+        return std::max(1, static_cast<int>(std::round(16.0 * font_size)));
+    }
+    return std::max(1, static_cast<int>(std::round(font_size)));
+}
+
 void rasterize_text(RenderTarget& target, const Point& pos, const std::string& text,
                     const Color& color, double scale, bool bold, bool italic,
                     const Rect& clip, FontFamily font_family) noexcept {
+    (void)italic;
     init_freetype();
 
     // Select active face; nullptr means font not loaded → graceful no-op
@@ -540,9 +552,7 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
 
     const uint8_t ff = static_cast<uint8_t>(font_family);
 
-    // Handle both old scale multipliers (e.g. 1.0, 2.0) and new explicit point sizes (e.g. 14, 15)
-    int size = (scale <= 5.0) ? static_cast<int>(std::round(16.0 * scale)) : static_cast<int>(std::round(scale));
-    size = std::max(1, size);
+    int size = normalize_font_size(scale);
     
     const int32 target_w = static_cast<int32>(target.width());
     const int32 target_h = static_cast<int32>(target.height());
@@ -562,21 +572,21 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
 
     for (size_t i = 0; i < text.size(); ) {
         uint32_t codepoint = 0;
-        uint8_t c = text[i];
+        uint8_t c = static_cast<uint8_t>(text[i]);
         if (c < 0x80) {
             codepoint = c;
             i += 1;
         } else if ((c & 0xE0) == 0xC0) {
             if (i + 1 >= text.size()) break;
-            codepoint = ((c & 0x1F) << 6) | (text[i+1] & 0x3F);
+            codepoint = ((c & 0x1F) << 6) | (static_cast<uint8_t>(text[i+1]) & 0x3F);
             i += 2;
         } else if ((c & 0xF0) == 0xE0) {
             if (i + 2 >= text.size()) break;
-            codepoint = ((c & 0x0F) << 12) | ((text[i+1] & 0x3F) << 6) | (text[i+2] & 0x3F);
+            codepoint = ((c & 0x0F) << 12) | ((static_cast<uint8_t>(text[i+1]) & 0x3F) << 6) | (static_cast<uint8_t>(text[i+2]) & 0x3F);
             i += 3;
         } else if ((c & 0xF8) == 0xF0) {
             if (i + 3 >= text.size()) break;
-            codepoint = ((c & 0x07) << 18) | ((text[i+1] & 0x3F) << 12) | ((text[i+2] & 0x3F) << 6) | (text[i+3] & 0x3F);
+            codepoint = ((c & 0x07) << 18) | ((static_cast<uint8_t>(text[i+1]) & 0x3F) << 12) | ((static_cast<uint8_t>(text[i+2]) & 0x3F) << 6) | (static_cast<uint8_t>(text[i+3]) & 0x3F);
             i += 4;
         } else {
             i += 1;
@@ -604,10 +614,10 @@ void rasterize_text(RenderTarget& target, const Point& pos, const std::string& t
                 if (alpha == 255 && is_opaque) {
                     row_ptr[px] = solid_argb;
                 } else {
-                    uint32 combined_a = (color.a() * alpha) / 255;
-                    uint32 src_r = (color.r() * combined_a) / 255;
-                    uint32 src_g = (color.g() * combined_a) / 255;
-                    uint32 src_b = (color.b() * combined_a) / 255;
+                    uint32 combined_a = (static_cast<uint32>(color.a()) * static_cast<uint32>(alpha)) / 255U;
+                    uint32 src_r = (color.r() * combined_a) / 255U;
+                    uint32 src_g = (color.g() * combined_a) / 255U;
+                    uint32 src_b = (color.b() * combined_a) / 255U;
                     uint32 premult_src = (combined_a << 24) | (src_r << 16) | (src_g << 8) | src_b;
                     
                     row_ptr[px] = blend_argb32_premultiplied(row_ptr[px], premult_src);
@@ -905,12 +915,50 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
                     double half_w = cmd.thickness * 0.5;
                     rasterize_solid_rect(target, Rect(x1, cmd.p1.y - half_w, x2 - x1, cmd.thickness), cmd.color, current_clip);
                 } else {
-                    // Fallback to bounding box for arbitrary lines (only axis-aligned are fully supported in MVP)
-                    double x1 = std::min(cmd.p1.x, cmd.p2.x);
-                    double x2 = std::max(cmd.p1.x, cmd.p2.x);
-                    double y1 = std::min(cmd.p1.y, cmd.p2.y);
-                    double y2 = std::max(cmd.p1.y, cmd.p2.y);
-                    rasterize_solid_rect(target, Rect(x1, y1, x2 - x1, y2 - y1), cmd.color, current_clip);
+                    // Proper arbitrary line drawing using Bresenham algorithm with thickness and alpha blending
+                    int x0 = static_cast<int>(std::round(cmd.p1.x));
+                    int y0 = static_cast<int>(std::round(cmd.p1.y));
+                    int x1 = static_cast<int>(std::round(cmd.p2.x));
+                    int y1 = static_cast<int>(std::round(cmd.p2.y));
+
+                    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+                    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+                    int err = dx + dy, e2;
+
+                    int rad = static_cast<int>(std::max(0.0, std::round(cmd.thickness * 0.5 - 0.5)));
+                    const int tw = static_cast<int>(target.width());
+                    const int th = static_cast<int>(target.height());
+                    uint32* buf = target.data();
+                    const uint32 src = cmd.color.to_argb32_premultiplied();
+                    const uint32 sa = (src >> 24) & 0xFF;
+                    const uint32 inv_sa = 255 - sa;
+
+                    while (true) {
+                        for (int rx = -rad; rx <= rad; ++rx) {
+                            for (int ry = -rad; ry <= rad; ++ry) {
+                                int px = x0 + rx, py = y0 + ry;
+                                if (px >= current_clip.left() && px < current_clip.right() &&
+                                    py >= current_clip.top() && py < current_clip.bottom() &&
+                                    px >= 0 && px < tw && py >= 0 && py < th) {
+                                    if (sa == 255) {
+                                        buf[py * tw + px] = src;
+                                    } else if (sa > 0) {
+                                        uint32 dst = buf[py * tw + px];
+                                        uint32 da = (dst >> 24) & 0xFF;
+                                        uint32 r = ((src >> 16) & 0xFF) + (((dst >> 16) & 0xFF) * inv_sa + 127) / 255;
+                                        uint32 g = ((src >> 8) & 0xFF) + (((dst >> 8) & 0xFF) * inv_sa + 127) / 255;
+                                        uint32 b = (src & 0xFF) + ((dst & 0xFF) * inv_sa + 127) / 255;
+                                        uint32 a = sa + ((da * inv_sa + 127) / 255);
+                                        buf[py * tw + px] = (a << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+                                    }
+                                }
+                            }
+                        }
+                        if (x0 == x1 && y0 == y1) break;
+                        e2 = 2 * err;
+                        if (e2 >= dy) { err += dy; x0 += sx; }
+                        if (e2 <= dx) { err += dx; y0 += sy; }
+                    }
                 }
             } else if constexpr (::std::is_same_v<T, DrawImageCommand>) {
                 rasterize_image(target, cmd.rect, cmd.pixels, cmd.width, cmd.height, current_clip);
@@ -938,6 +986,76 @@ void PixmanBackend::execute(const CommandBuffer& buffer, RenderTarget& target) {
             }
         }, command);
     }
+}
+
+TextExtents PixmanBackend::measure_text(std::string_view text, double font_size,
+                                        bool bold, FontFamily family) noexcept {
+    init_freetype();
+
+    int size = normalize_font_size(font_size);
+    FT_Face active_face = (family == FontFamily::Monospace) ? g_ft_face_mono : g_ft_face_ui;
+
+    if (!active_face) {
+        // Bitmap fallback metrics: 8x16 scaled to size
+        const double char_w = (static_cast<double>(size) / 16.0) * 8.0;
+        const double width = static_cast<double>(text.size()) * char_w;
+        const double height = static_cast<double>(size);
+        return TextExtents{width, height, height * 0.8, height * 0.2};
+    }
+
+    if (FT_Set_Pixel_Sizes(active_face, 0, static_cast<FT_UInt>(size))) {
+        const double char_w = (static_cast<double>(size) / 16.0) * 8.0;
+        const double width = static_cast<double>(text.size()) * char_w;
+        const double height = static_cast<double>(size);
+        return TextExtents{width, height, height * 0.8, height * 0.2};
+    }
+
+    const uint8_t ff = static_cast<uint8_t>(family);
+    double total_width = 0.0;
+
+    for (size_t i = 0; i < text.size(); ) {
+        uint32_t codepoint = 0;
+        uint8_t c = static_cast<uint8_t>(text[i]);
+        if (c < 0x80) {
+            codepoint = c;
+            i += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 >= text.size()) break;
+            codepoint = ((c & 0x1F) << 6) | (static_cast<uint8_t>(text[i+1]) & 0x3F);
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 >= text.size()) break;
+            codepoint = ((c & 0x0F) << 12) | ((static_cast<uint8_t>(text[i+1]) & 0x3F) << 6) | (static_cast<uint8_t>(text[i+2]) & 0x3F);
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i + 3 >= text.size()) break;
+            codepoint = ((c & 0x07) << 18) | ((static_cast<uint8_t>(text[i+1]) & 0x3F) << 12) | ((static_cast<uint8_t>(text[i+2]) & 0x3F) << 6) | (static_cast<uint8_t>(text[i+3]) & 0x3F);
+            i += 4;
+        } else {
+            i += 1;
+            continue;
+        }
+
+        const CachedGlyph* glyph = get_cached_glyph(codepoint, size, bold, ff);
+        if (glyph) {
+            total_width += static_cast<double>(glyph->advance_x);
+        }
+    }
+
+    double ascent = static_cast<double>(active_face->size->metrics.ascender) / 64.0;
+    double descent = std::abs(static_cast<double>(active_face->size->metrics.descender)) / 64.0;
+    double line_height = static_cast<double>(active_face->size->metrics.height) / 64.0;
+
+    if (line_height <= 0.0) {
+        line_height = ascent + descent;
+    }
+    if (line_height <= 0.0) {
+        line_height = static_cast<double>(size) * 1.2;
+        ascent = static_cast<double>(size) * 0.8;
+        descent = static_cast<double>(size) * 0.2;
+    }
+
+    return TextExtents{total_width, line_height, ascent, descent};
 }
 
 } // namespace txui

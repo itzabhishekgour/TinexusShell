@@ -1,8 +1,12 @@
 #include "comp/backend/backend.hpp"
 #include "common/logger.hpp"
+#include "common/RuntimePaths.hpp"
+#include "common/DBusNames.hpp"
 #include "comp/output/output.hpp"
 #include <vector>
 #include <memory>
+#include <filesystem>
+#include <fstream>
 
 extern "C" {
 #include <wayland-server-core.h>
@@ -10,6 +14,8 @@ extern "C" {
 #include <wlr/util/log.h>
 #include <wlr/types/wlr_shm.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/render/gles2.h>
+#include <wlr/render/pixman.h>
 #include <wlr/render/allocator.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_subcompositor.h>
@@ -19,8 +25,13 @@ extern "C" {
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
+#include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_data_control_v1.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
+#include <wlr/types/wlr_primary_selection.h>
 #define namespace wl_namespace
 #include <wlr/types/wlr_layer_shell_v1.h>
 #define static
@@ -28,7 +39,18 @@ extern "C" {
 #undef static
 #include <wlr/types/wlr_xdg_shell.h>
 #undef namespace
+#include <wlr/xcursor.h>
+#include <wlr/util/edges.h>
 #include <xkbcommon/xkbcommon.h>
+#include <wlr/types/wlr_screencopy_v1.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
+#include <wlr/types/wlr_foreign_toplevel_management_v1.h>
+#include <wlr/types/wlr_session_lock_v1.h>
+#include <wlr/xwayland/server.h>
+#define class c_class
+#include <wlr/xwayland/xwayland.h>
+#undef class
 }
 
 #include "comp/input/seat_manager.hpp"
@@ -36,14 +58,28 @@ extern "C" {
 #include "comp/cursor/cursor_manager.hpp"
 #include "comp/focus/focus_manager.hpp"
 #include "comp/server/server.hpp"
+#include "comp/window/window_state.hpp"
+#include "comp/window/decoration_manager.hpp"
+#include "comp/animation/animation_manager.hpp"
+#include "comp/workspace/workspace_manager.hpp"
+#include "comp/surface/blur_manager.hpp"
+#include "comp/surface/surface_manager.hpp"
+#include "common/AppId.hpp"
 #include <unistd.h>
 #include <cstdlib>
 #include <cstdarg>
 #include <cstring>
 #include <filesystem>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <systemd/sd-bus.h>
+#include <fcntl.h>
 
 namespace tinexus::comp {
+
+using tinexus::common::get_canonical_app_id;
+using tinexus::common::is_single_instance_app;
 
 namespace {
 void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, va_list args) {
@@ -76,7 +112,7 @@ void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, v
 }
 } // namespace
 
-class WlrootsBackend : public Backend {
+class WlrootsBackend : public Backend, public IWindowActionHandler {
 public:
     explicit WlrootsBackend(struct wl_display* display) : m_display(display) {}
 
@@ -126,6 +162,34 @@ public:
             return false;
         }
 
+        std::string active_renderer_str = "pixman";
+        if (wlr_renderer_is_gles2(m_wlr_renderer)) {
+            active_renderer_str = "gles2";
+            log::info("[Renderer] wlroots active renderer: OpenGL ES 2 (Hardware Accelerated)");
+        } else if (wlr_renderer_is_pixman(m_wlr_renderer)) {
+            active_renderer_str = "pixman";
+            log::warn("[Renderer] wlroots active renderer: Pixman (Software Rasterizer) — Hardware acceleration not available or failed");
+        } else {
+            active_renderer_str = "custom";
+            log::info("[Renderer] wlroots active renderer: Custom / Autocreated");
+        }
+
+        // Publish live active renderer state to runtime dir and /run/tinexus/renderer so UI profilers
+        // (About Tinexus, Settings, Monitor) can authoritatively read live compositor state
+        try {
+            tinexus::common::RuntimePaths::ensure_runtime_dir();
+            std::string run_path = tinexus::common::RuntimePaths::get_runtime_dir() + "/renderer";
+            std::ofstream rf(run_path);
+            if (rf.is_open()) {
+                rf << active_renderer_str << "\n";
+            }
+            std::filesystem::create_directories("/run/tinexus");
+            std::ofstream rf_legacy("/run/tinexus/renderer");
+            if (rf_legacy.is_open()) {
+                rf_legacy << active_renderer_str << "\n";
+            }
+        } catch (...) {}
+
         wlr_renderer_init_wl_display(m_wlr_renderer, m_display);
 
         // 3. Create allocator
@@ -155,6 +219,8 @@ public:
         log::info("[Backend] Backend initialized successfully.");
 
         m_output_layout = wlr_output_layout_create(m_display);
+        wlr_xdg_output_manager_v1_create(m_display, m_output_layout);
+        m_foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(m_display);
 
         // Create wlr_scene and scene tree structure
         m_scene = wlr_scene_create();
@@ -164,7 +230,37 @@ public:
         m_scene_tree_bottom     = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_normal     = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_top        = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_fullscreen = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_overlay    = wlr_scene_tree_create(&m_scene->tree);
+
+        // Initialize per-workspace scene trees under m_scene_tree_normal
+        auto& ws_mgr = WorkspaceManager::instance();
+        const auto& workspaces = ws_mgr.get_all_workspaces();
+
+        for (const auto& ws : workspaces) {
+            struct wlr_scene_tree* ws_tree = wlr_scene_tree_create(m_scene_tree_normal);
+            ws_mgr.set_workspace_scene_tree(ws.id, ws_tree);
+
+            // Off-screen workspaces are initially disabled to eliminate redundant damage & cursor checks
+            if (!ws.is_active) {
+                wlr_scene_node_set_enabled(&ws_tree->node, false);
+            }
+        }
+
+        // If an output is already available at startup, configure the viewport width;
+        // otherwise viewport width initialization is cleanly deferred until the first output arrives.
+        if (!m_outputs.empty() && m_outputs[0] && m_outputs[0]->get_wlr_output() && m_outputs[0]->get_wlr_output()->width > 0) {
+            ws_mgr.set_viewport_width(static_cast<uint32_t>(m_outputs[0]->get_wlr_output()->width));
+        }
+
+        // Connect WorkspaceManager frame scheduler to wlroots outputs
+        ws_mgr.set_frame_scheduler([this]() {
+            for (auto& out : m_outputs) {
+                if (out && out->get_wlr_output()) {
+                    wlr_output_schedule_frame(out->get_wlr_output());
+                }
+            }
+        });
 
         // Bind FocusManager — scene + seat must both exist before this call.
         // (seat is created just below; bind_focus() call placed after seat init)
@@ -172,6 +268,27 @@ public:
 
         m_seat = wlr_seat_create(m_display, "seat0");
         SeatManager::instance().bind_seat(m_seat, "seat0");
+
+        // Advertise seat capabilities early so clients know keyboard and pointer exist
+        wlr_seat_set_capabilities(m_seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
+
+        // Attach a baseline virtual keyboard to the seat so Wayland clients receive keyboard focus
+        // even before physical input devices are plugged in or when running in headless test harnesses.
+        static const struct wlr_keyboard_impl baseline_kb_impl = {};
+        m_baseline_keyboard = static_cast<struct wlr_keyboard*>(calloc(1, sizeof(struct wlr_keyboard)));
+        if (m_baseline_keyboard) {
+            wlr_keyboard_init(m_baseline_keyboard, &baseline_kb_impl, "seat0-baseline-keyboard");
+            struct xkb_context* xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+            if (xkb_ctx) {
+                struct xkb_keymap* km = xkb_keymap_new_from_names(xkb_ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+                if (km) {
+                    wlr_keyboard_set_keymap(m_baseline_keyboard, km);
+                    xkb_keymap_unref(km);
+                }
+                xkb_context_unref(xkb_ctx);
+            }
+            wlr_seat_set_keyboard(m_seat, m_baseline_keyboard);
+        }
 
         m_cursor = wlr_cursor_create();
         wlr_cursor_attach_output_layout(m_cursor, m_output_layout);
@@ -187,12 +304,42 @@ public:
         m_new_layer_surface_listener.notify = handle_new_layer_surface;
         wl_signal_add(&m_layer_shell->events.new_surface, &m_new_layer_surface_listener);
 
+        m_session_lock_mgr = wlr_session_lock_manager_v1_create(m_display);
+        m_new_session_lock_listener.notify = handle_new_session_lock;
+        wl_signal_add(&m_session_lock_mgr->events.new_lock, &m_new_session_lock_listener);
+
         m_xdg_shell = wlr_xdg_shell_create(m_display, 3);
         m_new_xdg_surface_listener.notify = handle_new_xdg_toplevel;
         wl_signal_add(&m_xdg_shell->events.new_toplevel, &m_new_xdg_surface_listener);
 
+        m_new_xdg_popup_listener.notify = handle_new_xdg_popup;
+        wl_signal_add(&m_xdg_shell->events.new_popup, &m_new_xdg_popup_listener);
+
+        // Initialize XWayland in lazy mode (starts Xwayland on-demand when client connects)
+        m_xwayland = wlr_xwayland_create(m_display, m_wlr_compositor, true);
+        if (m_xwayland) {
+            m_xwayland_ready.notify = handle_xwayland_ready;
+            wl_signal_add(&m_xwayland->events.ready, &m_xwayland_ready);
+
+            m_xwayland_new_surface.notify = handle_xwayland_new_surface;
+            wl_signal_add(&m_xwayland->events.new_surface, &m_xwayland_new_surface);
+
+            if (m_xwayland->display_name) {
+                propagate_display_env(m_xwayland->display_name);
+                log::info("[Backend] XWayland initialized in lazy mode on DISPLAY={}", m_xwayland->display_name);
+            }
+        } else {
+            log::warn("[Backend] Failed to initialize XWayland (wlr_xwayland_create returned null).");
+        }
+
         m_new_output_listener.notify = handle_new_output;
         wl_signal_add(&m_wlr_backend->events.new_output, &m_new_output_listener);
+
+        // Initialize Tinexus Server-Side Decoration Manager (zxdg_decoration_manager_v1)
+        TinexusDecorationManager::instance().init(m_display, this, m_scene_tree_normal);
+
+        // Initialize Wayland Blur Protocol Manager (org_kde_kwin_blur_manager)
+        BlurManager::instance().initialize(m_display);
 
         m_new_input_listener.notify = handle_new_input;
         wl_signal_add(&m_wlr_backend->events.new_input, &m_new_input_listener);
@@ -212,6 +359,21 @@ public:
         m_cursor_frame_listener.notify = handle_cursor_frame;
         wl_signal_add(&m_cursor->events.frame, &m_cursor_frame_listener);
 
+        // Trackpad multi-finger gesture listeners (3-finger / 4-finger macOS-style Spaces)
+        m_cursor_swipe_begin_listener.notify = handle_cursor_swipe_begin;
+        wl_signal_add(&m_cursor->events.swipe_begin, &m_cursor_swipe_begin_listener);
+
+        m_cursor_swipe_update_listener.notify = handle_cursor_swipe_update;
+        wl_signal_add(&m_cursor->events.swipe_update, &m_cursor_swipe_update_listener);
+
+        m_cursor_swipe_end_listener.notify = handle_cursor_swipe_end;
+        wl_signal_add(&m_cursor->events.swipe_end, &m_cursor_swipe_end_listener);
+
+        m_pointer_gestures = wlr_pointer_gestures_v1_create(m_display);
+        if (m_pointer_gestures) {
+            log::info("[Backend] wlr_pointer_gestures_v1 protocol initialized.");
+        }
+
         // Create wl_data_device_manager so Wayland clients (foot, etc.) can bind
         // clipboard / drag-and-drop protocol. Without this, clients report
         // "no clipboard available" even though the global appears in registry.
@@ -222,11 +384,48 @@ public:
             log::info("[Backend] wl_data_device_manager created (clipboard enabled).");
         }
 
+        m_data_control_manager = wlr_data_control_manager_v1_create(m_display);
+        if (m_data_control_manager) {
+            log::info("[Backend] wlr_data_control_manager_v1 created.");
+        }
+
+        m_primary_selection_manager = wlr_primary_selection_v1_device_manager_create(m_display);
+        if (m_primary_selection_manager) {
+            log::info("[Backend] wlr_primary_selection_v1_device_manager created.");
+        }
+
+        m_screencopy_manager = wlr_screencopy_manager_v1_create(m_display);
+        if (m_screencopy_manager) {
+            log::info("[Backend] wlr_screencopy_manager_v1 created.");
+        } else {
+            log::warn("[Backend] Failed to create wlr_screencopy_manager_v1.");
+        }
+
+        m_linux_dmabuf = wlr_linux_dmabuf_v1_create_with_renderer(m_display, 4, m_wlr_renderer);
+        if (m_linux_dmabuf) {
+            log::info("[Backend] wlr_linux_dmabuf_v1 created.");
+        } else {
+            log::warn("[Backend] Failed to create wlr_linux_dmabuf_v1.");
+        }
+
+        m_request_set_selection_listener.notify = handle_request_set_selection;
+        wl_signal_add(&m_seat->events.request_set_selection, &m_request_set_selection_listener);
+
+        m_request_set_primary_selection_listener.notify = handle_request_set_primary_selection;
+        wl_signal_add(&m_seat->events.request_set_primary_selection, &m_request_set_primary_selection_listener);
+
         return true;
     }
 
     bool start() override {
         log::info("[Backend] Starting wlroots backend...");
+        AnimationManager::instance().set_frame_scheduler([this]() {
+            for (auto& out : m_outputs) {
+                if (out && out->get_wlr_output()) {
+                    wlr_output_schedule_frame(out->get_wlr_output());
+                }
+            }
+        });
         if (!wlr_backend_start(m_wlr_backend)) {
             log::error("[Backend] Failed to start wlroots backend.");
             return false;
@@ -248,8 +447,83 @@ public:
             if (m_cursor_button_listener.link.next) { wl_list_remove(&m_cursor_button_listener.link); m_cursor_button_listener.link.next = nullptr; }
             if (m_cursor_axis_listener.link.next) { wl_list_remove(&m_cursor_axis_listener.link); m_cursor_axis_listener.link.next = nullptr; }
             if (m_cursor_frame_listener.link.next) { wl_list_remove(&m_cursor_frame_listener.link); m_cursor_frame_listener.link.next = nullptr; }
+            if (m_cursor_swipe_begin_listener.link.next) { wl_list_remove(&m_cursor_swipe_begin_listener.link); m_cursor_swipe_begin_listener.link.next = nullptr; }
+            if (m_cursor_swipe_update_listener.link.next) { wl_list_remove(&m_cursor_swipe_update_listener.link); m_cursor_swipe_update_listener.link.next = nullptr; }
+            if (m_cursor_swipe_end_listener.link.next) { wl_list_remove(&m_cursor_swipe_end_listener.link); m_cursor_swipe_end_listener.link.next = nullptr; }
             if (m_new_layer_surface_listener.link.next) { wl_list_remove(&m_new_layer_surface_listener.link); m_new_layer_surface_listener.link.next = nullptr; }
+            if (m_new_session_lock_listener.link.next) { wl_list_remove(&m_new_session_lock_listener.link); m_new_session_lock_listener.link.next = nullptr; }
+            if (m_session_lock_new_surface_listener.link.next) { wl_list_remove(&m_session_lock_new_surface_listener.link); m_session_lock_new_surface_listener.link.next = nullptr; }
+            if (m_session_lock_unlock_listener.link.next) { wl_list_remove(&m_session_lock_unlock_listener.link); m_session_lock_unlock_listener.link.next = nullptr; }
+            if (m_session_lock_destroy_listener.link.next) { wl_list_remove(&m_session_lock_destroy_listener.link); m_session_lock_destroy_listener.link.next = nullptr; }
+            m_lock_surfaces.clear();
+            m_current_lock = nullptr;
             if (m_new_xdg_surface_listener.link.next) { wl_list_remove(&m_new_xdg_surface_listener.link); m_new_xdg_surface_listener.link.next = nullptr; }
+            if (m_new_xdg_popup_listener.link.next) { wl_list_remove(&m_new_xdg_popup_listener.link); m_new_xdg_popup_listener.link.next = nullptr; }
+            if (m_request_set_selection_listener.link.next) { wl_list_remove(&m_request_set_selection_listener.link); m_request_set_selection_listener.link.next = nullptr; }
+            if (m_request_set_primary_selection_listener.link.next) { wl_list_remove(&m_request_set_primary_selection_listener.link); m_request_set_primary_selection_listener.link.next = nullptr; }
+            if (m_baseline_keyboard) {
+                free(m_baseline_keyboard);
+                m_baseline_keyboard = nullptr;
+            }
+
+            // Bug 1: explicit cleanup of layer surface wrappers before backend
+            // teardown so cleanup is deterministic and does not depend on wlroots
+            // firing destroy signals during wlr_backend_destroy.
+            for (auto* w : m_layer_surfaces) {
+                if (w->surface_id != 0) {
+                    SurfaceManager::instance().remove_surface(w->surface_id);
+                    w->surface_id = 0;
+                }
+                if (w->commit.link.next)  { wl_list_remove(&w->commit.link);  w->commit.link.next  = nullptr; }
+                if (w->destroy.link.next) { wl_list_remove(&w->destroy.link); w->destroy.link.next = nullptr; }
+                if (w->unmap.link.next)   { wl_list_remove(&w->unmap.link);   w->unmap.link.next   = nullptr; }
+                delete w;
+            }
+            m_layer_surfaces.clear();
+
+            for (auto* p : m_popups) {
+                if (p->commit.link.next) { wl_list_remove(&p->commit.link); p->commit.link.next = nullptr; }
+                if (p->reposition.link.next) { wl_list_remove(&p->reposition.link); p->reposition.link.next = nullptr; }
+                if (p->destroy.link.next) { wl_list_remove(&p->destroy.link); p->destroy.link.next = nullptr; }
+                delete p;
+            }
+            m_popups.clear();
+
+            if (m_xwayland) {
+                if (m_xwayland_ready.link.next) { wl_list_remove(&m_xwayland_ready.link); m_xwayland_ready.link.next = nullptr; }
+                if (m_xwayland_new_surface.link.next) { wl_list_remove(&m_xwayland_new_surface.link); m_xwayland_new_surface.link.next = nullptr; }
+                for (auto& w : m_xwayland_surfaces) {
+                    if (w->associate.link.next) { wl_list_remove(&w->associate.link); w->associate.link.next = nullptr; }
+                    if (w->dissociate.link.next) { wl_list_remove(&w->dissociate.link); w->dissociate.link.next = nullptr; }
+                    if (w->map.link.next) { wl_list_remove(&w->map.link); w->map.link.next = nullptr; }
+                    if (w->unmap.link.next) { wl_list_remove(&w->unmap.link); w->unmap.link.next = nullptr; }
+                    if (w->destroy.link.next) { wl_list_remove(&w->destroy.link); w->destroy.link.next = nullptr; }
+                    if (w->request_configure.link.next) { wl_list_remove(&w->request_configure.link); w->request_configure.link.next = nullptr; }
+                    if (w->request_move.link.next) { wl_list_remove(&w->request_move.link); w->request_move.link.next = nullptr; }
+                    if (w->request_resize.link.next) { wl_list_remove(&w->request_resize.link); w->request_resize.link.next = nullptr; }
+                    if (w->request_maximize.link.next) { wl_list_remove(&w->request_maximize.link); w->request_maximize.link.next = nullptr; }
+                    if (w->request_minimize.link.next) { wl_list_remove(&w->request_minimize.link); w->request_minimize.link.next = nullptr; }
+                    if (w->request_fullscreen.link.next) { wl_list_remove(&w->request_fullscreen.link); w->request_fullscreen.link.next = nullptr; }
+                    if (w->request_activate.link.next) { wl_list_remove(&w->request_activate.link); w->request_activate.link.next = nullptr; }
+                    if (w->set_title.link.next) { wl_list_remove(&w->set_title.link); w->set_title.link.next = nullptr; }
+                    if (w->set_class.link.next) { wl_list_remove(&w->set_class.link); w->set_class.link.next = nullptr; }
+                }
+                m_xwayland_surfaces.clear();
+                for (auto& u : m_xwayland_unmanaged) {
+                    if (u->associate.link.next) { wl_list_remove(&u->associate.link); u->associate.link.next = nullptr; }
+                    if (u->dissociate.link.next) { wl_list_remove(&u->dissociate.link); u->dissociate.link.next = nullptr; }
+                    if (u->map.link.next) { wl_list_remove(&u->map.link); u->map.link.next = nullptr; }
+                    if (u->unmap.link.next) { wl_list_remove(&u->unmap.link); u->unmap.link.next = nullptr; }
+                    if (u->destroy.link.next) { wl_list_remove(&u->destroy.link); u->destroy.link.next = nullptr; }
+                    if (u->request_configure.link.next) { wl_list_remove(&u->request_configure.link); u->request_configure.link.next = nullptr; }
+                    if (u->set_geometry.link.next) { wl_list_remove(&u->set_geometry.link); u->set_geometry.link.next = nullptr; }
+                }
+                m_xwayland_unmanaged.clear();
+                wlr_xwayland_destroy(m_xwayland);
+                m_xwayland = nullptr;
+            }
+
+            TinexusDecorationManager::instance().shutdown();
 
             if (m_scene) {
                 wlr_scene_node_destroy(&m_scene->tree.node);
@@ -290,6 +564,10 @@ private:
     struct wlr_compositor* m_wlr_compositor{nullptr};
     struct wlr_shm* m_wlr_shm{nullptr};
     struct wlr_data_device_manager* m_data_device_manager{nullptr};
+    struct wlr_data_control_manager_v1* m_data_control_manager{nullptr};
+    struct wlr_primary_selection_v1_device_manager* m_primary_selection_manager{nullptr};
+    struct wlr_screencopy_manager_v1* m_screencopy_manager{nullptr};
+    struct wlr_linux_dmabuf_v1* m_linux_dmabuf{nullptr};
 
     struct wlr_output_layout* m_output_layout{nullptr};
     struct wlr_seat* m_seat{nullptr};
@@ -297,13 +575,21 @@ private:
     struct wlr_xcursor_manager* m_cursor_mgr{nullptr};
     struct wlr_layer_shell_v1* m_layer_shell{nullptr};
     struct wlr_xdg_shell* m_xdg_shell{nullptr};
+    struct wlr_xwayland* m_xwayland{nullptr};
+    struct wl_listener m_xwayland_ready;
+    struct wl_listener m_xwayland_new_surface;
 
     struct wlr_scene* m_scene{nullptr};
     struct wlr_scene_tree* m_scene_tree_background{nullptr};
     struct wlr_scene_tree* m_scene_tree_bottom{nullptr};
     struct wlr_scene_tree* m_scene_tree_normal{nullptr};
     struct wlr_scene_tree* m_scene_tree_top{nullptr};
+    struct wlr_scene_tree* m_scene_tree_fullscreen{nullptr};
     struct wlr_scene_tree* m_scene_tree_overlay{nullptr};
+    struct wlr_foreign_toplevel_manager_v1* m_foreign_toplevel_mgr{nullptr};
+    // Bug 3: track the single shared background fill rect so it can be
+    // destroyed and recreated on hotplug rather than stacking indefinitely.
+    struct wlr_scene_rect* m_bg_rect{nullptr};
 
     struct wl_listener m_new_output_listener;
     struct wl_listener m_new_input_listener;
@@ -312,11 +598,30 @@ private:
     struct wl_listener m_cursor_button_listener;
     struct wl_listener m_cursor_axis_listener;
     struct wl_listener m_cursor_frame_listener;
+    struct wl_listener m_cursor_swipe_begin_listener;
+    struct wl_listener m_cursor_swipe_update_listener;
+    struct wl_listener m_cursor_swipe_end_listener;
+    struct wlr_pointer_gestures_v1* m_pointer_gestures{nullptr};
+    bool m_active_swipe_gesture{false};
     struct wl_listener m_new_layer_surface_listener;
     struct wl_listener m_new_xdg_surface_listener;
+    struct wl_listener m_new_xdg_popup_listener;
+    struct wl_listener m_request_set_selection_listener;
+    struct wl_listener m_request_set_primary_selection_listener;
+
+    struct wlr_session_lock_manager_v1* m_session_lock_mgr{nullptr};
+    struct wlr_session_lock_v1* m_current_lock{nullptr};
+    struct wl_listener m_new_session_lock_listener;
+    struct wl_listener m_session_lock_new_surface_listener;
+    struct wl_listener m_session_lock_unlock_listener;
+    struct wl_listener m_session_lock_destroy_listener;
 
     std::vector<std::unique_ptr<TinexusOutput>> m_outputs;
+    struct XwaylandWrapper;
+    struct XwaylandUnmanagedWrapper;
     ToplevelWrapper* m_active_toplevel{nullptr};
+    XwaylandWrapper* m_active_xwayland{nullptr};
+    XwaylandWrapper* m_grab_xwayland{nullptr};
     struct wlr_surface* m_lock_surface{nullptr};
 
     struct KeyboardWrapper {
@@ -327,6 +632,14 @@ private:
         WlrootsBackend* backend;
     };
     std::vector<std::unique_ptr<KeyboardWrapper>> m_keyboards;
+    struct wlr_keyboard* m_baseline_keyboard{nullptr};
+
+    struct PointerWrapper {
+        struct wl_listener destroy;
+        struct wlr_input_device* device;
+        WlrootsBackend* backend;
+    };
+    std::vector<std::unique_ptr<PointerWrapper>> m_pointers;
 
     // Session lock state — when true, ALL global shortcuts are suppressed
     // and keyboard input goes exclusively to the lock client
@@ -343,15 +656,28 @@ private:
     int m_grab_geo_x{0};
     int m_grab_geo_y{0};
     struct wlr_box m_grab_geobox{};
+    uint32_t m_grab_edges{0};
+    SnapMode m_pending_snap{SnapMode::None};
     struct LayerSurfaceWrapper {
         struct wlr_layer_surface_v1* layer_surface{nullptr};
         struct wlr_scene_layer_surface_v1* scene_layer{nullptr};
         struct wl_listener destroy;
         struct wl_listener commit;
+        struct wl_listener unmap;
         WlrootsBackend* backend{nullptr};
+        uint32_t surface_id{0};
+        int32_t last_exclusive_zone{-999};
     };
 
-    struct ToplevelWrapper {
+    enum class WrapperType : uint8_t { NativeToplevel, Xwayland };
+    struct WindowWrapperBase {
+        WrapperType wrapper_type{WrapperType::NativeToplevel};
+        explicit WindowWrapperBase(WrapperType type) : wrapper_type(type) {}
+        virtual ~WindowWrapperBase() = default;
+    };
+
+    struct ToplevelWrapper : public WindowWrapperBase {
+        ToplevelWrapper() : WindowWrapperBase(WrapperType::NativeToplevel) {}
         struct wlr_xdg_toplevel* toplevel{nullptr};
         struct wlr_scene_tree* scene_tree{nullptr}; // scene node for rendering
         struct wl_listener map;     // fires when surface first gains a buffer
@@ -362,11 +688,16 @@ private:
         struct wl_listener request_minimize;
         struct wl_listener request_move;
         struct wl_listener request_resize;
+        struct wl_listener set_app_id;
         WlrootsBackend* backend{nullptr};
+        TinexusWindowFrame* frame{nullptr};
+        uint32_t workspace_id{1};
+        uint32_t surface_id{0};
 
         // Window states
         bool is_maximized{false};
         bool is_fullscreen{false};
+        WindowStateMachine state_machine;
 
         // Saved geometry for restoring after maximize/fullscreen
         int32_t saved_x{50};
@@ -377,27 +708,258 @@ private:
         // Fade out on close
         bool is_closing{false};
         double opacity{1.0};
+        std::chrono::steady_clock::time_point fade_start_time{};
         struct wl_event_source* fade_timer{nullptr};
+
+        // Foreign toplevel management
+        struct wlr_foreign_toplevel_handle_v1* foreign_handle{nullptr};
+        struct wl_listener foreign_request_maximize{};
+        struct wl_listener foreign_request_minimize{};
+        struct wl_listener foreign_request_activate{};
+        struct wl_listener foreign_request_fullscreen{};
+        struct wl_listener foreign_request_close{};
     };
+    struct PopupWrapper {
+        struct wlr_xdg_popup* popup{nullptr};
+        struct wlr_scene_tree* scene_tree{nullptr};
+        struct wl_listener commit{};
+        struct wl_listener destroy{};
+        struct wl_listener reposition{};
+        WlrootsBackend* backend{nullptr};
+    };
+
+    struct XwaylandWrapper : public WindowWrapperBase {
+        XwaylandWrapper() : WindowWrapperBase(WrapperType::Xwayland) {}
+        struct wlr_xwayland_surface* xsurface{nullptr};
+        struct wlr_scene_tree* scene_tree{nullptr};
+        struct wl_listener associate{};
+        struct wl_listener dissociate{};
+        struct wl_listener map{};
+        struct wl_listener unmap{};
+        struct wl_listener destroy{};
+        struct wl_listener request_configure{};
+        struct wl_listener request_move{};
+        struct wl_listener request_resize{};
+        struct wl_listener request_maximize{};
+        struct wl_listener request_minimize{};
+        struct wl_listener request_fullscreen{};
+        struct wl_listener request_activate{};
+        struct wl_listener set_title{};
+        struct wl_listener set_class{};
+        WlrootsBackend* backend{nullptr};
+        TinexusWindowFrame* frame{nullptr};
+        uint32_t workspace_id{1};
+        uint32_t surface_id{0};
+        WindowStateMachine state_machine;
+        bool is_maximized{false};
+        bool is_fullscreen{false};
+        int32_t saved_x{50};
+        int32_t saved_y{100};
+        int32_t saved_width{800};
+        int32_t saved_height{600};
+        bool is_closing{false};
+        double opacity{1.0};
+
+        // Foreign toplevel management
+        struct wlr_foreign_toplevel_handle_v1* foreign_handle{nullptr};
+        struct wl_listener foreign_request_maximize{};
+        struct wl_listener foreign_request_minimize{};
+        struct wl_listener foreign_request_activate{};
+        struct wl_listener foreign_request_fullscreen{};
+        struct wl_listener foreign_request_close{};
+    };
+
+    struct XwaylandUnmanagedWrapper {
+        struct wlr_xwayland_surface* xsurface{nullptr};
+        struct wlr_scene_tree* scene_tree{nullptr};
+        struct wl_listener associate{};
+        struct wl_listener dissociate{};
+        struct wl_listener map{};
+        struct wl_listener unmap{};
+        struct wl_listener destroy{};
+        struct wl_listener request_configure{};
+        struct wl_listener set_geometry{};
+        WlrootsBackend* backend{nullptr};
+    };
+
     std::vector<std::unique_ptr<ToplevelWrapper>> m_toplevels;
+    std::vector<std::unique_ptr<XwaylandWrapper>> m_xwayland_surfaces;
+    std::vector<std::unique_ptr<XwaylandUnmanagedWrapper>> m_xwayland_unmanaged;
     std::vector<LayerSurfaceWrapper*> m_layer_surfaces;
+    std::vector<PopupWrapper*> m_popups;
+
+    struct SessionLockSurfaceWrapper {
+        struct wlr_session_lock_surface_v1* lock_surface{nullptr};
+        struct wlr_scene_tree* scene_tree{nullptr};
+        struct wl_listener destroy;
+        struct wl_listener commit;
+        WlrootsBackend* backend{nullptr};
+    };
+    std::vector<std::unique_ptr<SessionLockSurfaceWrapper>> m_lock_surfaces;
+
+    static void handle_new_session_lock(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_new_session_lock_listener);
+        auto* lock = static_cast<struct wlr_session_lock_v1*>(data);
+        if (self->m_current_lock != nullptr) {
+            log::warn("[SessionLock] Session is already locked; rejecting duplicate lock request");
+            wlr_session_lock_v1_destroy(lock);
+            return;
+        }
+
+        log::info("[SessionLock] ext-session-lock-v1: lock requested (lock={})", static_cast<void*>(lock));
+        self->m_current_lock = lock;
+        self->m_is_locked = true;
+        self->set_layer_surfaces_enabled(false);
+
+        self->m_session_lock_new_surface_listener.notify = handle_session_lock_new_surface;
+        wl_signal_add(&lock->events.new_surface, &self->m_session_lock_new_surface_listener);
+
+        self->m_session_lock_unlock_listener.notify = handle_session_lock_unlock;
+        wl_signal_add(&lock->events.unlock, &self->m_session_lock_unlock_listener);
+
+        self->m_session_lock_destroy_listener.notify = handle_session_lock_destroy;
+        wl_signal_add(&lock->events.destroy, &self->m_session_lock_destroy_listener);
+    }
+
+    static void handle_session_lock_new_surface(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_session_lock_new_surface_listener);
+        auto* lock_surface = static_cast<struct wlr_session_lock_surface_v1*>(data);
+        log::info("[SessionLock] New lock surface: surface={} output={}",
+                  static_cast<void*>(lock_surface->surface), static_cast<void*>(lock_surface->output));
+
+        auto wrapper = std::make_unique<SessionLockSurfaceWrapper>();
+        wrapper->lock_surface = lock_surface;
+        wrapper->backend = self;
+
+        wrapper->scene_tree = wlr_scene_subsurface_tree_create(self->m_scene_tree_overlay, lock_surface->surface);
+        lock_surface->data = wrapper.get();
+
+        struct wlr_box box{0, 0, 0, 0};
+        if (lock_surface->output) {
+            wlr_output_layout_get_box(self->m_output_layout, lock_surface->output, &box);
+            int w = lock_surface->output->width;
+            int h = lock_surface->output->height;
+            wlr_output_effective_resolution(lock_surface->output, &w, &h);
+            box.width = w;
+            box.height = h;
+        }
+        wlr_scene_node_set_position(&wrapper->scene_tree->node, box.x, box.y);
+        wlr_session_lock_surface_v1_configure(lock_surface, static_cast<uint32_t>(box.width), static_cast<uint32_t>(box.height));
+
+        wrapper->destroy.notify = [](struct wl_listener* l, void* /*data*/) {
+            SessionLockSurfaceWrapper* wrap = wl_container_of(l, wrap, destroy);
+            if (!wrap || !wrap->backend) return;
+            WlrootsBackend* b = wrap->backend;
+            if (wrap->lock_surface && b->m_lock_surface == wrap->lock_surface->surface) {
+                b->m_lock_surface = nullptr;
+            }
+            if (wrap->destroy.link.next) { wl_list_remove(&wrap->destroy.link); wrap->destroy.link.next = nullptr; }
+            if (wrap->commit.link.next)  { wl_list_remove(&wrap->commit.link);  wrap->commit.link.next  = nullptr; }
+            if (wrap->scene_tree) {
+                wlr_scene_node_destroy(&wrap->scene_tree->node);
+                wrap->scene_tree = nullptr;
+            }
+            auto it = std::find_if(b->m_lock_surfaces.begin(), b->m_lock_surfaces.end(),
+                [wrap](const auto& p) { return p.get() == wrap; });
+            if (it != b->m_lock_surfaces.end()) {
+                b->m_lock_surfaces.erase(it);
+            }
+        };
+        wl_signal_add(&lock_surface->events.destroy, &wrapper->destroy);
+
+        wrapper->commit.notify = [](struct wl_listener* l, void* /*data*/) {
+            SessionLockSurfaceWrapper* wrap = wl_container_of(l, wrap, commit);
+            if (!wrap || !wrap->backend || !wrap->lock_surface) return;
+            struct wlr_surface* surface = wrap->lock_surface->surface;
+            if (surface && surface->mapped) {
+                wrap->backend->m_lock_surface = surface;
+                FocusManager::instance().set_keyboard_focus(surface);
+            }
+        };
+        wl_signal_add(&lock_surface->surface->events.commit, &wrapper->commit);
+
+        wlr_session_lock_v1_send_locked(self->m_current_lock);
+        self->m_lock_surfaces.push_back(std::move(wrapper));
+    }
+
+    static void handle_session_lock_unlock(struct wl_listener* listener, void* /*data*/) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_session_lock_unlock_listener);
+        log::info("[SessionLock] Session UNLOCKED by authorized protocol client");
+        self->m_is_locked = false;
+        self->m_lock_surface = nullptr;
+        self->set_layer_surfaces_enabled(true);
+
+        self->m_current_lock = nullptr;
+
+        if (self->m_active_toplevel) {
+            self->focus_toplevel(self->m_active_toplevel);
+        } else if (!self->m_toplevels.empty()) {
+            self->focus_toplevel(self->m_toplevels.back().get());
+        } else {
+            FocusManager::instance().set_keyboard_focus(nullptr);
+        }
+    }
+
+    static void handle_session_lock_destroy(struct wl_listener* listener, void* /*data*/) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_session_lock_destroy_listener);
+        log::info("[SessionLock] Lock object destroyed");
+        if (self->m_session_lock_new_surface_listener.link.next) {
+            wl_list_remove(&self->m_session_lock_new_surface_listener.link);
+            self->m_session_lock_new_surface_listener.link.next = nullptr;
+        }
+        if (self->m_session_lock_unlock_listener.link.next) {
+            wl_list_remove(&self->m_session_lock_unlock_listener.link);
+            self->m_session_lock_unlock_listener.link.next = nullptr;
+        }
+        if (self->m_session_lock_destroy_listener.link.next) {
+            wl_list_remove(&self->m_session_lock_destroy_listener.link);
+            self->m_session_lock_destroy_listener.link.next = nullptr;
+        }
+        self->m_current_lock = nullptr;
+    }
+
+    struct wlr_output* resolve_output_for_layer_surface(struct wlr_layer_surface_v1* layer_surface = nullptr) const {
+        if (layer_surface && layer_surface->output) {
+            return layer_surface->output;
+        }
+        struct wlr_output* out = nullptr;
+        if (m_cursor) {
+            out = wlr_output_layout_output_at(m_output_layout, m_cursor->x, m_cursor->y);
+        }
+        if (!out && m_active_toplevel) {
+            out = get_output_for_toplevel(m_active_toplevel);
+        }
+        if (!out) {
+            out = wlr_output_layout_output_at(m_output_layout, 0, 0);
+        }
+        if (!out) {
+            for (const auto& o : m_outputs) {
+                if (o && o->get_wlr_output()) {
+                    struct wlr_box box{};
+                    wlr_output_layout_get_box(m_output_layout, o->get_wlr_output(), &box);
+                    if (box.width > 0 && box.height > 0) {
+                        out = o->get_wlr_output();
+                        break;
+                    }
+                }
+            }
+        }
+        if (!out && !m_outputs.empty() && m_outputs.front()) {
+            out = m_outputs.front()->get_wlr_output();
+        }
+        return out;
+    }
 
     static void handle_new_layer_surface(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_layer_surface_listener);
         auto* layer_surface = static_cast<struct wlr_layer_surface_v1*>(data);
 
-        log::info("[LayerShell] New layer surface: namespace='{}', layer={}",
+        log::info("[LayerShell] New layer surface created: namespace='{}', layer={}",
             layer_surface->wl_namespace ? layer_surface->wl_namespace : "none",
             static_cast<int>(layer_surface->pending.layer));
 
         if (!layer_surface->output) {
-            struct wlr_output* out = wlr_output_layout_output_at(self->m_output_layout, 0, 0);
-            if (!out && !self->m_outputs.empty()) {
-                out = self->m_outputs.front()->get_wlr_output();
-            }
-            if (out) {
-                layer_surface->output = out;
-            }
+            layer_surface->output = self->resolve_output_for_layer_surface();
         }
 
         struct wlr_scene_tree* parent = self->m_scene_tree_top;
@@ -415,53 +977,143 @@ private:
                 parent = self->m_scene_tree_overlay;
                 break;
         }
+        if (!parent) {
+            parent = self->m_scene_tree_top ? self->m_scene_tree_top : &self->m_scene->tree;
+        }
 
         struct wlr_scene_layer_surface_v1* scene_layer =
             wlr_scene_layer_surface_v1_create(parent, layer_surface);
+        if (!scene_layer) {
+            log::error("[LayerShell] Failed to create scene layer surface for namespace='{}'",
+                       layer_surface->wl_namespace ? layer_surface->wl_namespace : "none");
+            return;
+        }
+        layer_surface->data = scene_layer->tree;
 
         auto* wrapper = new LayerSurfaceWrapper();
         wrapper->layer_surface = layer_surface;
         wrapper->scene_layer = scene_layer;
         wrapper->backend = self;
+
+        // Register layer surface with SurfaceManager to track lifecycle
+        pid_t client_pid = -1;
+        if (layer_surface->resource) {
+            struct wl_client* client = wl_resource_get_client(layer_surface->resource);
+            if (client) {
+                wl_client_get_credentials(client, &client_pid, nullptr, nullptr);
+            }
+        }
+        wrapper->surface_id = SurfaceManager::instance().create_surface(
+            client_pid,
+            layer_surface->wl_namespace ? layer_surface->wl_namespace : ""
+        );
+        SurfaceManager::instance().assign_role(wrapper->surface_id, SurfaceRole::LayerSurface);
+
         self->m_layer_surfaces.push_back(wrapper);
+
+        const std::string ns = layer_surface->wl_namespace ? layer_surface->wl_namespace : "";
+        if (BlurManager::instance().is_namespace_blurred(ns) || BlurManager::instance().is_surface_blurred(layer_surface->surface)) {
+            log::info("[LayerShell] Enabling Dual-Kawase background blur for surface in namespace '{}'", ns);
+            BlurManager::instance().register_surface_blur(layer_surface->surface, nullptr);
+        }
 
         wrapper->destroy.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, destroy);
-            
-            // Remove from tracking
             WlrootsBackend* b = w->backend;
-            
+
             // Defend against memory reuse bug: clear focus if this was the focused surface
-            if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
-                FocusManager::instance().set_keyboard_focus(nullptr);
+            if (w->layer_surface && w->layer_surface->surface) {
+                BlurManager::instance().unregister_surface_blur(w->layer_surface->surface);
+                if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
+                    FocusManager::instance().set_keyboard_focus(nullptr);
+                }
             }
 
-            auto it = std::find(b->m_layer_surfaces.begin(), b->m_layer_surfaces.end(), w);
-            if (it != b->m_layer_surfaces.end()) {
-                b->m_layer_surfaces.erase(it);
+            // CRITICAL: Unregister w from tracking FIRST before enabling surfaces or deleting w
+            if (b) {
+                auto it = std::find(b->m_layer_surfaces.begin(), b->m_layer_surfaces.end(), w);
+                if (it != b->m_layer_surfaces.end()) {
+                    b->m_layer_surfaces.erase(it);
+                }
             }
 
-            wl_list_remove(&w->destroy.link);
-            wl_list_remove(&w->commit.link);
+            // Remove surface record from SurfaceManager to prevent record accumulation
+            if (w->surface_id != 0) {
+                SurfaceManager::instance().remove_surface(w->surface_id);
+                w->surface_id = 0;
+            }
+
+            // Bug 6: guard all three link removals to match the popup destroy
+            // handler pattern and prevent double-remove under reentrancy.
+            if (w->destroy.link.next) { wl_list_remove(&w->destroy.link); w->destroy.link.next = nullptr; }
+            if (w->commit.link.next)  { wl_list_remove(&w->commit.link);  w->commit.link.next  = nullptr; }
+            if (w->unmap.link.next)   { wl_list_remove(&w->unmap.link);   w->unmap.link.next   = nullptr; }
             delete w;
         };
         wl_signal_add(&layer_surface->events.destroy, &wrapper->destroy);
 
+        wrapper->unmap.notify = [](struct wl_listener* l, void* d) {
+            LayerSurfaceWrapper* w = wl_container_of(l, w, unmap);
+            if (w && w->layer_surface && w->layer_surface->surface) {
+                if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
+                    if (w->backend && w->backend->m_active_toplevel && w->backend->m_active_toplevel->toplevel) {
+                        FocusManager::instance().set_keyboard_focus(w->backend->m_active_toplevel->toplevel->base->surface);
+                    } else {
+                        FocusManager::instance().set_keyboard_focus(nullptr);
+                    }
+                }
+            }
+        };
+        wl_signal_add(&layer_surface->surface->events.unmap, &wrapper->unmap);
+
         wrapper->commit.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, commit);
-            struct wlr_box full_area = {0, 0, 0, 0};
-            if (w->layer_surface->output) {
-                wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
+            if (!w || !w->layer_surface || !w->scene_layer || !w->backend) return;
+            if (w->layer_surface->initial_commit || w->layer_surface->current.committed != 0) {
+                if (!w->layer_surface->output) {
+                    w->layer_surface->output = w->backend->resolve_output_for_layer_surface();
+                }
+                struct wlr_box full_area = {0, 0, 0, 0};
+                if (w->layer_surface->output) {
+                    wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
+                }
+                struct wlr_box usable_area = full_area;
+                if (w->layer_surface->output && full_area.width > 0 && full_area.height > 0) {
+                    wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+                }
             }
-            struct wlr_box usable_area = full_area;
-            wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+
+            if (w->layer_surface->current.exclusive_zone != w->last_exclusive_zone) {
+                w->last_exclusive_zone = w->layer_surface->current.exclusive_zone;
+                if (w->layer_surface->output) {
+                    w->backend->recalculate_output_work_area(w->layer_surface->output);
+                }
+            }
 
             log::debug("[LayerShell] commit.notify! namespace={}, actual_height={}",
                 w->layer_surface->wl_namespace ? w->layer_surface->wl_namespace : "null",
                 w->layer_surface->surface->current.height);
 
+            // Bug 4: replaced std::string(ns) == "literal" with strcmp to
+            // eliminate heap allocations on every commit (~180/sec under normal
+            // shell+dock+wallpaper usage). "tinexus-launcher" exceeds SSO.
+            const char* ns = w->layer_surface->wl_namespace;
+            bool is_launcher = (ns && (strcmp(ns, "launcher") == 0 || strcmp(ns, "tinexus-launcher") == 0));
+
+            if (is_launcher) {
+                if (w->scene_layer && w->scene_layer->tree) {
+                    wlr_scene_node_raise_to_top(&w->scene_layer->tree->node);
+                }
+                if (w->layer_surface->surface) {
+                    if (FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
+                        log::info("[LayerShell] Granting keyboard focus to Launcher");
+                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                    }
+                }
+            }
+
             // Auto-focus heuristic for the unified shell
-            if (w->layer_surface->wl_namespace && std::string(w->layer_surface->wl_namespace) == "tinexus-shell") {
+            if (w->layer_surface->wl_namespace && strcmp(w->layer_surface->wl_namespace, "tinexus-shell") == 0) {
                 if (w->layer_surface->surface->current.height > 100) {
                     if (w->backend->m_lock_surface == nullptr && FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
                         log::info("[LayerShell] Height > 100. Granting keyboard focus to Pulse.");
@@ -492,22 +1144,215 @@ private:
 
     ToplevelWrapper* find_toplevel_from_node(struct wlr_scene_node* node) {
         if (!node) return nullptr;
-        struct wlr_scene_node* current = node;
-        while (current->parent != nullptr && current->parent != m_scene_tree_normal) {
-            current = &current->parent->node;
-        }
-        for (const auto& w : m_toplevels) {
-            if (w->scene_tree && &w->scene_tree->node == current) {
-                return w.get();
+        for (struct wlr_scene_node* cur = node; cur != nullptr; cur = (cur->parent ? &cur->parent->node : nullptr)) {
+            for (const auto& w : m_toplevels) {
+                if (w->scene_tree && &w->scene_tree->node == cur) {
+                    return w.get();
+                }
             }
         }
         return nullptr;
     }
 
+    XwaylandWrapper* find_xwayland_from_node(struct wlr_scene_node* node) {
+        if (!node) return nullptr;
+        for (struct wlr_scene_node* cur = node; cur != nullptr; cur = (cur->parent ? &cur->parent->node : nullptr)) {
+            for (const auto& w : m_xwayland_surfaces) {
+                if (w->scene_tree && &w->scene_tree->node == cur) {
+                    return w.get();
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    struct wlr_output* get_output_for_xwayland(XwaylandWrapper* wrapper) {
+        if (!wrapper || !wrapper->xsurface) return nullptr;
+        struct wlr_output* out = wlr_output_layout_output_at(
+            m_output_layout, wrapper->xsurface->x, wrapper->xsurface->y);
+        if (!out && !m_outputs.empty()) {
+            out = m_outputs.front()->get_wlr_output();
+        }
+        return out;
+    }
+
+    void propagate_display_env(const char* display_name) {
+        if (!display_name || !*display_name) return;
+        setenv("DISPLAY", display_name, 1);
+        log::info("[XWayland] DISPLAY set to '{}' in compositor process.", display_name);
+
+        // 1. Atomically update /run/tinexus/env
+        try {
+            std::filesystem::create_directories("/run/tinexus");
+            std::vector<std::string> lines;
+            std::ifstream in("/run/tinexus/env");
+            if (in.is_open()) {
+                std::string line;
+                while (std::getline(in, line)) {
+                    if (line.rfind("DISPLAY=", 0) != 0) {
+                        lines.push_back(line);
+                    }
+                }
+                in.close();
+            }
+            lines.push_back(std::string("DISPLAY=") + display_name);
+
+            std::string tmp_path = "/run/tinexus/env.tmp";
+            std::ofstream out(tmp_path);
+            if (out.is_open()) {
+                for (const auto& l : lines) {
+                    out << l << "\n";
+                }
+                out.flush();
+                out.close();
+                int fd = open(tmp_path.c_str(), O_RDONLY);
+                if (fd >= 0) {
+                    fsync(fd);
+                    close(fd);
+                }
+                std::filesystem::rename(tmp_path, "/run/tinexus/env");
+                log::info("[XWayland] Propagated DISPLAY='{}' to /run/tinexus/env", display_name);
+            }
+        } catch (const std::exception& e) {
+            log::warn("[XWayland] Failed to write DISPLAY to /run/tinexus/env: {}", e.what());
+        }
+
+        try {
+            std::string user_env = tinexus::common::RuntimePaths::get_runtime_dir() + "/env";
+            std::ofstream uout(user_env, std::ios::app);
+            if (uout.is_open()) {
+                uout << "DISPLAY=" << display_name << "\n";
+            }
+        } catch (...) {}
+
+        // 2. Propagate to systemd user manager via sd_bus SetEnvironment
+        sd_bus* bus = nullptr;
+        int r = sd_bus_open_user(&bus);
+        if (r >= 0 && bus) {
+            sd_bus_message* m = nullptr;
+            r = sd_bus_message_new_method_call(
+                bus, &m,
+                "org.freedesktop.systemd1",
+                "/org/freedesktop/systemd1",
+                "org.freedesktop.systemd1.Manager",
+                "SetEnvironment");
+            if (r >= 0 && m) {
+                r = sd_bus_message_open_container(m, 'a', "s");
+                if (r >= 0) {
+                    std::string disp_entry = std::string("DISPLAY=") + display_name;
+                    sd_bus_message_append(m, "s", disp_entry.c_str());
+                    sd_bus_message_close_container(m);
+                    sd_bus_error error = SD_BUS_ERROR_NULL;
+                    r = sd_bus_call(bus, m, 0, &error, nullptr);
+                    if (r < 0) {
+                        log::warn("[XWayland] sd_bus SetEnvironment error: {}",
+                                  error.message ? error.message : "unknown");
+                    } else {
+                        log::info("[XWayland] Successfully set DISPLAY in systemd user manager via sd_bus.");
+                    }
+                    sd_bus_error_free(&error);
+                }
+                sd_bus_message_unref(m);
+            }
+            sd_bus_unref(bus);
+        } else {
+            log::warn("[XWayland] sd_bus_open_user returned {} (user session bus not available)", r);
+        }
+    }
+
+    void focus_xwayland(XwaylandWrapper* wrapper) {
+        if (m_is_locked && m_lock_surface != nullptr) {
+            return;
+        }
+        if (m_active_toplevel != nullptr) {
+            if (m_active_toplevel->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(m_active_toplevel->foreign_handle, false);
+            }
+            wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
+            if (m_active_toplevel->frame && m_active_toplevel->toplevel) {
+                TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
+            }
+            m_active_toplevel = nullptr;
+        }
+        for (auto& xw : m_xwayland_surfaces) {
+            if (xw.get() != wrapper && xw->xsurface) {
+                if (xw->foreign_handle) {
+                    wlr_foreign_toplevel_handle_v1_set_activated(xw->foreign_handle, false);
+                }
+                wlr_xwayland_surface_activate(xw->xsurface, false);
+                if (xw->frame) {
+                    xw->frame->set_active(false);
+                }
+            }
+        }
+        m_active_xwayland = wrapper;
+        if (wrapper && wrapper->xsurface) {
+            log::info("[XWayland] Focus X11 window class='{}' title='{}'",
+                      wrapper->xsurface->c_class ? wrapper->xsurface->c_class : "unknown",
+                      wrapper->xsurface->title ? wrapper->xsurface->title : "untitled");
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+                wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            }
+            if (wrapper->frame) {
+                wrapper->frame->set_active(true);
+            }
+            wlr_xwayland_surface_activate(wrapper->xsurface, true);
+            wlr_xwayland_surface_restack(wrapper->xsurface, nullptr, XCB_STACK_MODE_ABOVE);
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, true);
+            }
+            if (wrapper->xsurface->surface) {
+                FocusManager::instance().set_keyboard_focus(wrapper->xsurface->surface);
+            }
+            std::string app_id_str = wrapper->xsurface->c_class ? get_canonical_app_id(wrapper->xsurface->c_class) : "";
+            if (!app_id_str.empty() && TinexusServer::instance()) {
+                TinexusServer::instance()->notify_app_focus_changed(app_id_str, 1);
+            }
+        } else {
+            FocusManager::instance().set_keyboard_focus(nullptr);
+        }
+    }
+
+    void xwayland_set_minimized(XwaylandWrapper* wrapper, bool minimized) {
+        if (!wrapper || !wrapper->xsurface) return;
+        if (minimized) {
+            wrapper->state_machine.request_minimize();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, true);
+            }
+            wlr_xwayland_surface_set_minimized(wrapper->xsurface, true);
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+            }
+            if (m_active_xwayland == wrapper) {
+                m_active_xwayland = nullptr;
+                FocusManager::instance().set_keyboard_focus(nullptr);
+            }
+            std::string app_id_str = wrapper->xsurface->c_class ? wrapper->xsurface->c_class : "";
+            if (TinexusServer::instance()) TinexusServer::instance()->notify_window_minimized(app_id_str);
+        } else {
+            wrapper->state_machine.request_restore();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, false);
+            }
+            wlr_xwayland_surface_set_minimized(wrapper->xsurface, false);
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+            }
+            focus_xwayland(wrapper);
+            std::string app_id_str = wrapper->xsurface->c_class ? wrapper->xsurface->c_class : "";
+            if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id_str);
+        }
+    }
+
     void set_layer_surfaces_enabled(bool enabled) {
         int count = 0;
         for (auto* wrapper : m_layer_surfaces) {
-            if (wrapper && wrapper->scene_layer && wrapper->scene_layer->tree) {
+            if (wrapper && wrapper->layer_surface && wrapper->scene_layer && wrapper->scene_layer->tree) {
+                if (!enabled && wrapper->layer_surface->surface == m_lock_surface) {
+                    continue; // Never disable the lock surface itself!
+                }
                 wlr_scene_node_set_enabled(&wrapper->scene_layer->tree->node, enabled);
                 count++;
             }
@@ -516,7 +1361,6 @@ private:
             enabled ? "Restoring" : "Hiding", count);
     }
 
-
     void focus_toplevel(ToplevelWrapper* wrapper) {
         if (m_is_locked && m_lock_surface != nullptr) {
             // When locked, ONLY the lock surface pointer is permitted to receive focus
@@ -524,116 +1368,1405 @@ private:
                 return;
             }
         }
-        if (m_active_toplevel == wrapper) {
-            return;
+        if (wrapper != nullptr && wrapper->state_machine.state() == WindowState::Minimized) {
+            wrapper->state_machine.request_restore();
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+            log::info("[Window] Restored minimized window upon focus");
+            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ? wrapper->toplevel->app_id : "";
+            if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id_str);
         }
-        if (m_active_toplevel != nullptr) {
+        if (m_active_toplevel != nullptr && m_active_toplevel != wrapper) {
+            if (m_active_toplevel->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(m_active_toplevel->foreign_handle, false);
+            }
             wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
+            if (m_active_toplevel->frame && m_active_toplevel->toplevel) {
+                TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
+            }
+        }
+        if (m_active_xwayland != nullptr) {
+            if (m_active_xwayland->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(m_active_xwayland->foreign_handle, false);
+            }
+            if (m_active_xwayland->xsurface) {
+                wlr_xwayland_surface_activate(m_active_xwayland->xsurface, false);
+            }
+            if (m_active_xwayland->frame) {
+                m_active_xwayland->frame->set_active(false);
+            }
+            m_active_xwayland = nullptr;
         }
         m_active_toplevel = wrapper;
         if (wrapper != nullptr) {
             log::info("[Window] Focus window app_id='{}' title='{}'",
                       wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown",
                       wrapper->toplevel->title ? wrapper->toplevel->title : "untitled");
-            wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
             wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
+            if (wrapper->frame && wrapper->toplevel) {
+                TinexusDecorationManager::instance().set_toplevel_active(wrapper->toplevel, true);
+            }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, true);
+            }
             FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
+
+            std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
+            if (!app_id_str.empty() && TinexusServer::instance()) {
+                TinexusServer::instance()->notify_app_focus_changed(app_id_str, 1);
+            }
         } else {
             FocusManager::instance().set_keyboard_focus(nullptr);
         }
     }
 
     void focus_app(const std::string& app_id) noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
         for (const auto& w : m_toplevels) {
-            if (w->toplevel->app_id && std::string(w->toplevel->app_id) == app_id) {
-                focus_toplevel(w.get());
-                break;
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
+                if (w->state_machine.state() == WindowState::Minimized) {
+                    toplevel_set_minimized(w.get(), false);
+                } else {
+                    focus_toplevel(w.get());
+                }
+                return;
+            }
+        }
+        for (const auto& w : m_xwayland_surfaces) {
+            if (w->xsurface && w->xsurface->c_class &&
+                (std::string(w->xsurface->c_class) == app_id ||
+                 get_canonical_app_id(w->xsurface->c_class) == canonical)) {
+                if (w->state_machine.state() == WindowState::Minimized) {
+                    xwayland_set_minimized(w.get(), false);
+                } else {
+                    focus_xwayland(w.get());
+                }
+                return;
             }
         }
     }
 
-    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
-        if (wrapper->is_maximized == maximize) {
-            wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
-            return;
-        }
-        wrapper->is_maximized = maximize;
-        if (maximize) {
-            if (!wrapper->is_fullscreen) {
-                wrapper->saved_x = wrapper->scene_tree->node.x;
-                wrapper->saved_y = wrapper->scene_tree->node.y;
-                wrapper->saved_width = wrapper->toplevel->base->current.geometry.width;
-                wrapper->saved_height = wrapper->toplevel->base->current.geometry.height;
-                if (wrapper->saved_width <= 0) wrapper->saved_width = 800;
-                if (wrapper->saved_height <= 0) wrapper->saved_height = 600;
+    bool has_app(const std::string& app_id) const noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
+                return true;
             }
-            struct wlr_box output_box = {0, 0, 1280, 800};
-            if (!m_outputs.empty()) {
-                struct wlr_output* out = m_outputs.front()->get_wlr_output();
-                if (out) {
-                    wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
+        }
+        for (const auto& w : m_xwayland_surfaces) {
+            if (w->xsurface && w->xsurface->c_class &&
+                (std::string(w->xsurface->c_class) == app_id ||
+                 get_canonical_app_id(w->xsurface->c_class) == canonical)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool restore_window_by_app_id(const std::string& app_id) noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
+                if (w->state_machine.state() == WindowState::Minimized) {
+                    toplevel_set_minimized(w.get(), false);
+                } else {
+                    focus_toplevel(w.get());
+                }
+                return true;
+            }
+        }
+        for (const auto& w : m_xwayland_surfaces) {
+            if (w->xsurface && w->xsurface->c_class &&
+                (std::string(w->xsurface->c_class) == app_id ||
+                 get_canonical_app_id(w->xsurface->c_class) == canonical)) {
+                if (w->state_machine.state() == WindowState::Minimized) {
+                    xwayland_set_minimized(w.get(), false);
+                } else {
+                    focus_xwayland(w.get());
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool minimize_window_by_app_id(const std::string& app_id) noexcept override {
+        std::string canonical = get_canonical_app_id(app_id);
+        for (const auto& w : m_toplevels) {
+            if (w->toplevel && w->toplevel->app_id &&
+                (std::string(w->toplevel->app_id) == app_id ||
+                 get_canonical_app_id(w->toplevel->app_id) == canonical)) {
+                if (w->state_machine.state() != WindowState::Minimized) {
+                    toplevel_set_minimized(w.get(), true);
+                }
+                return true;
+            }
+        }
+        for (const auto& w : m_xwayland_surfaces) {
+            if (w->xsurface && w->xsurface->c_class &&
+                (std::string(w->xsurface->c_class) == app_id ||
+                 get_canonical_app_id(w->xsurface->c_class) == canonical)) {
+                if (w->state_machine.state() != WindowState::Minimized) {
+                    xwayland_set_minimized(w.get(), true);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void snap_active_window(SnapMode mode) noexcept override {
+        if (m_active_toplevel) {
+            toplevel_set_snap(m_active_toplevel, mode);
+        }
+    }
+
+    void maximize_active_window() noexcept override {
+        if (m_active_xwayland) {
+            xwayland_set_maximized(m_active_xwayland, true);
+        } else if (m_active_toplevel) {
+            toplevel_set_maximized(m_active_toplevel, true);
+        }
+    }
+
+    void restore_active_window() noexcept override {
+        if (m_active_xwayland) {
+            if (m_active_xwayland->is_maximized) {
+                xwayland_set_maximized(m_active_xwayland, false);
+            } else if (m_active_xwayland->state_machine.snap_mode() != SnapMode::None) {
+                m_active_xwayland->state_machine.request_restore();
+            }
+        } else if (m_active_toplevel) {
+            if (m_active_toplevel->state_machine.state() == WindowState::Maximized) {
+                toplevel_set_maximized(m_active_toplevel, false);
+            } else if (m_active_toplevel->state_machine.snap_mode() != SnapMode::None) {
+                toplevel_restore_snap(m_active_toplevel);
+            }
+        }
+    }
+
+    void fullscreen_active_window() noexcept override {
+        if (m_active_xwayland) {
+            xwayland_set_fullscreen(m_active_xwayland, !m_active_xwayland->is_fullscreen);
+        } else if (m_active_toplevel) {
+            toplevel_set_fullscreen(m_active_toplevel, !m_active_toplevel->is_fullscreen);
+        }
+    }
+
+    bool toggle_launcher() noexcept override {
+        bool signaled = false;
+
+        // 1. First attempt to signal running launcher instance via local socket
+        std::vector<std::string> candidates;
+        candidates.push_back(tinexus::common::RuntimePaths::get_user_runtime_dir() + "/tinexus-launcher-single");
+        candidates.push_back("/tmp/tinexus-launcher-single");
+
+        for (const auto& sock_path : candidates) {
+            int s = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (s < 0) continue;
+
+            struct timeval tv{};
+            tv.tv_sec = 0;
+            tv.tv_usec = 100000; // 100ms timeout
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+            struct sockaddr_un addr{};
+            addr.sun_family = AF_UNIX;
+            std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+            if (::connect(s, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
+                const char* msg = "toggle\n";
+                ssize_t wres = ::send(s, msg, std::strlen(msg), MSG_NOSIGNAL);
+                (void)wres;
+                ::close(s);
+                log::info("[Backend] Sent toggle to running launcher via socket at {}", sock_path);
+                signaled = true;
+                break;
+            }
+            ::close(s);
+        }
+
+        // 2. Assert keyboard focus to the launcher layer-surface AFTER sending IPC toggle
+        for (const auto* w : m_layer_surfaces) {
+            if (w && w->layer_surface) {
+                const char* ns = w->layer_surface->wl_namespace;
+                if (ns && (strcmp(ns, "launcher") == 0 || strcmp(ns, "tinexus-launcher") == 0)) {
+                    if (w->scene_layer && w->scene_layer->tree) {
+                        wlr_scene_node_raise_to_top(&w->scene_layer->tree->node);
+                    }
+                    if (w->layer_surface->surface) {
+                        log::info("[Backend] Asserting keyboard focus to launcher surface={}",
+                                  static_cast<void*>(w->layer_surface->surface));
+                        FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
+                    }
+                    return true;
                 }
             }
-            int32_t target_width = output_box.width;
-            int32_t target_height = output_box.height - 48; // Exclude top panel
-            log::info("[Window] Maximize window to {}x{}", target_width, target_height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 48);
+        }
+
+        if (signaled) {
+            return true;
+        }
+
+        // 3. Check toplevels
+        for (const auto& w : m_toplevels) {
+            if (w && w->toplevel && w->toplevel->app_id) {
+                std::string aid(w->toplevel->app_id);
+                if (aid == "tinexus-launcher" || aid == "launcher" || aid == tinexus::common::dbus::service::Launcher) {
+                    log::info("[Backend] Closing existing launcher instance via XDG close");
+                    wlr_xdg_toplevel_send_close(w->toplevel);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void warp_cursor(double x, double y) override {
+        if (m_cursor) {
+            wlr_cursor_warp(m_cursor, nullptr, x, y);
+            process_cursor_motion(0);
+            log::info("[Cursor] Warped cursor to ({}, {})", x, y);
+        }
+    }
+
+    void simulate_click(uint32_t button, uint32_t state) override {
+        if (m_cursor) {
+            struct wlr_pointer_button_event ev{};
+            ev.time_msec = 0;
+            ev.button = button;
+            ev.state = static_cast<enum wl_pointer_button_state>(state);
+            handle_cursor_button(&m_cursor_button_listener, &ev);
+        }
+    }
+
+    bool dump_screenshot(const std::string& path) override {
+        if (m_outputs.empty()) {
+            log::error("[Backend] No outputs available for screenshot");
+            return false;
+        }
+        auto* out = m_outputs.front()->get_wlr_output();
+        if (!out) {
+            log::error("[Backend] Output pointer is null");
+            return false;
+        }
+
+        struct wlr_scene_output* scene_output = wlr_scene_get_scene_output(m_scene, out);
+        if (!scene_output) {
+            log::error("[Backend] Scene output pointer is null");
+            return false;
+        }
+
+        struct wlr_output_state state;
+        wlr_output_state_init(&state);
+        if (!wlr_scene_output_build_state(scene_output, &state, nullptr)) {
+            log::error("[Backend] Failed to build scene output state");
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        if (!state.buffer) {
+            log::error("[Backend] Output state buffer is null after build_state");
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        int w = out->width;
+        int h = out->height;
+        const uint8_t* raw_pixels = nullptr;
+        size_t stride_bytes = 0;
+        bool need_end_access = false;
+
+        if (m_wlr_renderer && wlr_renderer_is_pixman(m_wlr_renderer)) {
+            pixman_image_t* img = wlr_pixman_renderer_get_buffer_image(m_wlr_renderer, state.buffer);
+            if (img) {
+                raw_pixels = reinterpret_cast<const uint8_t*>(pixman_image_get_data(img));
+                w = pixman_image_get_width(img);
+                h = pixman_image_get_height(img);
+                stride_bytes = static_cast<size_t>(pixman_image_get_stride(img));
+                log::info("[Backend] Captured screenshot via pixman image: {}x{}, stride={}", w, h, stride_bytes);
+            }
+        }
+
+        if (!raw_pixels) {
+            void* data = nullptr;
+            uint32_t fmt = 0;
+            size_t s = 0;
+            if (wlr_buffer_begin_data_ptr_access(state.buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &fmt, &s)) {
+                raw_pixels = static_cast<const uint8_t*>(data);
+                stride_bytes = s;
+                w = state.buffer->width;
+                h = state.buffer->height;
+                need_end_access = true;
+                log::info("[Backend] Captured screenshot via data ptr: {}x{}, stride={}", w, h, stride_bytes);
+            }
+        }
+
+        if (!raw_pixels) {
+            log::error("[Backend] Failed to obtain raw pixel pointer for screenshot");
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        std::ofstream ppm(path, std::ios::binary);
+        if (!ppm.is_open()) {
+            log::error("[Backend] Failed to open '{}' for writing screenshot", path);
+            if (need_end_access) wlr_buffer_end_data_ptr_access(state.buffer);
+            wlr_output_state_finish(&state);
+            return false;
+        }
+
+        ppm << "P6\n" << w << " " << h << "\n255\n";
+        for (int y = 0; y < h; ++y) {
+            const uint32_t* row = reinterpret_cast<const uint32_t*>(raw_pixels + (y * stride_bytes));
+            for (int x = 0; x < w; ++x) {
+                uint32_t px = row[x];
+                uint8_t r = static_cast<uint8_t>((px >> 16) & 0xFF);
+                uint8_t g = static_cast<uint8_t>((px >> 8) & 0xFF);
+                uint8_t b = static_cast<uint8_t>(px & 0xFF);
+                ppm.put(static_cast<char>(r));
+                ppm.put(static_cast<char>(g));
+                ppm.put(static_cast<char>(b));
+            }
+        }
+        ppm.close();
+
+        if (need_end_access) {
+            wlr_buffer_end_data_ptr_access(state.buffer);
+        }
+
+        wlr_output_commit_state(out, &state);
+        wlr_output_state_finish(&state);
+
+        log::info("[Backend] Successfully saved screenshot to '{}' ({}x{})", path, w, h);
+        return true;
+    }
+
+    using OutputWorkAreaInfo = WorkArea;
+
+    struct wlr_output* get_output_for_toplevel(ToplevelWrapper* wrapper) const {
+        if (!m_output_layout) return nullptr;
+
+        int32_t wx = wrapper->scene_tree ? wrapper->scene_tree->node.x : 0;
+        int32_t wy = wrapper->scene_tree ? wrapper->scene_tree->node.y : 0;
+        int32_t ww = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->current.geometry.width : 0;
+        int32_t wh = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->current.geometry.height : 0;
+        if (ww <= 0) ww = 800;
+        if (wh <= 0) wh = 600;
+
+        double cx = wx + (ww / 2.0);
+        double cy = wy + (wh / 2.0);
+
+        struct wlr_output* out = wlr_output_layout_output_at(m_output_layout, cx, cy);
+        if (!out) {
+            out = wlr_output_layout_get_center_output(m_output_layout);
+        }
+        if (!out && !m_outputs.empty()) {
+            out = m_outputs.front()->get_wlr_output();
+        }
+        return out;
+    }
+
+    OutputGeometry get_output_geometry(struct wlr_output* out) const {
+        OutputGeometry geom{};
+        if (!out || !m_output_layout) return geom;
+
+        geom.output = out;
+        if (out->name) {
+            geom.connector = out->name;
+        }
+
+        struct wlr_box out_box{0, 0, 0, 0};
+        wlr_output_layout_get_box(m_output_layout, out, &out_box);
+        geom.global_x = out_box.x;
+        geom.global_y = out_box.y;
+
+        int32_t eff_w = 0, eff_h = 0;
+        wlr_output_effective_resolution(out, &eff_w, &eff_h);
+        if (eff_w <= 0) eff_w = out_box.width;
+        if (eff_h <= 0) eff_h = out_box.height;
+
+        geom.logical_width = eff_w;
+        geom.logical_height = eff_h;
+        geom.scale = out->scale > 0.0 ? out->scale : 1.0;
+        geom.refresh_mhz = out->refresh > 0 ? static_cast<uint32_t>(out->refresh) : 60000;
+
+        int32_t top_margin = 0;
+        int32_t bottom_margin = 0;
+        int32_t left_margin = 0;
+        int32_t right_margin = 0;
+
+        for (const auto* layer : m_layer_surfaces) {
+            if (!layer || !layer->layer_surface) continue;
+
+            // STRICT Multi-monitor isolation:
+            // A layer surface exclusively belongs to its assigned output.
+            struct wlr_output* layer_out = resolve_output_for_layer_surface(layer->layer_surface);
+            if (layer_out != out) {
+                continue; // Do not apply reservations across displays!
+            }
+
+            if (!layer->layer_surface->surface || !layer->layer_surface->surface->mapped) {
+                continue;
+            }
+
+            int32_t zone = layer->layer_surface->current.exclusive_zone;
+            if (zone <= 0) {
+                continue; // Non-exclusive surface
+            }
+
+            uint32_t anchor = layer->layer_surface->current.anchor;
+            const auto& margins = layer->layer_surface->current.margin;
+
+            const bool has_top = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) != 0;
+            const bool has_bottom = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) != 0;
+            const bool has_left = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) != 0;
+            const bool has_right = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
+
+            // Fullscreen layer surfaces spanning all 4 edges do not reserve edge margins
+            if (has_top && has_bottom && has_left && has_right) {
+                continue;
+            }
+
+            // Proper geometry-aware edge exclusive reservations
+            if (has_top && !has_bottom) {
+                top_margin = std::max(top_margin, zone + margins.top);
+            } else if (has_bottom && !has_top) {
+                bottom_margin = std::max(bottom_margin, zone + margins.bottom);
+            } else if (has_left && !has_right) {
+                left_margin = std::max(left_margin, zone + margins.left);
+            } else if (has_right && !has_left) {
+                right_margin = std::max(right_margin, zone + margins.right);
+            }
+        }
+        // Note: bottom_margin is dynamically dictated by active layer-shell surfaces (e.g. tinexus-dock).
+
+        geom.work_x = geom.global_x + left_margin;
+        geom.work_y = geom.global_y + top_margin;
+        geom.work_width = std::max(0, geom.logical_width - left_margin - right_margin);
+        geom.work_height = std::max(0, geom.logical_height - top_margin - bottom_margin);
+        geom.sync_compat();
+
+        return geom;
+    }
+
+    WorkArea get_output_work_area(struct wlr_output* out) const {
+        return get_output_geometry(out).work_area();
+    }
+
+    void elevate_window_node(struct wlr_scene_tree* scene_tree) {
+        if (!scene_tree || !m_scene_tree_fullscreen) return;
+        wlr_scene_node_reparent(&scene_tree->node, m_scene_tree_fullscreen);
+        wlr_scene_node_raise_to_top(&scene_tree->node);
+        log::info("[FullscreenDebug] elevate_window_node: node={}, parent={}, m_scene_tree_fullscreen={}",
+                  static_cast<void*>(&scene_tree->node),
+                  static_cast<void*>(scene_tree->node.parent),
+                  static_cast<void*>(m_scene_tree_fullscreen));
+    }
+
+    void restore_window_node(struct wlr_scene_tree* scene_tree, uint32_t workspace_id) {
+        if (!scene_tree) return;
+        struct wlr_scene_tree* ws_tree = WorkspaceManager::instance().get_workspace_scene_tree(workspace_id);
+        if (!ws_tree) ws_tree = m_scene_tree_normal;
+        if (ws_tree) {
+            wlr_scene_node_reparent(&scene_tree->node, ws_tree);
+        }
+    }
+
+    void recalculate_output_work_area(struct wlr_output* out) {
+        if (!out) return;
+        WorkArea wa = get_output_work_area(out);
+        if (wa.width <= 0 || wa.height <= 0) return;
+        log::info("[Output] Recalculating work area for output '{}': {}x{} at ({}, {})",
+                  out->name ? out->name : "unknown", wa.width, wa.height, wa.x, wa.y);
+
+        for (auto& top : m_toplevels) {
+            if (!top || !top->toplevel || !top->scene_tree) continue;
+            if (top->is_maximized && !top->is_fullscreen) {
+                struct wlr_output* top_out = get_output_for_toplevel(top.get());
+                if (top_out == out) {
+                    wlr_scene_node_set_position(&top->scene_tree->node, wa.x, wa.y);
+                    wlr_xdg_toplevel_set_size(top->toplevel, wa.width, wa.height);
+                    wlr_xdg_surface_schedule_configure(top->toplevel->base);
+                    top->state_machine.update_work_area(wa);
+                }
+            }
+        }
+
+        for (auto& xwrap : m_xwayland_surfaces) {
+            if (!xwrap || !xwrap->xsurface || !xwrap->scene_tree) continue;
+            if (xwrap->is_maximized && !xwrap->is_fullscreen) {
+                struct wlr_output* x_out = get_output_for_xwayland(xwrap.get());
+                if (!x_out && !m_outputs.empty()) x_out = m_outputs.front()->get_wlr_output();
+                if (x_out == out) {
+                    wlr_scene_node_set_position(&xwrap->scene_tree->node, wa.x, wa.y);
+                    wlr_xwayland_surface_configure(xwrap->xsurface, wa.x, wa.y, wa.width, wa.height);
+                    if (xwrap->frame) {
+                        xwrap->frame->update_geometry(wa.width, wa.height);
+                    }
+                    xwrap->state_machine.update_work_area(wa);
+                }
+            }
+        }
+    }
+
+    void setup_foreign_toplevel_for_native(ToplevelWrapper* wrapper) {
+        if (!wrapper || !m_foreign_toplevel_mgr || wrapper->foreign_handle) return;
+        wrapper->foreign_handle = wlr_foreign_toplevel_handle_v1_create(m_foreign_toplevel_mgr);
+        if (!wrapper->foreign_handle) return;
+
+        if (wrapper->toplevel->title) {
+            wlr_foreign_toplevel_handle_v1_set_title(wrapper->foreign_handle, wrapper->toplevel->title);
+        }
+        if (wrapper->toplevel->app_id) {
+            wlr_foreign_toplevel_handle_v1_set_app_id(wrapper->foreign_handle, wrapper->toplevel->app_id);
+        }
+
+        struct wlr_output* out = get_output_for_toplevel(wrapper);
+        if (out) {
+            wlr_foreign_toplevel_handle_v1_output_enter(wrapper->foreign_handle, out);
+        }
+
+        wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, wrapper->is_maximized);
+        wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, wrapper->is_fullscreen);
+        wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle,
+            wrapper->state_machine.state() == WindowState::Minimized);
+        wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, m_active_toplevel == wrapper);
+
+        wrapper->foreign_request_maximize.notify = [](struct wl_listener* l, void* data) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_maximize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_maximized_event*>(data);
+            if (w && w->backend) w->backend->toplevel_set_maximized(w, ev ? ev->maximized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_maximize, &wrapper->foreign_request_maximize);
+
+        wrapper->foreign_request_minimize.notify = [](struct wl_listener* l, void* data) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_minimize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_minimized_event*>(data);
+            if (w && w->backend) w->backend->toplevel_set_minimized(w, ev ? ev->minimized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_minimize, &wrapper->foreign_request_minimize);
+
+        wrapper->foreign_request_activate.notify = [](struct wl_listener* l, void* /*data*/) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_activate);
+            if (w && w->backend) w->backend->focus_toplevel(w);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_activate, &wrapper->foreign_request_activate);
+
+        wrapper->foreign_request_fullscreen.notify = [](struct wl_listener* l, void* data) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_fullscreen);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_fullscreen_event*>(data);
+            if (w && w->backend) w->backend->toplevel_set_fullscreen(w, ev ? ev->fullscreen : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_fullscreen, &wrapper->foreign_request_fullscreen);
+
+        wrapper->foreign_request_close.notify = [](struct wl_listener* l, void* /*data*/) {
+            ToplevelWrapper* w = wl_container_of(l, w, foreign_request_close);
+            if (w && w->toplevel) wlr_xdg_toplevel_send_close(w->toplevel);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_close, &wrapper->foreign_request_close);
+    }
+
+    void setup_foreign_toplevel_for_xwayland(XwaylandWrapper* wrapper) {
+        if (!wrapper || !m_foreign_toplevel_mgr || wrapper->foreign_handle) return;
+        wrapper->foreign_handle = wlr_foreign_toplevel_handle_v1_create(m_foreign_toplevel_mgr);
+        if (!wrapper->foreign_handle) return;
+
+        if (wrapper->xsurface->title) {
+            wlr_foreign_toplevel_handle_v1_set_title(wrapper->foreign_handle, wrapper->xsurface->title);
+        }
+        if (wrapper->xsurface->c_class) {
+            wlr_foreign_toplevel_handle_v1_set_app_id(wrapper->foreign_handle, wrapper->xsurface->c_class);
+        }
+
+        struct wlr_output* out = get_output_for_xwayland(wrapper);
+        if (!out && !m_outputs.empty()) out = m_outputs.front()->get_wlr_output();
+        if (out) {
+            wlr_foreign_toplevel_handle_v1_output_enter(wrapper->foreign_handle, out);
+        }
+
+        wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, wrapper->is_maximized);
+        wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, wrapper->is_fullscreen);
+        wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle,
+            wrapper->state_machine.state() == WindowState::Minimized);
+        wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, m_active_xwayland == wrapper);
+
+        wrapper->foreign_request_maximize.notify = [](struct wl_listener* l, void* data) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_maximize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_maximized_event*>(data);
+            if (w && w->backend) w->backend->xwayland_set_maximized(w, ev ? ev->maximized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_maximize, &wrapper->foreign_request_maximize);
+
+        wrapper->foreign_request_minimize.notify = [](struct wl_listener* l, void* data) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_minimize);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_minimized_event*>(data);
+            if (w && w->backend) w->backend->xwayland_set_minimized(w, ev ? ev->minimized : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_minimize, &wrapper->foreign_request_minimize);
+
+        wrapper->foreign_request_activate.notify = [](struct wl_listener* l, void* /*data*/) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_activate);
+            if (w && w->backend) w->backend->focus_xwayland(w);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_activate, &wrapper->foreign_request_activate);
+
+        wrapper->foreign_request_fullscreen.notify = [](struct wl_listener* l, void* data) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_fullscreen);
+            auto* ev = static_cast<struct wlr_foreign_toplevel_handle_v1_fullscreen_event*>(data);
+            if (w && w->backend) w->backend->xwayland_set_fullscreen(w, ev ? ev->fullscreen : true);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_fullscreen, &wrapper->foreign_request_fullscreen);
+
+        wrapper->foreign_request_close.notify = [](struct wl_listener* l, void* /*data*/) {
+            XwaylandWrapper* w = wl_container_of(l, w, foreign_request_close);
+            if (w && w->xsurface) wlr_xwayland_surface_close(w->xsurface);
+        };
+        wl_signal_add(&wrapper->foreign_handle->events.request_close, &wrapper->foreign_request_close);
+    }
+
+    void cleanup_foreign_toplevel_native(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->foreign_handle) return;
+        if (wrapper->foreign_request_maximize.link.next) { wl_list_remove(&wrapper->foreign_request_maximize.link); wrapper->foreign_request_maximize.link.next = nullptr; }
+        if (wrapper->foreign_request_minimize.link.next) { wl_list_remove(&wrapper->foreign_request_minimize.link); wrapper->foreign_request_minimize.link.next = nullptr; }
+        if (wrapper->foreign_request_activate.link.next) { wl_list_remove(&wrapper->foreign_request_activate.link); wrapper->foreign_request_activate.link.next = nullptr; }
+        if (wrapper->foreign_request_fullscreen.link.next) { wl_list_remove(&wrapper->foreign_request_fullscreen.link); wrapper->foreign_request_fullscreen.link.next = nullptr; }
+        if (wrapper->foreign_request_close.link.next) { wl_list_remove(&wrapper->foreign_request_close.link); wrapper->foreign_request_close.link.next = nullptr; }
+        wlr_foreign_toplevel_handle_v1_destroy(wrapper->foreign_handle);
+        wrapper->foreign_handle = nullptr;
+    }
+
+    void cleanup_foreign_toplevel_xwayland(XwaylandWrapper* wrapper) {
+        if (!wrapper || !wrapper->foreign_handle) return;
+        if (wrapper->foreign_request_maximize.link.next) { wl_list_remove(&wrapper->foreign_request_maximize.link); wrapper->foreign_request_maximize.link.next = nullptr; }
+        if (wrapper->foreign_request_minimize.link.next) { wl_list_remove(&wrapper->foreign_request_minimize.link); wrapper->foreign_request_minimize.link.next = nullptr; }
+        if (wrapper->foreign_request_activate.link.next) { wl_list_remove(&wrapper->foreign_request_activate.link); wrapper->foreign_request_activate.link.next = nullptr; }
+        if (wrapper->foreign_request_fullscreen.link.next) { wl_list_remove(&wrapper->foreign_request_fullscreen.link); wrapper->foreign_request_fullscreen.link.next = nullptr; }
+        if (wrapper->foreign_request_close.link.next) { wl_list_remove(&wrapper->foreign_request_close.link); wrapper->foreign_request_close.link.next = nullptr; }
+        wlr_foreign_toplevel_handle_v1_destroy(wrapper->foreign_handle);
+        wrapper->foreign_handle = nullptr;
+    }
+
+    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->initialized || !wrapper->scene_tree) return;
+
+        if (maximize) {
+            if (wrapper->state_machine.state() == WindowState::Maximized) {
+                wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+                return;
+            }
+
+            struct wlr_output* out = get_output_for_toplevel(wrapper);
+            if (!out) {
+                log::warn("[Window] Cannot maximize window: no active output found");
+                return;
+            }
+
+            WorkArea work_area = get_output_work_area(out);
+            if (work_area.width <= 0 || work_area.height <= 0) {
+                log::warn("[Window] Invalid output work area for maximize");
+                return;
+            }
+
+            // Sync current scene position to floating geometry before maximize
+            if (wrapper->state_machine.state() == WindowState::Normal &&
+                wrapper->state_machine.snap_mode() == SnapMode::None) {
+                int32_t cur_w = wrapper->toplevel->base->current.geometry.width;
+                int32_t cur_h = wrapper->toplevel->base->current.geometry.height;
+                if (cur_w <= 0) cur_w = 800;
+                if (cur_h <= 0) cur_h = 600;
+                wrapper->state_machine.update_floating_geometry(
+                    wrapper->scene_tree->node.x,
+                    wrapper->scene_tree->node.y,
+                    cur_w,
+                    cur_h
+                );
+            }
+
+            WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                                wrapper->toplevel->base->current.geometry.width,
+                                wrapper->toplevel->base->current.geometry.height};
+            if (start_box.width <= 0) start_box.width = 800;
+            if (start_box.height <= 0) start_box.height = 600;
+
+            wrapper->state_machine.set_assigned_output(out);
+            wrapper->state_machine.request_maximize(work_area);
+            wrapper->is_maximized = true;
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, true);
+            }
+
+            // Update legacy saved fields for backward compatibility
+            wrapper->saved_x = wrapper->state_machine.geometry().normal_geom.x;
+            wrapper->saved_y = wrapper->state_machine.geometry().normal_geom.y;
+            wrapper->saved_width = wrapper->state_machine.geometry().normal_geom.width;
+            wrapper->saved_height = wrapper->state_machine.geometry().normal_geom.height;
+
+            log::info("[Window] Maximize window to {}x{} at ({}, {}) on output '{}'",
+                      work_area.width, work_area.height, work_area.x, work_area.y, out->name ? out->name : "unknown");
+
+            wlr_xdg_toplevel_set_tiled(wrapper->toplevel, WLR_EDGE_NONE);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, true);
-            wlr_xdg_toplevel_set_size(wrapper->toplevel, target_width, target_height);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, work_area.width, work_area.height);
+
+            WindowBox target_box{work_area.x, work_area.y, work_area.width, work_area.height};
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Maximize,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.160,
+                .start_geom = start_box,
+                .target_geom = target_box,
+                .start_opacity = 1.0,
+                .target_opacity = 1.0,
+                .start_scale = 1.0,
+                .target_scale = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                    }
+                },
+                .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                    }
+                }
+            });
         } else {
-            log::info("[Window] Restore maximized window to {}x{}", wrapper->saved_width, wrapper->saved_height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->saved_x, wrapper->saved_y);
+            if (wrapper->state_machine.state() != WindowState::Maximized) {
+                wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+                return;
+            }
+
+            WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                                wrapper->toplevel->base->current.geometry.width,
+                                wrapper->toplevel->base->current.geometry.height};
+            if (start_box.width <= 0) start_box.width = 800;
+            if (start_box.height <= 0) start_box.height = 600;
+
+            wrapper->state_machine.request_restore();
+            wrapper->is_maximized = false;
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, false);
+            }
+
+            auto norm = wrapper->state_machine.geometry().normal_geom;
+            if (norm.width <= 0) norm.width = wrapper->saved_width > 0 ? wrapper->saved_width : 800;
+            if (norm.height <= 0) norm.height = wrapper->saved_height > 0 ? wrapper->saved_height : 600;
+            if (norm.x <= 0 && norm.y <= 0) {
+                norm.x = wrapper->saved_x > 0 ? wrapper->saved_x : 50;
+                norm.y = wrapper->saved_y > 0 ? wrapper->saved_y : 100;
+            }
+            log::info("[Window] Restore maximized window to {}x{} at ({}, {})",
+                      norm.width, norm.height, norm.x, norm.y);
+
+            wlr_xdg_toplevel_set_tiled(wrapper->toplevel, WLR_EDGE_NONE);
             wlr_xdg_toplevel_set_maximized(wrapper->toplevel, false);
-            wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
+            wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
+
+            WindowBox target_box = norm;
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Unmaximize,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.160,
+                .start_geom = start_box,
+                .target_geom = target_box,
+                .start_opacity = 1.0,
+                .target_opacity = 1.0,
+                .start_scale = 1.0,
+                .target_scale = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                    }
+                },
+                .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                    }
+                }
+            });
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
-    static void set_buffer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
-        double opacity = *static_cast<double*>(user_data);
-        wlr_scene_buffer_set_opacity(buffer, opacity);
+    void xwayland_set_maximized(XwaylandWrapper* wrapper, bool maximize) {
+        if (!wrapper || !wrapper->xsurface) return;
+        if (maximize) {
+            if (wrapper->is_maximized) return;
+            struct wlr_output* out = get_output_for_xwayland(wrapper);
+            if (!out && !m_outputs.empty()) {
+                out = m_outputs.front()->get_wlr_output();
+            }
+            if (out) {
+                WorkArea wa = get_output_work_area(out);
+                if (wa.width > 0 && wa.height > 0) {
+                    if (wrapper->scene_tree) {
+                        wrapper->saved_x = wrapper->scene_tree->node.x;
+                        wrapper->saved_y = wrapper->scene_tree->node.y;
+                    }
+                    wrapper->saved_width = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
+                    wrapper->saved_height = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
+                    wrapper->is_maximized = true;
+                    if (wrapper->foreign_handle) {
+                        wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, true);
+                    }
+
+                    wlr_xwayland_surface_set_maximized(wrapper->xsurface, true, true);
+                    wlr_xwayland_surface_configure(wrapper->xsurface, wa.x, wa.y, wa.width, wa.height);
+                    if (wrapper->scene_tree) {
+                        wlr_scene_node_set_position(&wrapper->scene_tree->node, wa.x, wa.y);
+                    }
+                    if (wrapper->frame) {
+                        wrapper->frame->update_geometry(wa.width, wa.height);
+                    }
+                    log::info("[XWayland] Maximized window to {}x{} at ({}, {})", wa.width, wa.height, wa.x, wa.y);
+                }
+            }
+        } else {
+            if (!wrapper->is_maximized) return;
+            wrapper->is_maximized = false;
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_maximized(wrapper->foreign_handle, false);
+            }
+            wlr_xwayland_surface_set_maximized(wrapper->xsurface, false, false);
+            int32_t rx = wrapper->saved_x > 0 ? wrapper->saved_x : 50;
+            int32_t ry = wrapper->saved_y > 0 ? wrapper->saved_y : 100;
+            int32_t rw = wrapper->saved_width > 0 ? wrapper->saved_width : 800;
+            int32_t rh = wrapper->saved_height > 0 ? wrapper->saved_height : 600;
+            wlr_xwayland_surface_configure(wrapper->xsurface, rx, ry, rw, rh);
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, rx, ry);
+            }
+            if (wrapper->frame) {
+                wrapper->frame->update_geometry(rw, rh);
+            }
+            log::info("[XWayland] Restored window to {}x{} at ({}, {})", rw, rh, rx, ry);
+        }
     }
 
-    static int handle_fade_out(void* data) {
-        auto* wrapper = static_cast<ToplevelWrapper*>(data);
-        if (!wrapper->is_closing) return 0;
-        
-        wrapper->opacity -= 0.15; // 100ms total roughly
-        if (wrapper->opacity <= 0.0) {
+    void xwayland_set_fullscreen(XwaylandWrapper* wrapper, bool fullscreen) {
+        log::info("[FullscreenDebug] xwayland_set_fullscreen() called: wrapper={}, class='{}', requested_fullscreen={}, is_fullscreen={}",
+                  static_cast<void*>(wrapper),
+                  (wrapper && wrapper->xsurface && wrapper->xsurface->c_class) ? wrapper->xsurface->c_class : "unknown",
+                  fullscreen,
+                  wrapper ? wrapper->is_fullscreen : false);
+        if (!wrapper || !wrapper->xsurface || !wrapper->scene_tree) return;
+        if (wrapper->is_fullscreen == fullscreen) {
+            if (fullscreen && wrapper->scene_tree && wrapper->scene_tree->node.parent != m_scene_tree_fullscreen) {
+                elevate_window_node(wrapper->scene_tree);
+            }
+            return;
+        }
+        wrapper->is_fullscreen = fullscreen;
+
+        if (fullscreen) {
+            if (!wrapper->is_maximized) {
+                wrapper->saved_x = wrapper->scene_tree->node.x;
+                wrapper->saved_y = wrapper->scene_tree->node.y;
+                wrapper->saved_width = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
+                wrapper->saved_height = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
+                wrapper->state_machine.update_floating_geometry(wrapper->saved_x, wrapper->saved_y,
+                                                               wrapper->saved_width, wrapper->saved_height);
+            }
+            struct wlr_output* out = get_output_for_xwayland(wrapper);
+            if (!out && !m_outputs.empty()) out = m_outputs.front()->get_wlr_output();
+            if (!out) return;
+            OutputGeometry out_geom = get_output_geometry(out);
+            WindowBox output_box = out_geom.full_box();
+            wrapper->state_machine.request_fullscreen(output_box);
+            elevate_window_node(wrapper->scene_tree);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, output_box.x, output_box.y);
+            wlr_xwayland_surface_configure(wrapper->xsurface, output_box.x, output_box.y, output_box.width, output_box.height);
+            wlr_xwayland_surface_set_fullscreen(wrapper->xsurface, true);
+            if (wrapper->frame) {
+                wrapper->frame->set_fullscreen(true);
+            }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, true);
+            }
+            log::info("[XWayland] Fullscreen window to {}x{} at ({}, {})", output_box.width, output_box.height, output_box.x, output_box.y);
+        } else {
+            restore_window_node(wrapper->scene_tree, wrapper->workspace_id);
+            if (wrapper->is_maximized) {
+                wrapper->is_maximized = false;
+                xwayland_set_maximized(wrapper, true);
+            } else {
+                wrapper->state_machine.request_restore();
+                int32_t rx = wrapper->saved_x > 0 ? wrapper->saved_x : 50;
+                int32_t ry = wrapper->saved_y > 0 ? wrapper->saved_y : 100;
+                int32_t rw = wrapper->saved_width > 0 ? wrapper->saved_width : 800;
+                int32_t rh = wrapper->saved_height > 0 ? wrapper->saved_height : 600;
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, rx, ry);
+                wlr_xwayland_surface_configure(wrapper->xsurface, rx, ry, rw, rh);
+                wlr_xwayland_surface_set_fullscreen(wrapper->xsurface, false);
+                if (wrapper->frame) {
+                    wrapper->frame->set_fullscreen(false);
+                    wrapper->frame->update_geometry(rw, rh);
+                }
+                log::info("[XWayland] Restored fullscreen window to {}x{} at ({}, {})", rw, rh, rx, ry);
+            }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, false);
+            }
+        }
+    }
+
+    void xwayland_set_snap(XwaylandWrapper* wrapper, SnapMode mode) {
+        if (!wrapper || !wrapper->xsurface || !wrapper->scene_tree) return;
+        if (mode == SnapMode::None) {
+            return;
+        }
+        if (mode == SnapMode::Top) {
+            xwayland_set_maximized(wrapper, true);
+            return;
+        }
+
+        struct wlr_output* out = get_output_for_xwayland(wrapper);
+        if (!out && !m_outputs.empty()) {
+            out = m_outputs.front()->get_wlr_output();
+        }
+        if (!out) return;
+        WorkArea work_area = get_output_work_area(out);
+        if (work_area.width <= 0 || work_area.height <= 0) return;
+
+        if (wrapper->state_machine.state() == WindowState::Normal &&
+            wrapper->state_machine.snap_mode() == SnapMode::None) {
+            int32_t cur_w = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
+            int32_t cur_h = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
+            wrapper->saved_x = wrapper->scene_tree->node.x;
+            wrapper->saved_y = wrapper->scene_tree->node.y;
+            wrapper->saved_width = cur_w;
+            wrapper->saved_height = cur_h;
+            wrapper->state_machine.update_floating_geometry(
+                wrapper->saved_x,
+                wrapper->saved_y,
+                cur_w,
+                cur_h
+            );
+        }
+
+        wrapper->state_machine.set_assigned_output(out);
+        wrapper->state_machine.request_snap(mode, work_area);
+
+        WindowBox snap_box = wrapper->state_machine.geometry().snap_geom;
+        log::info("[XWayland] Snap window (mode={}) to {}x{} at ({}, {}) on output '{}'",
+                  static_cast<int>(mode), snap_box.width, snap_box.height, snap_box.x, snap_box.y,
+                  out->name ? out->name : "unknown");
+
+        wlr_xwayland_surface_configure(wrapper->xsurface, snap_box.x, snap_box.y, snap_box.width, snap_box.height);
+        wlr_scene_node_set_position(&wrapper->scene_tree->node, snap_box.x, snap_box.y);
+        if (wrapper->frame) {
+            wrapper->frame->update_geometry(snap_box.width, snap_box.height);
+        }
+    }
+
+    void toplevel_set_snap(ToplevelWrapper* wrapper, SnapMode mode) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->scene_tree) return;
+        if (mode == SnapMode::None) {
+            toplevel_restore_snap(wrapper);
+            return;
+        }
+        if (mode == SnapMode::Top) {
+            toplevel_set_maximized(wrapper, true);
+            return;
+        }
+
+        struct wlr_output* out = get_output_for_toplevel(wrapper);
+        if (!out) return;
+        WorkArea work_area = get_output_work_area(out);
+        if (work_area.width <= 0 || work_area.height <= 0) return;
+
+        if (wrapper->state_machine.state() == WindowState::Normal &&
+            wrapper->state_machine.snap_mode() == SnapMode::None) {
+            int32_t cur_w = wrapper->toplevel->base->current.geometry.width;
+            int32_t cur_h = wrapper->toplevel->base->current.geometry.height;
+            if (cur_w <= 0) cur_w = 800;
+            if (cur_h <= 0) cur_h = 600;
+            wrapper->state_machine.update_floating_geometry(
+                wrapper->scene_tree->node.x,
+                wrapper->scene_tree->node.y,
+                cur_w,
+                cur_h
+            );
+        }
+
+        WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                            wrapper->toplevel->base->current.geometry.width,
+                            wrapper->toplevel->base->current.geometry.height};
+        if (start_box.width <= 0) start_box.width = 800;
+        if (start_box.height <= 0) start_box.height = 600;
+
+        wrapper->state_machine.set_assigned_output(out);
+        wrapper->state_machine.request_snap(mode, work_area);
+
+        WindowBox snap_box = wrapper->state_machine.geometry().snap_geom;
+        log::info("[Window] Snap window (mode={}) to {}x{} at ({}, {}) on output '{}'",
+                  static_cast<int>(mode), snap_box.width, snap_box.height, snap_box.x, snap_box.y,
+                  out->name ? out->name : "unknown");
+
+        uint32_t tiled_edges = WLR_EDGE_NONE;
+        switch (mode) {
+            case SnapMode::Left:
+                tiled_edges = WLR_EDGE_LEFT | WLR_EDGE_TOP | WLR_EDGE_BOTTOM;
+                break;
+            case SnapMode::Right:
+                tiled_edges = WLR_EDGE_RIGHT | WLR_EDGE_TOP | WLR_EDGE_BOTTOM;
+                break;
+            case SnapMode::TopLeft:
+                tiled_edges = WLR_EDGE_LEFT | WLR_EDGE_TOP;
+                break;
+            case SnapMode::TopRight:
+                tiled_edges = WLR_EDGE_RIGHT | WLR_EDGE_TOP;
+                break;
+            case SnapMode::BottomLeft:
+                tiled_edges = WLR_EDGE_LEFT | WLR_EDGE_BOTTOM;
+                break;
+            case SnapMode::BottomRight:
+                tiled_edges = WLR_EDGE_RIGHT | WLR_EDGE_BOTTOM;
+                break;
+            default:
+                break;
+        }
+
+        wlr_xdg_toplevel_set_maximized(wrapper->toplevel, false);
+        wlr_xdg_toplevel_set_tiled(wrapper->toplevel, tiled_edges);
+        wlr_xdg_toplevel_set_size(wrapper->toplevel, snap_box.width, snap_box.height);
+
+        WindowBox target_box = snap_box;
+        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+        AnimationManager::instance().start_animation({
+            .window_id = anim_id,
+            .target_handle = wrapper,
+            .type = WindowAnimationType::Snap,
+            .curve = AnimationCurve::EaseDecelerate,
+            .duration_sec = 0.150,
+            .start_geom = start_box,
+            .target_geom = target_box,
+            .start_opacity = 1.0,
+            .target_opacity = 1.0,
+            .start_scale = 1.0,
+            .target_scale = 1.0,
+            .on_step = [wrapper](const WindowAnimation& a) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                }
+            },
+            .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                }
+            }
+        });
+
+        wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+    }
+
+    void toplevel_restore_snap(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->scene_tree) return;
+        if (wrapper->state_machine.snap_mode() == SnapMode::None) return;
+
+        WindowBox start_box{wrapper->scene_tree->node.x, wrapper->scene_tree->node.y,
+                            wrapper->toplevel->base->current.geometry.width,
+                            wrapper->toplevel->base->current.geometry.height};
+        if (start_box.width <= 0) start_box.width = 800;
+        if (start_box.height <= 0) start_box.height = 600;
+
+        wrapper->state_machine.request_restore();
+        const auto& norm = wrapper->state_machine.geometry().normal_geom;
+        log::info("[Window] Restore snapped window to {}x{} at ({}, {})",
+                  norm.width, norm.height, norm.x, norm.y);
+
+        wlr_xdg_toplevel_set_tiled(wrapper->toplevel, WLR_EDGE_NONE);
+        wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
+
+        WindowBox target_box = norm;
+        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+        AnimationManager::instance().start_animation({
+            .window_id = anim_id,
+            .target_handle = wrapper,
+            .type = WindowAnimationType::Snap,
+            .curve = AnimationCurve::EaseDecelerate,
+            .duration_sec = 0.150,
+            .start_geom = start_box,
+            .target_geom = target_box,
+            .start_opacity = 1.0,
+            .target_opacity = 1.0,
+            .start_scale = 1.0,
+            .target_scale = 1.0,
+            .on_step = [wrapper](const WindowAnimation& a) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                }
+            },
+            .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                if (wrapper && wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                }
+            }
+        });
+
+        wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
+    }
+
+    void toplevel_set_minimized(ToplevelWrapper* wrapper, bool minimize) {
+        if (!wrapper || !wrapper->scene_tree) return;
+
+        if (minimize) {
+            if (wrapper->state_machine.state() == WindowState::Minimized) return;
+
+            if (wrapper->state_machine.state() == WindowState::Normal &&
+                wrapper->state_machine.snap_mode() == SnapMode::None) {
+                int32_t cur_w = wrapper->toplevel->base->current.geometry.width;
+                int32_t cur_h = wrapper->toplevel->base->current.geometry.height;
+                if (cur_w <= 0) cur_w = 800;
+                if (cur_h <= 0) cur_h = 600;
+                wrapper->state_machine.update_floating_geometry(
+                    wrapper->scene_tree->node.x,
+                    wrapper->scene_tree->node.y,
+                    cur_w,
+                    cur_h
+                );
+            }
+
+            wrapper->state_machine.request_minimize();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, true);
+            }
+            log::info("[Window] Minimized toplevel — animating minimize");
+
+            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ?
+                                     get_canonical_app_id(wrapper->toplevel->app_id) : "";
+            if (TinexusServer::instance()) TinexusServer::instance()->notify_window_minimized(app_id_str);
+
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Minimize,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.140,
+                .start_opacity = 1.0,
+                .target_opacity = 0.0,
+                .start_scale = 1.0,
+                .target_scale = 0.85,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+                        wrapper->opacity = 1.0;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            });
+
+            if (m_active_toplevel == wrapper) {
+                m_active_toplevel = nullptr;
+                ToplevelWrapper* next_focus = nullptr;
+                for (auto it = m_toplevels.rbegin(); it != m_toplevels.rend(); ++it) {
+                    if (it->get() != wrapper && it->get()->state_machine.state() != WindowState::Minimized) {
+                        next_focus = it->get();
+                        break;
+                    }
+                }
+                focus_toplevel(next_focus);
+            }
+        } else {
+            if (wrapper->state_machine.state() != WindowState::Minimized) return;
+
+            wrapper->state_machine.request_restore();
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_minimized(wrapper->foreign_handle, false);
+            }
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+            log::info("[Window] Restored toplevel — animating restore");
+
+            std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ?
+                                     get_canonical_app_id(wrapper->toplevel->app_id) : "";
+            if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id_str);
+
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
             wrapper->opacity = 0.0;
             wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
-            wlr_xdg_toplevel_send_close(wrapper->toplevel);
-            
-            if (wrapper->fade_timer) {
-                wl_event_source_remove(wrapper->fade_timer);
-                wrapper->fade_timer = nullptr;
-            }
-            return 0;
+
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Restore,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.140,
+                .start_opacity = 0.0,
+                .target_opacity = 1.0,
+                .start_scale = 0.85,
+                .target_scale = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = 1.0;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            });
+
+            focus_toplevel(wrapper);
         }
-        
+    }
+
+    static void set_buffer_opacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data) {
+        double opacity = *static_cast<double*>(user_data);
+        wlr_scene_buffer_set_opacity(buffer, static_cast<float>(opacity));
+    }
+
+    static void apply_window_tree_opacity(ToplevelWrapper* wrapper, double opacity) {
+        if (!wrapper || !wrapper->scene_tree) return;
+        wrapper->opacity = opacity;
         wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
-        wl_event_source_timer_update(wrapper->fade_timer, 15);
-        return 0;
+        if (wrapper->backend) {
+            for (auto* p : wrapper->backend->m_popups) {
+                if (p && p->popup && p->scene_tree && wrapper->toplevel && wrapper->toplevel->base) {
+                    struct wlr_xdg_surface* root = wlr_xdg_surface_try_from_wlr_surface(p->popup->parent);
+                    if (root && root->surface == wrapper->toplevel->base->surface) {
+                        wlr_scene_node_for_each_buffer(&p->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            }
+        }
     }
 
     void close_active_window() noexcept override {
+        if (m_active_xwayland && !m_active_xwayland->is_closing) {
+            auto* wrapper = m_active_xwayland;
+            wrapper->is_closing = true;
+            wrapper->state_machine.mark_closing();
+            wrapper->opacity = 1.0;
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+
+            log::info("[Window] Initiating AnimationManager fade-out for X11 window close");
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Close,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.120,
+                .start_opacity = 1.0,
+                .target_opacity = 0.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->xsurface) {
+                        wlr_xwayland_surface_close(wrapper->xsurface);
+                    }
+                }
+            });
+            return;
+        }
         if (!m_active_toplevel || m_active_toplevel->is_closing) {
             return;
         }
-        m_active_toplevel->is_closing = true;
-        m_active_toplevel->fade_timer = wl_event_loop_add_timer(
-            wl_display_get_event_loop(m_display),
-            handle_fade_out,
-            m_active_toplevel
-        );
-        wl_event_source_timer_update(m_active_toplevel->fade_timer, 15);
-        log::info("[Window] Initiating fade-out for window close");
+        auto* wrapper = m_active_toplevel;
+        wrapper->is_closing = true;
+        wrapper->state_machine.mark_closing();
+        wrapper->opacity = 1.0;
+        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+
+        log::info("[Window] Initiating AnimationManager fade-out for window close");
+        AnimationManager::instance().start_animation({
+            .window_id = anim_id,
+            .target_handle = wrapper,
+            .type = WindowAnimationType::Close,
+            .curve = AnimationCurve::EaseDecelerate,
+            .duration_sec = 0.120,
+            .start_opacity = 1.0,
+            .target_opacity = 0.0,
+            .on_step = [wrapper](const WindowAnimation& a) {
+                if (wrapper && wrapper->scene_tree) {
+                    wrapper->opacity = a.current_opacity;
+                    wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                }
+            },
+            .on_complete = [wrapper](const WindowAnimation&) {
+                if (wrapper && wrapper->toplevel) {
+                    wlr_xdg_toplevel_send_close(wrapper->toplevel);
+                }
+            }
+        });
+    }
+
+    SnapMode detect_snap_zone(double cx, double cy, struct wlr_output* out) const {
+        if (!out) return SnapMode::None;
+        OutputGeometry out_geom = get_output_geometry(out);
+        if (out_geom.logical_width <= 0 || out_geom.logical_height <= 0) return SnapMode::None;
+
+        const int edge_thresh = 16;
+        const int corner_thresh = 64;
+
+        // Top edge trigger: activate snap when cursor reaches the usable work area boundary (below TopBar) + threshold tolerance
+        const int32_t top_trigger_boundary = out_geom.work_y + edge_thresh;
+        if (cy <= top_trigger_boundary) {
+            if (cx <= out_geom.global_x + corner_thresh) return SnapMode::TopLeft;
+            if (cx >= out_geom.global_x + out_geom.logical_width - corner_thresh) return SnapMode::TopRight;
+            return SnapMode::Top;
+        }
+        if (cy >= out_geom.global_y + out_geom.logical_height - edge_thresh) {
+            if (cx <= out_geom.global_x + corner_thresh) return SnapMode::BottomLeft;
+            if (cx >= out_geom.global_x + out_geom.logical_width - corner_thresh) return SnapMode::BottomRight;
+            return SnapMode::None;
+        }
+        if (cx <= out_geom.global_x + edge_thresh) {
+            if (cy <= out_geom.global_y + corner_thresh) return SnapMode::TopLeft;
+            if (cy >= out_geom.global_y + out_geom.logical_height - corner_thresh) return SnapMode::BottomLeft;
+            return SnapMode::Left;
+        }
+        if (cx >= out_geom.global_x + out_geom.logical_width - edge_thresh) {
+            if (cy <= out_geom.global_y + corner_thresh) return SnapMode::TopRight;
+            if (cy >= out_geom.global_y + out_geom.logical_height - corner_thresh) return SnapMode::BottomRight;
+            return SnapMode::Right;
+        }
+
+        return SnapMode::None;
     }
 
     void toplevel_set_fullscreen(ToplevelWrapper* wrapper, bool fullscreen) {
+        log::info("[FullscreenDebug] toplevel_set_fullscreen() called: wrapper={}, app_id='{}', requested_fullscreen={}, is_fullscreen={}",
+                  static_cast<void*>(wrapper),
+                  (wrapper && wrapper->toplevel && wrapper->toplevel->app_id) ? wrapper->toplevel->app_id : "unknown",
+                  fullscreen,
+                  wrapper ? wrapper->is_fullscreen : false);
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->initialized || !wrapper->scene_tree) return;
         if (wrapper->is_fullscreen == fullscreen) {
             if (fullscreen && wrapper->scene_tree) {
-                wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+                if (wrapper->scene_tree->node.parent != m_scene_tree_fullscreen) {
+                    elevate_window_node(wrapper->scene_tree);
+                }
+                struct wlr_output* out = get_output_for_toplevel(wrapper);
+                OutputGeometry out_geom = get_output_geometry(out);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, out_geom.global_x, out_geom.global_y);
             }
             wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
             return;
@@ -647,48 +2780,77 @@ private:
                 wrapper->saved_height = wrapper->toplevel->base->current.geometry.height;
                 if (wrapper->saved_width <= 0) wrapper->saved_width = 800;
                 if (wrapper->saved_height <= 0) wrapper->saved_height = 600;
+                wrapper->state_machine.update_floating_geometry(wrapper->saved_x, wrapper->saved_y, wrapper->saved_width, wrapper->saved_height);
             }
-            struct wlr_box output_box = {0, 0, 1280, 800};
-            if (!m_outputs.empty()) {
-                struct wlr_output* out = m_outputs.front()->get_wlr_output();
-                if (out) {
-                    wlr_output_effective_resolution(out, &output_box.width, &output_box.height);
-                }
-            }
-            log::info("[Window] Fullscreen window to {}x{}", output_box.width, output_box.height);
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+            struct wlr_output* out = get_output_for_toplevel(wrapper);
+            OutputGeometry out_geom = get_output_geometry(out);
+            WindowBox output_box = out_geom.full_box();
+            wrapper->state_machine.request_fullscreen(output_box);
+            elevate_window_node(wrapper->scene_tree);
+            log::info("[Window] Fullscreen window to {}x{} at ({}, {})", output_box.width, output_box.height, output_box.x, output_box.y);
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, output_box.x, output_box.y);
             wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, true);
             wlr_xdg_toplevel_set_size(wrapper->toplevel, output_box.width, output_box.height);
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, true);
+            }
         } else {
+            restore_window_node(wrapper->scene_tree, wrapper->workspace_id);
             if (wrapper->is_maximized) {
                 wrapper->is_maximized = false; // reset flag to trigger correct resize logic
                 toplevel_set_maximized(wrapper, true);
             } else {
-                log::info("[Window] Restore fullscreen window to {}x{}", wrapper->saved_width, wrapper->saved_height);
-                wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->saved_x, wrapper->saved_y);
+                wrapper->state_machine.request_restore();
+                const auto& norm = wrapper->state_machine.geometry().normal_geom;
+                log::info("[Window] Restore fullscreen window to {}x{} at ({}, {})", norm.width, norm.height, norm.x, norm.y);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, norm.x, norm.y);
                 wlr_xdg_toplevel_set_fullscreen(wrapper->toplevel, false);
-                wlr_xdg_toplevel_set_size(wrapper->toplevel, wrapper->saved_width, wrapper->saved_height);
+                wlr_xdg_toplevel_set_size(wrapper->toplevel, norm.width, norm.height);
             }
+            if (wrapper->foreign_handle) {
+                wlr_foreign_toplevel_handle_v1_set_fullscreen(wrapper->foreign_handle, false);
+            }
+        }
+        if (wrapper->frame && wrapper->toplevel) {
+            TinexusDecorationManager::instance().set_toplevel_fullscreen(wrapper->toplevel, fullscreen);
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
     void begin_interactive_move(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->scene_tree) return;
         m_cursor_mode = CursorMode::Move;
         m_grabbed_toplevel = wrapper;
         m_grab_x = m_cursor->x;
         m_grab_y = m_cursor->y;
         m_grab_geo_x = wrapper->scene_tree->node.x;
         m_grab_geo_y = wrapper->scene_tree->node.y;
+        elevate_window_node(wrapper->scene_tree);
         log::info("[Window] Started interactive move grab");
     }
 
     void begin_interactive_resize(ToplevelWrapper* wrapper, uint32_t edges) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->scene_tree) return;
         m_cursor_mode = CursorMode::Resize;
         m_grabbed_toplevel = wrapper;
+        m_grab_edges = edges;
         m_grab_x = m_cursor->x;
         m_grab_y = m_cursor->y;
+        m_grab_geo_x = wrapper->scene_tree->node.x;
+        m_grab_geo_y = wrapper->scene_tree->node.y;
         m_grab_geobox = wrapper->toplevel->base->current.geometry;
+        if (m_grab_geobox.width <= 0) {
+            m_grab_geobox.width = 800;
+        }
+        if (m_grab_geobox.height <= 0) {
+            m_grab_geobox.height = 600;
+        }
+
+        wlr_xdg_toplevel_set_resizing(wrapper->toplevel, true);
+        const char* resize_cursor = wlr_xcursor_get_resize_name(static_cast<enum wlr_edges>(edges));
+        if (resize_cursor) {
+            wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, resize_cursor);
+        }
         log::info("[Window] Started interactive resize grab (edges={})", edges);
     }
 
@@ -703,28 +2865,378 @@ private:
         wrapper->backend->begin_interactive_resize(wrapper, event->edges);
     }
 
+    void begin_xwayland_interactive_move(XwaylandWrapper* wrapper) {
+        if (!wrapper || !wrapper->scene_tree) return;
+        m_cursor_mode = CursorMode::Move;
+        m_grab_x = m_cursor->x;
+        m_grab_y = m_cursor->y;
+        m_grab_geo_x = wrapper->scene_tree->node.x;
+        m_grab_geo_y = wrapper->scene_tree->node.y;
+        m_grab_xwayland = wrapper;
+        m_grabbed_toplevel = nullptr;
+        elevate_window_node(wrapper->scene_tree);
+        log::info("[XWayland] Started interactive move grab for wrapper {}", static_cast<void*>(wrapper));
+    }
+
+    void begin_xwayland_interactive_resize(XwaylandWrapper* wrapper, uint32_t edges) {
+        if (!wrapper || !wrapper->scene_tree || !wrapper->xsurface) return;
+        m_cursor_mode = CursorMode::Resize;
+        m_grab_x = m_cursor->x;
+        m_grab_y = m_cursor->y;
+        m_grab_geo_x = wrapper->scene_tree->node.x;
+        m_grab_geo_y = wrapper->scene_tree->node.y;
+        m_grab_geobox.width = wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800;
+        m_grab_geobox.height = wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600;
+        m_grab_edges = edges;
+        m_grab_xwayland = wrapper;
+        m_grabbed_toplevel = nullptr;
+
+        const char* resize_cursor = wlr_xcursor_get_resize_name(static_cast<enum wlr_edges>(edges));
+        if (resize_cursor) {
+            wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, resize_cursor);
+        }
+        log::info("[XWayland] Started interactive resize grab (edges={})", edges);
+    }
+
+    // IWindowActionHandler implementation for TinexusDecorationManager
+    void request_move(void* wrapper) override {
+        auto* base = static_cast<WindowWrapperBase*>(wrapper);
+        if (!base) return;
+        if (base->wrapper_type == WrapperType::NativeToplevel) {
+            auto* w = static_cast<ToplevelWrapper*>(wrapper);
+            if (w) begin_interactive_move(w);
+        } else if (base->wrapper_type == WrapperType::Xwayland) {
+            auto* w = static_cast<XwaylandWrapper*>(wrapper);
+            if (w) begin_xwayland_interactive_move(w);
+        }
+    }
+
+    void request_resize(void* wrapper, uint32_t edges) override {
+        auto* base = static_cast<WindowWrapperBase*>(wrapper);
+        if (!base) return;
+        if (base->wrapper_type == WrapperType::NativeToplevel) {
+            auto* w = static_cast<ToplevelWrapper*>(wrapper);
+            if (w) begin_interactive_resize(w, edges);
+        } else if (base->wrapper_type == WrapperType::Xwayland) {
+            auto* w = static_cast<XwaylandWrapper*>(wrapper);
+            if (w) begin_xwayland_interactive_resize(w, edges);
+        }
+    }
+
+    void request_maximize(void* wrapper, bool maximize) override {
+        auto* base = static_cast<WindowWrapperBase*>(wrapper);
+        if (!base) return;
+        if (base->wrapper_type == WrapperType::NativeToplevel) {
+            auto* w = static_cast<ToplevelWrapper*>(wrapper);
+            if (w) toplevel_set_maximized(w, maximize);
+        } else if (base->wrapper_type == WrapperType::Xwayland) {
+            auto* w = static_cast<XwaylandWrapper*>(wrapper);
+            if (w) xwayland_set_maximized(w, maximize);
+        }
+    }
+
+    void request_minimize(void* wrapper, bool minimize) override {
+        auto* base = static_cast<WindowWrapperBase*>(wrapper);
+        if (!base) return;
+        if (base->wrapper_type == WrapperType::NativeToplevel) {
+            auto* w = static_cast<ToplevelWrapper*>(wrapper);
+            if (w) toplevel_set_minimized(w, minimize);
+        } else if (base->wrapper_type == WrapperType::Xwayland) {
+            auto* w = static_cast<XwaylandWrapper*>(wrapper);
+            if (w) xwayland_set_minimized(w, minimize);
+        }
+    }
+
+    void request_close(void* wrapper) override {
+        auto* base = static_cast<WindowWrapperBase*>(wrapper);
+        if (!base) return;
+        if (base->wrapper_type == WrapperType::NativeToplevel) {
+            auto* w = static_cast<ToplevelWrapper*>(wrapper);
+            if (w && w->toplevel) {
+                wlr_xdg_toplevel_send_close(w->toplevel);
+            }
+        } else if (base->wrapper_type == WrapperType::Xwayland) {
+            auto* w = static_cast<XwaylandWrapper*>(wrapper);
+            if (w && w->xsurface) {
+                wlr_xwayland_surface_close(w->xsurface);
+            }
+        }
+    }
+
+    bool is_window_maximized(void* wrapper) const override {
+        auto* base = static_cast<const WindowWrapperBase*>(wrapper);
+        if (!base) return false;
+        if (base->wrapper_type == WrapperType::NativeToplevel) {
+            auto* w = static_cast<const ToplevelWrapper*>(wrapper);
+            return w ? w->is_maximized : false;
+        } else if (base->wrapper_type == WrapperType::Xwayland) {
+            auto* w = static_cast<const XwaylandWrapper*>(wrapper);
+            return w ? w->is_maximized : false;
+        }
+        return false;
+    }
+
+    void on_decoration_mode_changed(struct wlr_xdg_toplevel* toplevel) override {
+        for (const auto& w : m_toplevels) {
+            if (w && w->toplevel == toplevel) {
+                ensure_decoration_mode(w.get());
+                break;
+            }
+        }
+    }
+
+    void attach_ssd_frame(ToplevelWrapper* wrapper) {
+        if (!wrapper || wrapper->frame || !wrapper->toplevel || !wrapper->scene_tree) return;
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+
+        struct wlr_scene_tree* parent_tree = nullptr;
+        if (wrapper->workspace_id > 0) {
+            parent_tree = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+        }
+        if (!parent_tree) parent_tree = m_scene_tree_normal;
+
+        TinexusWindowFrame* frame = TinexusDecorationManager::instance().create_frame(toplevel, parent_tree);
+        if (!frame || !frame->frame_tree || !frame->client_tree) return;
+
+        // Position root frame tree at current window position
+        int cur_x = wrapper->scene_tree->node.x;
+        int cur_y = wrapper->scene_tree->node.y;
+        wlr_scene_node_set_position(&frame->frame_tree->node, cur_x, cur_y);
+
+        // Reparent client surface scene tree to frame->client_tree
+        auto* client_scene = static_cast<struct wlr_scene_tree*>(toplevel->base->data);
+        if (client_scene) {
+            wlr_scene_node_reparent(&client_scene->node, frame->client_tree);
+            wlr_scene_node_set_position(&client_scene->node, 0, 0);
+        }
+
+        wrapper->frame = frame;
+        wrapper->scene_tree = frame->frame_tree;
+
+        int32_t w = toplevel->base->current.geometry.width;
+        int32_t h = toplevel->base->current.geometry.height;
+        if (w > 0 && h > 0) {
+            frame->update_geometry(w, h);
+        }
+
+        log::info("[Decoration] Attached Tinexus SSD frame to toplevel {} (app_id='{}')",
+                  static_cast<void*>(toplevel), toplevel->app_id ? toplevel->app_id : "unknown");
+    }
+
+    void detach_ssd_frame(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->frame || !wrapper->toplevel) return;
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+
+        auto* client_scene = static_cast<struct wlr_scene_tree*>(toplevel->base->data);
+        if (client_scene) {
+            int cur_x = wrapper->frame->frame_tree->node.x;
+            int cur_y = wrapper->frame->frame_tree->node.y;
+            struct wlr_scene_tree* parent_tree = nullptr;
+            if (wrapper->workspace_id > 0) {
+                parent_tree = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+            }
+            if (!parent_tree) parent_tree = m_scene_tree_normal;
+
+            wlr_scene_node_reparent(&client_scene->node, parent_tree);
+            wlr_scene_node_set_position(&client_scene->node, cur_x, cur_y);
+            wrapper->scene_tree = client_scene;
+        }
+
+        TinexusDecorationManager::instance().destroy_frame(toplevel);
+        wrapper->frame = nullptr;
+
+        log::info("[Decoration] Detached Tinexus SSD frame from toplevel {} (app_id='{}')",
+                  static_cast<void*>(toplevel), toplevel->app_id ? toplevel->app_id : "unknown");
+    }
+
+    void attach_xwayland_ssd_frame(XwaylandWrapper* wrapper) {
+        if (!wrapper || wrapper->frame || !wrapper->xsurface || !wrapper->scene_tree) return;
+        struct wlr_xwayland_surface* xsurface = wrapper->xsurface;
+
+        struct wlr_scene_tree* parent_tree = nullptr;
+        if (wrapper->workspace_id > 0) {
+            parent_tree = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+        }
+        if (!parent_tree) parent_tree = m_scene_tree_normal;
+
+        TinexusWindowFrame* frame = TinexusDecorationManager::instance().create_xwayland_frame(xsurface, parent_tree);
+        if (!frame || !frame->frame_tree || !frame->client_tree) return;
+
+        // Position root frame tree at current window position
+        int cur_x = wrapper->scene_tree->node.x;
+        int cur_y = wrapper->scene_tree->node.y;
+        wlr_scene_node_set_position(&frame->frame_tree->node, cur_x, cur_y);
+
+        // Reparent client surface scene tree to frame->client_tree
+        auto* client_scene = static_cast<struct wlr_scene_tree*>(xsurface->data);
+        if (client_scene) {
+            wlr_scene_node_reparent(&client_scene->node, frame->client_tree);
+            wlr_scene_node_set_position(&client_scene->node, 0, 0);
+        }
+
+        wrapper->frame = frame;
+        wrapper->scene_tree = frame->frame_tree;
+
+        int32_t w = xsurface->width > 0 ? xsurface->width : 800;
+        int32_t h = xsurface->height > 0 ? xsurface->height : 600;
+        frame->update_geometry(w, h);
+
+        log::info("[Decoration] Attached Tinexus SSD frame to XWayland surface {} (class='{}', title='{}')",
+                  static_cast<void*>(xsurface),
+                  xsurface->c_class ? xsurface->c_class : "unknown",
+                  xsurface->title ? xsurface->title : "");
+    }
+
+    void detach_xwayland_ssd_frame(XwaylandWrapper* wrapper) {
+        if (!wrapper || !wrapper->frame || !wrapper->xsurface) return;
+        struct wlr_xwayland_surface* xsurface = wrapper->xsurface;
+
+        auto* client_scene = static_cast<struct wlr_scene_tree*>(xsurface->data);
+        if (client_scene && wrapper->frame->frame_tree) {
+            int cur_x = wrapper->frame->frame_tree->node.x;
+            int cur_y = wrapper->frame->frame_tree->node.y;
+            struct wlr_scene_tree* parent_tree = nullptr;
+            if (wrapper->workspace_id > 0) {
+                parent_tree = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+            }
+            if (!parent_tree) parent_tree = m_scene_tree_normal;
+
+            wlr_scene_node_reparent(&client_scene->node, parent_tree);
+            wlr_scene_node_set_position(&client_scene->node, cur_x, cur_y);
+            wrapper->scene_tree = client_scene;
+        }
+
+        TinexusDecorationManager::instance().destroy_xwayland_frame(xsurface);
+        wrapper->frame = nullptr;
+
+        log::info("[Decoration] Detached Tinexus SSD frame from XWayland surface {} (class='{}')",
+                  static_cast<void*>(xsurface),
+                  xsurface->c_class ? xsurface->c_class : "unknown");
+    }
+
+    void ensure_decoration_mode(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base) return;
+        struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
+        const char* app_id = toplevel->app_id;
+
+        bool is_native = TinexusDecorationManager::is_native_csd_app(app_id);
+        bool client_wants_csd = TinexusDecorationManager::instance().client_wants_csd(toplevel);
+        bool client_wants_ssd = TinexusDecorationManager::instance().client_wants_ssd(toplevel);
+
+        bool should_have_ssd = false;
+        // 1. Native Tinexus apps & CSD-preferring apps (Firefox, Chromium) or clients
+        //    that explicitly negotiated CLIENT_SIDE must NEVER have an SSD frame.
+        if (is_native || client_wants_csd) {
+            should_have_ssd = false;
+        } else if (client_wants_ssd) {
+            // 2. Client explicitly requested SERVER_SIDE via zxdg_decoration_manager_v1
+            should_have_ssd = true;
+        } else {
+            // 3. Client genuinely advertised no preference at all or lacks decoration protocol (e.g. foot, mpv) -> attach SSD
+            should_have_ssd = true;
+        }
+
+        if (should_have_ssd && !wrapper->frame) {
+            attach_ssd_frame(wrapper);
+        } else if (!should_have_ssd && wrapper->frame) {
+            // Immediately detach any pre-existing or stale SSD frame if mode resolved to CLIENT_SIDE
+            detach_ssd_frame(wrapper);
+        }
+    }
+
+    static void handle_toplevel_set_app_id(struct wl_listener* listener, void* /*data*/) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, set_app_id);
+        const char* app_id = wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "";
+        log::info("[XDGShell] toplevel set_app_id: app_id='{}'", app_id);
+        wrapper->backend->ensure_decoration_mode(wrapper);
+
+        bool is_launcher = (std::string(app_id) == "tinexus-launcher" ||
+                            std::string(app_id) == "launcher" ||
+                            std::string(app_id) == tinexus::common::dbus::service::Launcher);
+        if (is_launcher && wrapper->scene_tree && wrapper->backend && wrapper->backend->m_scene_tree_top) {
+            wlr_scene_node_reparent(&wrapper->scene_tree->node, wrapper->backend->m_scene_tree_top);
+            wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            WorkspaceManager::instance().remove_window_from_workspace(
+                reinterpret_cast<uint64_t>(wrapper));
+            struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
+            int screen_w = 1920;
+            int screen_h = 1080;
+            if (out) {
+                wlr_output_effective_resolution(out, &screen_w, &screen_h);
+            }
+            int32_t offset_x = (screen_w - 640) / 2;
+            int32_t offset_y = 32;
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, offset_x, offset_y);
+        }
+    }
+
     static void handle_new_xdg_toplevel(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_xdg_surface_listener);
         auto* xdg_toplevel = static_cast<struct wlr_xdg_toplevel*>(data);
 
-        log::info("[XDGShell] New XDG toplevel surface created");
-        struct wlr_scene_tree* scene_tree = wlr_scene_xdg_surface_create(self->m_scene_tree_normal, xdg_toplevel->base);
+        log::info("[XDGShell] New XDG toplevel surface created (app_id='{}')",
+                  xdg_toplevel->app_id ? xdg_toplevel->app_id : "unknown");
 
         auto wrapper = std::make_unique<ToplevelWrapper>();
         wrapper->toplevel = xdg_toplevel;
-        wrapper->scene_tree = scene_tree;
         wrapper->backend  = self;
+
+        // Bug 2: Register surface with SurfaceManager to track lifecycle
+        pid_t client_pid = -1;
+        if (xdg_toplevel->base && xdg_toplevel->base->resource) {
+            struct wl_client* client = wl_resource_get_client(xdg_toplevel->base->resource);
+            if (client) {
+                wl_client_get_credentials(client, &client_pid, nullptr, nullptr);
+            }
+        }
+        wrapper->surface_id = SurfaceManager::instance().create_surface(
+            client_pid,
+            xdg_toplevel->app_id ? xdg_toplevel->app_id : ""
+        );
+        SurfaceManager::instance().assign_role(wrapper->surface_id, SurfaceRole::XdgToplevel);
+
+        bool is_launcher = (xdg_toplevel->app_id &&
+            (std::string(xdg_toplevel->app_id) == "tinexus-launcher" ||
+             std::string(xdg_toplevel->app_id) == "launcher" ||
+             std::string(xdg_toplevel->app_id) == tinexus::common::dbus::service::Launcher));
+
+        // Assign to currently active workspace
+        auto& ws_mgr = WorkspaceManager::instance();
+        wrapper->workspace_id = ws_mgr.active_workspace_id();
+        struct wlr_scene_tree* parent_tree = is_launcher ? self->m_scene_tree_top : ws_mgr.get_workspace_scene_tree(wrapper->workspace_id);
+        if (!parent_tree) {
+            parent_tree = is_launcher ? self->m_scene_tree_top : self->m_scene_tree_normal;
+        }
+        if (!parent_tree) {
+            parent_tree = &self->m_scene->tree;
+        }
+
+        wrapper->scene_tree = wlr_scene_xdg_surface_create(parent_tree, xdg_toplevel->base);
+        if (!wrapper->scene_tree) {
+            log::error("[XDGShell] Failed to create scene tree node for toplevel!");
+            return;
+        }
+        xdg_toplevel->base->data = wrapper->scene_tree;
+        wrapper->frame = nullptr;
+
+        if (!is_launcher) {
+            ws_mgr.add_window_to_workspace(wrapper->workspace_id, reinterpret_cast<uint64_t>(wrapper.get()));
+        }
 
         // Position window with cascade offset
         int32_t offset_x = 50 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
         int32_t offset_y = 100 + static_cast<int32_t>((self->m_toplevels.size() % 5) * 30);
-        if (xdg_toplevel->app_id && (std::string(xdg_toplevel->app_id) == "lock" || std::string(xdg_toplevel->app_id) == "tinexus-lock")) {
-            offset_x = 0;
-            offset_y = 0;
-            wrapper->saved_x = 0;
-            wrapper->saved_y = 0;
+        if (is_launcher) {
+            struct wlr_output* out = self->get_output_for_toplevel(wrapper.get());
+            int screen_w = 1920;
+            int screen_h = 1080;
+            if (out) {
+                wlr_output_effective_resolution(out, &screen_w, &screen_h);
+            }
+            offset_x = (screen_w - 640) / 2;
+            offset_y = 32;
         }
-        wlr_scene_node_set_position(&scene_tree->node, offset_x, offset_y);
+        wlr_scene_node_set_position(&wrapper->scene_tree->node, offset_x, offset_y);
 
         // map fires when the surface first attaches a buffer (i.e. is ready to show)
         wrapper->map.notify = handle_toplevel_map;
@@ -733,6 +3245,10 @@ private:
         // commit fires on client commits (needed to send configure on initial_commit)
         wrapper->commit.notify = handle_toplevel_commit;
         wl_signal_add(&xdg_toplevel->base->surface->events.commit, &wrapper->commit);
+
+        // set_app_id fires when the client updates or initializes its app_id
+        wrapper->set_app_id.notify = handle_toplevel_set_app_id;
+        wl_signal_add(&xdg_toplevel->events.set_app_id, &wrapper->set_app_id);
 
         // destroy — clean up our wrapper
         wrapper->destroy.notify = handle_toplevel_destroy;
@@ -757,6 +3273,112 @@ private:
         self->m_toplevels.push_back(std::move(wrapper));
     }
 
+    static void handle_popup_commit(struct wl_listener* listener, void* /*data*/) {
+        PopupWrapper* wrapper = wl_container_of(listener, wrapper, commit);
+        if (wrapper->popup && wrapper->popup->base && wrapper->popup->base->initial_commit) {
+            log::info("[XDGShell] Initial commit for popup: popup={} base_surface={} — scheduling configure",
+                      static_cast<void*>(wrapper->popup),
+                      static_cast<void*>(wrapper->popup->base->surface));
+            wlr_xdg_surface_schedule_configure(wrapper->popup->base);
+        }
+        if (wrapper->scene_tree && wrapper->backend && wrapper->backend->m_active_toplevel) {
+            if (wrapper->backend->m_active_toplevel->opacity < 1.0) {
+                double op = wrapper->backend->m_active_toplevel->opacity;
+                wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &op);
+            }
+        }
+    }
+
+    static void handle_popup_reposition(struct wl_listener* listener, void* /*data*/) {
+        PopupWrapper* wrapper = wl_container_of(listener, wrapper, reposition);
+        if (wrapper->popup && wrapper->popup->base) {
+            log::debug("[XDGShell] Popup reposition requested: popup={} base_surface={} — scheduling configure",
+                       static_cast<void*>(wrapper->popup),
+                       static_cast<void*>(wrapper->popup->base->surface));
+            wlr_xdg_surface_schedule_configure(wrapper->popup->base);
+        }
+    }
+
+    static void handle_popup_destroy(struct wl_listener* listener, void* /*data*/) {
+        PopupWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        log::info("[XDGShell] Popup destroyed: wrapper={} popup={} base_surface={}",
+                  static_cast<void*>(wrapper),
+                  static_cast<void*>(wrapper->popup),
+                  static_cast<void*>(wrapper->popup && wrapper->popup->base ? wrapper->popup->base->surface : nullptr));
+
+        if (wrapper->commit.link.next) {
+            wl_list_remove(&wrapper->commit.link);
+            wrapper->commit.link.next = nullptr;
+        }
+        if (wrapper->reposition.link.next) {
+            wl_list_remove(&wrapper->reposition.link);
+            wrapper->reposition.link.next = nullptr;
+        }
+        if (wrapper->destroy.link.next) {
+            wl_list_remove(&wrapper->destroy.link);
+            wrapper->destroy.link.next = nullptr;
+        }
+
+        if (wrapper->backend) {
+            auto it = std::find(wrapper->backend->m_popups.begin(), wrapper->backend->m_popups.end(), wrapper);
+            if (it != wrapper->backend->m_popups.end()) {
+                wrapper->backend->m_popups.erase(it);
+            }
+        }
+
+        delete wrapper;
+    }
+
+    static void handle_new_xdg_popup(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_new_xdg_popup_listener);
+        auto* xdg_popup = static_cast<struct wlr_xdg_popup*>(data);
+
+        log::info("[XDGShell] New XDG popup created: popup={} parent_surface={} base_surface={}",
+                  static_cast<void*>(xdg_popup),
+                  static_cast<void*>(xdg_popup->parent),
+                  static_cast<void*>(xdg_popup->base ? xdg_popup->base->surface : nullptr));
+
+        struct wlr_xdg_surface* parent_xdg = wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
+        struct wlr_scene_tree* parent_tree = nullptr;
+
+        if (parent_xdg && parent_xdg->data) {
+            parent_tree = static_cast<struct wlr_scene_tree*>(parent_xdg->data);
+        } else {
+            struct wlr_layer_surface_v1* parent_layer = wlr_layer_surface_v1_try_from_wlr_surface(xdg_popup->parent);
+            if (parent_layer && parent_layer->data) {
+                parent_tree = static_cast<struct wlr_scene_tree*>(parent_layer->data);
+            }
+        }
+
+        if (!parent_tree) {
+            log::warn("[XDGShell] Could not determine popup parent scene tree; attaching to top layer");
+            parent_tree = self->m_scene_tree_top ? self->m_scene_tree_top : self->m_scene_tree_normal;
+        }
+
+        struct wlr_scene_tree* scene_tree = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
+        if (!scene_tree) {
+            log::error("[XDGShell] wlr_scene_xdg_surface_create failed for popup");
+            return;
+        }
+
+        xdg_popup->base->data = scene_tree;
+
+        auto* wrapper = new PopupWrapper();
+        wrapper->popup = xdg_popup;
+        wrapper->scene_tree = scene_tree;
+        wrapper->backend = self;
+        self->m_popups.push_back(wrapper);
+
+        wrapper->commit.notify = handle_popup_commit;
+        wl_signal_add(&xdg_popup->base->surface->events.commit, &wrapper->commit);
+
+        wrapper->destroy.notify = handle_popup_destroy;
+        wl_signal_add(&xdg_popup->events.destroy, &wrapper->destroy);
+
+        wrapper->reposition.notify = handle_popup_reposition;
+        wl_signal_add(&xdg_popup->events.reposition, &wrapper->reposition);
+    }
+
     static void handle_toplevel_map(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, map);
         struct wlr_surface* surface = wrapper->toplevel->base->surface;
@@ -764,18 +3386,100 @@ private:
         log::info("[XDGShell] Toplevel mapped — app_id='{}' surface={}",
                   app_id, static_cast<void*>(surface));
 
-        // If the lock screen just connected, track surface pointer and mark session locked
-        if (std::string(app_id) == "lock" || std::string(app_id) == "tinexus-lock") {
-            log::info("[XDGShell] Lock screen mapped — m_lock_surface={} session LOCKED", static_cast<void*>(surface));
-            wrapper->backend->m_is_locked = true;
-            wrapper->backend->m_lock_surface = surface;
-            wrapper->backend->set_layer_surfaces_enabled(false);
-            wrapper->saved_x = 0;
-            wrapper->saved_y = 0;
+        // Initialize state machine with initial mapped position and geometry
+        int32_t init_w = wrapper->toplevel->base->current.geometry.width;
+        int32_t init_h = wrapper->toplevel->base->current.geometry.height;
+        if (init_w <= 0) init_w = 800;
+        if (init_h <= 0) init_h = 600;
+
+        bool is_launcher = (std::string(app_id) == "tinexus-launcher" ||
+                            std::string(app_id) == "launcher" ||
+                            std::string(app_id) == tinexus::common::dbus::service::Launcher);
+        if (is_launcher) {
+            if (wrapper->scene_tree && wrapper->backend && wrapper->backend->m_scene_tree_top) {
+                wlr_scene_node_reparent(&wrapper->scene_tree->node, wrapper->backend->m_scene_tree_top);
+                WorkspaceManager::instance().remove_window_from_workspace(
+                    reinterpret_cast<uint64_t>(wrapper));
+            }
+            struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
+            int screen_w = 1920;
+            int screen_h = 1080;
+            if (out) {
+                wlr_output_effective_resolution(out, &screen_w, &screen_h);
+            }
+            int cx = (screen_w - init_w) / 2;
+            int cy = 32;
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, cx, cy);
+                wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
+            }
+            wrapper->state_machine.update_floating_geometry(cx, cy, init_w, init_h);
+        } else {
+            struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
+            if (out) {
+                wrapper->state_machine.set_assigned_output(out);
+                WorkArea wa = wrapper->backend->get_output_work_area(out);
+                if (wa.width > 0 && wa.height > 0) {
+                    int32_t cur_x = wrapper->scene_tree->node.x;
+                    int32_t cur_y = wrapper->scene_tree->node.y;
+                    if (cur_x <= 0 && cur_y <= 0) {
+                        // Center new floating window cleanly in output work area
+                        cur_x = wa.x + std::max(0, (wa.width - init_w) / 2);
+                        cur_y = wa.y + std::max(10, (wa.height - init_h) / 3);
+                    } else {
+                        int32_t max_x = wa.x + std::max(0, wa.width - init_w);
+                        int32_t max_y = wa.y + std::max(0, wa.height - init_h);
+                        cur_x = std::clamp(cur_x, wa.x, std::max(wa.x, max_x));
+                        cur_y = std::clamp(cur_y, wa.y, std::max(wa.y, max_y));
+                    }
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, cur_x, cur_y);
+                }
+            }
+            wrapper->state_machine.update_floating_geometry(
+                wrapper->scene_tree->node.x,
+                wrapper->scene_tree->node.y,
+                init_w,
+                init_h
+            );
+        }
+        struct wlr_output* out = wrapper->backend->get_output_for_toplevel(wrapper);
+        if (out) {
+            wrapper->state_machine.set_assigned_output(out);
+        }
+
+        std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
+        if (!app_id_str.empty() && TinexusServer::instance()) {
+            TinexusServer::instance()->notify_app_started(app_id_str);
+        }
+
+        if (wrapper->is_fullscreen) {
+            wrapper->backend->elevate_window_node(wrapper->scene_tree);
             wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
-            wrapper->backend->toplevel_set_fullscreen(wrapper, true);
-        } else if (wrapper->is_fullscreen) {
-            wlr_scene_node_set_position(&wrapper->scene_tree->node, 0, 0);
+        } else if (wrapper->toplevel && wrapper->scene_tree && !wrapper->backend->m_is_locked) {
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            apply_window_tree_opacity(wrapper, 0.0);
+
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Open,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.120,
+                .start_opacity = 0.0,
+                .target_opacity = 1.0,
+                .on_step = [](const WindowAnimation& a) {
+                    auto* w = static_cast<ToplevelWrapper*>(a.target_handle);
+                    apply_window_tree_opacity(w, a.current_opacity);
+                },
+                .on_complete = [](const WindowAnimation& a) {
+                    auto* w = static_cast<ToplevelWrapper*>(a.target_handle);
+                    apply_window_tree_opacity(w, 1.0);
+                }
+            });
+        }
+
+        if (!is_launcher && wrapper->backend && wrapper->backend->m_foreign_toplevel_mgr && !wrapper->foreign_handle) {
+            wrapper->backend->setup_foreign_toplevel_for_native(wrapper);
         }
 
         wrapper->backend->focus_toplevel(wrapper);
@@ -786,8 +3490,26 @@ private:
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, commit);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         if (toplevel->base->initial_commit) {
-            log::info("[XDGShell] Initial commit for toplevel — scheduling initial configure");
-            wlr_xdg_surface_schedule_configure(toplevel->base);
+            log::info("[XDGShell] Initial commit for toplevel — configuring initial geometry and states");
+            wrapper->backend->ensure_decoration_mode(wrapper);
+            if (wrapper->is_maximized || toplevel->requested.maximized) {
+                wrapper->backend->toplevel_set_maximized(wrapper, true);
+            } else if (wrapper->is_fullscreen || toplevel->requested.fullscreen) {
+                wrapper->is_fullscreen = false;
+                wrapper->backend->toplevel_set_fullscreen(wrapper, true);
+            } else {
+                wlr_xdg_surface_schedule_configure(toplevel->base);
+            }
+        }
+        if (wrapper->frame && toplevel && toplevel->base) {
+            int32_t cur_w = toplevel->base->current.geometry.width;
+            int32_t cur_h = toplevel->base->current.geometry.height;
+            if (cur_w > 0 && cur_h > 0) {
+                wrapper->frame->update_geometry(cur_w, cur_h);
+            }
+        }
+        if (wrapper->scene_tree && wrapper->opacity < 1.0) {
+            apply_window_tree_opacity(wrapper, wrapper->opacity);
         }
     }
 
@@ -795,35 +3517,89 @@ private:
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_maximize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
         log::info("[XDGShell] Request maximize state={}", toplevel->requested.maximized);
+        if (!toplevel->base->initialized) {
+            log::info("[XDGShell] Surface not initialized yet — deferring maximize to initial commit");
+            wrapper->is_maximized = toplevel->requested.maximized;
+            return;
+        }
         wrapper->backend->toplevel_set_maximized(wrapper, toplevel->requested.maximized);
     }
 
     static void handle_toplevel_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
-        log::info("[XDGShell] Request fullscreen state={}", toplevel->requested.fullscreen);
+        log::info("[FullscreenDebug] handle_toplevel_request_fullscreen: toplevel={}, app_id='{}', requested={}",
+                  static_cast<void*>(toplevel),
+                  (toplevel && toplevel->app_id) ? toplevel->app_id : "unknown",
+                  toplevel ? toplevel->requested.fullscreen : false);
+        if (!toplevel->base->initialized) {
+            log::info("[XDGShell] Surface not initialized yet — deferring fullscreen to initial commit");
+            wrapper->is_fullscreen = toplevel->requested.fullscreen;
+            return;
+        }
         wrapper->backend->toplevel_set_fullscreen(wrapper, toplevel->requested.fullscreen);
     }
 
     static void handle_toplevel_request_minimize(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
-        // Minimize = hide the scene node. There is no dock/taskbar yet, so this
-        // is a "hide-only" minimize. The user can re-open from Pulse.
-        if (wrapper->scene_tree) {
-            if (TinexusServer::instance()) {
-                TinexusServer::instance()->trigger_minimize(reinterpret_cast<uint64_t>(wrapper->toplevel->base->surface));
-            }
+        log::info("[XDGShell] Request minimize for toplevel");
+        if (!toplevel->base->initialized) {
+            return;
         }
+        wrapper->backend->toplevel_set_minimized(wrapper, true);
         wlr_xdg_surface_schedule_configure(toplevel->base);
     }
 
     static void handle_toplevel_destroy(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
         WlrootsBackend* backend = wrapper->backend;
-        struct wlr_surface* surface = wrapper->toplevel->base->surface;
+        struct wlr_surface* surface = (wrapper->toplevel && wrapper->toplevel->base) ? wrapper->toplevel->base->surface : nullptr;
 
-        const bool was_lock = (surface == backend->m_lock_surface);
+        log::info("[XDGShell] handle_toplevel_destroy for wrapper={}", static_cast<void*>(wrapper));
+
+        // Bug 2: Remove surface record from SurfaceManager to prevent record accumulation
+        if (wrapper->surface_id != 0) {
+            SurfaceManager::instance().remove_surface(wrapper->surface_id);
+            wrapper->surface_id = 0;
+        }
+
+        // 0. Cancel active animations immediately to prevent any callback or dereference
+        AnimationManager::instance().cancel_animation(reinterpret_cast<uint64_t>(wrapper));
+
+        // Clean up SSD frame if present
+        if (wrapper->frame && wrapper->toplevel) {
+            backend->detach_ssd_frame(wrapper);
+        }
+
+        // Clean up foreign toplevel handle
+        if (backend) {
+            backend->cleanup_foreign_toplevel_native(wrapper);
+        }
+
+        // 1. Cancel/disarm timers (F-03 safety)
+        if (wrapper->fade_timer != nullptr) {
+            wl_event_source_remove(wrapper->fade_timer);
+            wrapper->fade_timer = nullptr;
+            log::info("[XDGShell] Disarmed fade_timer during toplevel destruction");
+        }
+
+        // 2. Clear/release grabs (F-03 safety)
+        if (backend->m_grabbed_toplevel == wrapper) {
+            backend->m_grabbed_toplevel = nullptr;
+            backend->m_cursor_mode = CursorMode::Passthrough;
+            backend->m_pending_snap = SnapMode::None;
+            backend->m_grab_edges = 0;
+            log::info("[XDGShell] Released cursor grab during toplevel destruction");
+        }
+
+        // 3. Cancel/remove references to the real wrapper
+        if (backend->m_active_toplevel == wrapper) {
+            backend->m_active_toplevel = nullptr;
+        }
+        wrapper->state_machine.mark_closing();
+
+        const bool was_lock = (surface && surface == backend->m_lock_surface);
         if (was_lock) {
             log::info("[XDGShell] Lock screen destroyed — marking session UNLOCKED atomically");
             backend->m_is_locked = false;
@@ -831,25 +3607,31 @@ private:
             backend->set_layer_surfaces_enabled(true);
         }
 
-        if (backend->m_active_toplevel == wrapper) {
-            backend->m_active_toplevel = nullptr;
+        // 4. Remove compositor registries / focus references
+        if (surface) {
+            if (FocusManager::instance().keyboard_focus() == surface) {
+                FocusManager::instance().set_keyboard_focus(nullptr);
+            }
+            if (FocusManager::instance().pointer_surface() == surface) {
+                FocusManager::instance().update_pointer_focus(PickResult{nullptr, 0.0, 0.0}, 0);
+            }
         }
 
-        // Defend against memory reuse bug: clear focus if this was the focused surface
-        if (FocusManager::instance().keyboard_focus() == surface) {
-            FocusManager::instance().set_keyboard_focus(nullptr);
-        }
+        // Remove wl_listeners safely and idempotently
+        if (wrapper->map.link.next != nullptr) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
+        if (wrapper->commit.link.next != nullptr) { wl_list_remove(&wrapper->commit.link); wrapper->commit.link.next = nullptr; }
+        if (wrapper->set_app_id.link.next != nullptr) { wl_list_remove(&wrapper->set_app_id.link); wrapper->set_app_id.link.next = nullptr; }
+        if (wrapper->destroy.link.next != nullptr) { wl_list_remove(&wrapper->destroy.link); wrapper->destroy.link.next = nullptr; }
+        if (wrapper->request_maximize.link.next != nullptr) { wl_list_remove(&wrapper->request_maximize.link); wrapper->request_maximize.link.next = nullptr; }
+        if (wrapper->request_fullscreen.link.next != nullptr) { wl_list_remove(&wrapper->request_fullscreen.link); wrapper->request_fullscreen.link.next = nullptr; }
+        if (wrapper->request_minimize.link.next != nullptr) { wl_list_remove(&wrapper->request_minimize.link); wrapper->request_minimize.link.next = nullptr; }
+        if (wrapper->request_move.link.next != nullptr) { wl_list_remove(&wrapper->request_move.link); wrapper->request_move.link.next = nullptr; }
+        if (wrapper->request_resize.link.next != nullptr) { wl_list_remove(&wrapper->request_resize.link); wrapper->request_resize.link.next = nullptr; }
 
-        wl_list_remove(&wrapper->map.link);
-        wl_list_remove(&wrapper->commit.link);
-        wl_list_remove(&wrapper->destroy.link);
-        wl_list_remove(&wrapper->request_maximize.link);
-        wl_list_remove(&wrapper->request_fullscreen.link);
-        wl_list_remove(&wrapper->request_minimize.link);
-        wl_list_remove(&wrapper->request_move.link);
-        wl_list_remove(&wrapper->request_resize.link);
-
-        // Remove from list
+        // 5. Remove from list (destroys wrapper and its scene resources via unique_ptr)
+        WorkspaceManager::instance().remove_window_from_workspace(reinterpret_cast<uint64_t>(wrapper));
+        std::string dead_app_id = (wrapper->toplevel && wrapper->toplevel->app_id) ?
+                                  get_canonical_app_id(wrapper->toplevel->app_id) : "";
         for (auto it = backend->m_toplevels.begin(); it != backend->m_toplevels.end(); ++it) {
             if (it->get() == wrapper) {
                 backend->m_toplevels.erase(it);
@@ -857,14 +3639,480 @@ private:
             }
         }
 
-        // Restore focus to top available toplevel immediately without gap
+        if (!dead_app_id.empty()) {
+            bool has_remaining = false;
+            for (const auto& other : backend->m_toplevels) {
+                if (other->toplevel && other->toplevel->app_id) {
+                    if (get_canonical_app_id(other->toplevel->app_id) == dead_app_id) {
+                        has_remaining = true;
+                        break;
+                    }
+                }
+            }
+            if (!has_remaining && TinexusServer::instance()) {
+                TinexusServer::instance()->notify_app_closed(dead_app_id);
+            }
+        }
+
+        // 6. Restore focus to top available toplevel immediately without gap
         if (backend->m_active_toplevel == nullptr) {
             ToplevelWrapper* next_focus = nullptr;
-            if (!backend->m_toplevels.empty()) {
-                next_focus = backend->m_toplevels.back().get();
+            for (auto it = backend->m_toplevels.rbegin(); it != backend->m_toplevels.rend(); ++it) {
+                if (it->get()->state_machine.state() != WindowState::Minimized &&
+                    it->get()->state_machine.state() != WindowState::Closing) {
+                    next_focus = it->get();
+                    break;
+                }
             }
             backend->focus_toplevel(next_focus);
         }
+    }
+
+    static void handle_xwayland_ready(struct wl_listener* listener, void* /*data*/) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_xwayland_ready);
+        const char* disp = self->m_xwayland ? self->m_xwayland->display_name : nullptr;
+        log::info("[XWayland] Server is READY on DISPLAY='{}'", disp ? disp : "null");
+        if (disp) {
+            self->propagate_display_env(disp);
+        }
+        if (self->m_cursor_mgr && self->m_xwayland) {
+            struct wlr_xcursor* xc = wlr_xcursor_manager_get_xcursor(self->m_cursor_mgr, "default", 1.0f);
+            if (xc && xc->image_count > 0) {
+                struct wlr_xcursor_image* img = xc->images[0];
+                wlr_xwayland_set_cursor(self->m_xwayland, img->buffer, img->width * 4,
+                                        img->width, img->height, img->hotspot_x, img->hotspot_y);
+            }
+        }
+    }
+
+    static void handle_xwayland_associate(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, associate);
+        struct wlr_xwayland_surface* xsurface = wrapper->xsurface;
+        if (!xsurface || !xsurface->surface) return;
+
+        log::info("[XWayland] Surface associate: class='{}' title='{}'",
+                  xsurface->c_class ? xsurface->c_class : "",
+                  xsurface->title ? xsurface->title : "");
+
+        wrapper->map.notify = handle_xwayland_map;
+        wl_signal_add(&xsurface->surface->events.map, &wrapper->map);
+
+        wrapper->unmap.notify = handle_xwayland_unmap;
+        wl_signal_add(&xsurface->surface->events.unmap, &wrapper->unmap);
+
+        struct wlr_scene_tree* parent = WorkspaceManager::instance().get_workspace_scene_tree(wrapper->workspace_id);
+        if (!parent) parent = wrapper->backend->m_scene_tree_normal;
+        if (!parent) parent = &wrapper->backend->m_scene->tree;
+
+        wrapper->scene_tree = wlr_scene_subsurface_tree_create(parent, xsurface->surface);
+        if (wrapper->scene_tree) {
+            xsurface->data = wrapper->scene_tree;
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, xsurface->x, xsurface->y);
+        }
+    }
+
+    static void handle_xwayland_dissociate(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, dissociate);
+        log::info("[XWayland] Surface dissociate");
+        if (wrapper->map.link.next) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
+        if (wrapper->unmap.link.next) { wl_list_remove(&wrapper->unmap.link); wrapper->unmap.link.next = nullptr; }
+        if (wrapper->frame) {
+            wrapper->backend->detach_xwayland_ssd_frame(wrapper);
+        }
+        if (wrapper->scene_tree) {
+            wlr_scene_node_destroy(&wrapper->scene_tree->node);
+            wrapper->scene_tree = nullptr;
+        }
+    }
+
+    static void handle_xwayland_map(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, map);
+        struct wlr_xwayland_surface* xsurface = wrapper->xsurface;
+        const char* app_class = xsurface->c_class ? xsurface->c_class : "x11-app";
+        log::info("[XWayland] Toplevel mapped — class='{}' title='{}' ({}, {}) {}x{}",
+                  app_class, xsurface->title ? xsurface->title : "",
+                  xsurface->x, xsurface->y, xsurface->width, xsurface->height);
+
+        int32_t init_w = xsurface->width > 0 ? xsurface->width : 800;
+        int32_t init_h = xsurface->height > 0 ? xsurface->height : 600;
+
+        struct wlr_output* out = wrapper->backend->get_output_for_xwayland(wrapper);
+        if (out) {
+            wrapper->state_machine.set_assigned_output(out);
+            WorkArea wa = wrapper->backend->get_output_work_area(out);
+            if (wa.width > 0 && wa.height > 0) {
+                int32_t cur_x = xsurface->x;
+                int32_t cur_y = xsurface->y;
+                if (cur_x <= 0 && cur_y <= 0) {
+                    cur_x = wa.x + std::max(0, (wa.width - init_w) / 2);
+                    cur_y = wa.y + std::max(10, (wa.height - init_h) / 3);
+                }
+                if (wrapper->scene_tree) {
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, cur_x, cur_y);
+                }
+                wlr_xwayland_surface_configure(xsurface, cur_x, cur_y, init_w, init_h);
+            }
+        }
+
+        // Attach SSD frame (Decoration-2: VLC/XWayland support)
+        if (!wrapper->frame) {
+            wrapper->backend->attach_xwayland_ssd_frame(wrapper);
+        }
+
+        if (wrapper->scene_tree) {
+            wrapper->state_machine.update_floating_geometry(
+                wrapper->scene_tree->node.x,
+                wrapper->scene_tree->node.y,
+                init_w,
+                init_h
+            );
+        }
+
+        std::string app_id_str = get_canonical_app_id(app_class);
+        if (!app_id_str.empty() && TinexusServer::instance()) {
+            TinexusServer::instance()->notify_app_started(app_id_str);
+        }
+
+        if (wrapper->scene_tree && !wrapper->backend->m_is_locked) {
+            uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+            wrapper->opacity = 0.0;
+            wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+
+            AnimationManager::instance().start_animation({
+                .window_id = anim_id,
+                .target_handle = wrapper,
+                .type = WindowAnimationType::Open,
+                .curve = AnimationCurve::EaseDecelerate,
+                .duration_sec = 0.120,
+                .start_opacity = 0.0,
+                .target_opacity = 1.0,
+                .on_step = [wrapper](const WindowAnimation& a) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = a.current_opacity;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                },
+                .on_complete = [wrapper](const WindowAnimation&) {
+                    if (wrapper && wrapper->scene_tree) {
+                        wrapper->opacity = 1.0;
+                        wlr_scene_node_for_each_buffer(&wrapper->scene_tree->node, set_buffer_opacity, &wrapper->opacity);
+                    }
+                }
+            });
+        }
+
+        if (wrapper->backend && wrapper->backend->m_foreign_toplevel_mgr && !wrapper->foreign_handle) {
+            wrapper->backend->setup_foreign_toplevel_for_xwayland(wrapper);
+        }
+
+        wrapper->backend->focus_xwayland(wrapper);
+    }
+
+    static void handle_xwayland_unmap(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, unmap);
+        log::info("[XWayland] Toplevel unmapped");
+        if (wrapper->frame) {
+            wrapper->backend->detach_xwayland_ssd_frame(wrapper);
+        }
+        if (wrapper->scene_tree) {
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+        }
+    }
+
+    static void handle_xwayland_request_configure(struct wl_listener* listener, void* data) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_configure);
+        auto* ev = static_cast<struct wlr_xwayland_surface_configure_event*>(data);
+        wlr_xwayland_surface_configure(ev->surface, ev->x, ev->y, ev->width, ev->height);
+        if (wrapper->scene_tree) {
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, ev->x, ev->y);
+        }
+        if (wrapper->frame && ev->width > 0 && ev->height > 0) {
+            wrapper->frame->update_geometry(ev->width, ev->height);
+        }
+    }
+
+    static void handle_xwayland_request_move(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_move);
+        wrapper->backend->begin_xwayland_interactive_move(wrapper);
+    }
+
+    static void handle_xwayland_request_resize(struct wl_listener* listener, void* data) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_resize);
+        auto* ev = static_cast<struct wlr_xwayland_resize_event*>(data);
+        wrapper->backend->begin_xwayland_interactive_resize(wrapper, ev ? ev->edges : 0);
+    }
+
+    static void handle_xwayland_request_maximize(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_maximize);
+        bool should_max = !wrapper->is_maximized;
+        wrapper->backend->xwayland_set_maximized(wrapper, should_max);
+    }
+
+    static void handle_xwayland_request_fullscreen(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_fullscreen);
+        log::info("[FullscreenDebug] handle_xwayland_request_fullscreen: wrapper={}, class='{}', current_is_fullscreen={}",
+                  static_cast<void*>(wrapper),
+                  (wrapper && wrapper->xsurface && wrapper->xsurface->c_class) ? wrapper->xsurface->c_class : "unknown",
+                  wrapper ? wrapper->is_fullscreen : false);
+        wrapper->backend->xwayland_set_fullscreen(wrapper, !wrapper->is_fullscreen);
+    }
+
+    static void handle_xwayland_request_minimize(struct wl_listener* listener, void* data) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_minimize);
+        auto* ev = static_cast<struct wlr_xwayland_minimize_event*>(data);
+        wrapper->backend->xwayland_set_minimized(wrapper, ev ? ev->minimize : true);
+    }
+
+    static void handle_xwayland_request_activate(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, request_activate);
+        wrapper->backend->focus_xwayland(wrapper);
+    }
+
+    static void handle_xwayland_set_title(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, set_title);
+        if (wrapper->xsurface && wrapper->xsurface->title) {
+            log::debug("[XWayland] Title set to '{}'", wrapper->xsurface->title);
+        }
+    }
+
+    static void handle_xwayland_set_class(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, set_class);
+        if (wrapper->xsurface && wrapper->xsurface->c_class) {
+            log::debug("[XWayland] Class set to '{}'", wrapper->xsurface->c_class);
+        }
+    }
+
+    static void handle_xwayland_destroy(struct wl_listener* listener, void* /*data*/) {
+        XwaylandWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        log::info("[XWayland] Toplevel destroyed: wrapper={}", static_cast<void*>(wrapper));
+
+        if (wrapper->frame) {
+            wrapper->backend->detach_xwayland_ssd_frame(wrapper);
+        }
+
+        if (wrapper->backend) {
+            wrapper->backend->cleanup_foreign_toplevel_xwayland(wrapper);
+        }
+
+        std::string app_id_str = (wrapper->xsurface && wrapper->xsurface->c_class)
+            ? get_canonical_app_id(wrapper->xsurface->c_class) : "";
+        if (!app_id_str.empty() && TinexusServer::instance()) {
+            TinexusServer::instance()->notify_app_closed(app_id_str);
+        }
+
+        WorkspaceManager::instance().remove_window_from_workspace(reinterpret_cast<uint64_t>(wrapper));
+        if (wrapper->surface_id != 0) {
+            SurfaceManager::instance().remove_surface(wrapper->surface_id);
+            wrapper->surface_id = 0;
+        }
+
+        if (wrapper->backend->m_active_xwayland == wrapper) {
+            wrapper->backend->m_active_xwayland = nullptr;
+        }
+        if (wrapper->backend->m_grab_xwayland == wrapper) {
+            wrapper->backend->m_grab_xwayland = nullptr;
+            wrapper->backend->m_cursor_mode = CursorMode::Passthrough;
+        }
+
+        if (wrapper->associate.link.next) { wl_list_remove(&wrapper->associate.link); wrapper->associate.link.next = nullptr; }
+        if (wrapper->dissociate.link.next) { wl_list_remove(&wrapper->dissociate.link); wrapper->dissociate.link.next = nullptr; }
+        if (wrapper->map.link.next) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
+        if (wrapper->unmap.link.next) { wl_list_remove(&wrapper->unmap.link); wrapper->unmap.link.next = nullptr; }
+        if (wrapper->destroy.link.next) { wl_list_remove(&wrapper->destroy.link); wrapper->destroy.link.next = nullptr; }
+        if (wrapper->request_configure.link.next) { wl_list_remove(&wrapper->request_configure.link); wrapper->request_configure.link.next = nullptr; }
+        if (wrapper->request_move.link.next) { wl_list_remove(&wrapper->request_move.link); wrapper->request_move.link.next = nullptr; }
+        if (wrapper->request_resize.link.next) { wl_list_remove(&wrapper->request_resize.link); wrapper->request_resize.link.next = nullptr; }
+        if (wrapper->request_maximize.link.next) { wl_list_remove(&wrapper->request_maximize.link); wrapper->request_maximize.link.next = nullptr; }
+        if (wrapper->request_minimize.link.next) { wl_list_remove(&wrapper->request_minimize.link); wrapper->request_minimize.link.next = nullptr; }
+        if (wrapper->request_fullscreen.link.next) { wl_list_remove(&wrapper->request_fullscreen.link); wrapper->request_fullscreen.link.next = nullptr; }
+        if (wrapper->request_activate.link.next) { wl_list_remove(&wrapper->request_activate.link); wrapper->request_activate.link.next = nullptr; }
+        if (wrapper->set_title.link.next) { wl_list_remove(&wrapper->set_title.link); wrapper->set_title.link.next = nullptr; }
+        if (wrapper->set_class.link.next) { wl_list_remove(&wrapper->set_class.link); wrapper->set_class.link.next = nullptr; }
+
+        auto& list = wrapper->backend->m_xwayland_surfaces;
+        for (auto it = list.begin(); it != list.end(); ++it) {
+            if (it->get() == wrapper) {
+                list.erase(it);
+                break;
+            }
+        }
+    }
+
+    static void handle_unmanaged_associate(struct wl_listener* listener, void* /*data*/) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, associate);
+        struct wlr_xwayland_surface* xsurface = wrapper->xsurface;
+        if (!xsurface || !xsurface->surface) return;
+        log::info("[XWayland] Unmanaged associate: ({}, {}) {}x{}",
+                  xsurface->x, xsurface->y, xsurface->width, xsurface->height);
+
+        wrapper->map.notify = handle_unmanaged_map;
+        wl_signal_add(&xsurface->surface->events.map, &wrapper->map);
+
+        wrapper->unmap.notify = handle_unmanaged_unmap;
+        wl_signal_add(&xsurface->surface->events.unmap, &wrapper->unmap);
+
+        struct wlr_scene_tree* parent = wrapper->backend->m_scene_tree_top;
+        if (!parent) parent = &wrapper->backend->m_scene->tree;
+
+        wrapper->scene_tree = wlr_scene_subsurface_tree_create(parent, xsurface->surface);
+        if (wrapper->scene_tree) {
+            xsurface->data = wrapper->scene_tree;
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, xsurface->x, xsurface->y);
+        }
+    }
+
+    static void handle_unmanaged_dissociate(struct wl_listener* listener, void* /*data*/) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, dissociate);
+        if (wrapper->map.link.next) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
+        if (wrapper->unmap.link.next) { wl_list_remove(&wrapper->unmap.link); wrapper->unmap.link.next = nullptr; }
+        if (wrapper->scene_tree) {
+            wlr_scene_node_destroy(&wrapper->scene_tree->node);
+            wrapper->scene_tree = nullptr;
+        }
+    }
+
+    static void handle_unmanaged_map(struct wl_listener* listener, void* /*data*/) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, map);
+        if (wrapper->scene_tree && wrapper->xsurface) {
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->xsurface->x, wrapper->xsurface->y);
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+        }
+    }
+
+    static void handle_unmanaged_unmap(struct wl_listener* listener, void* /*data*/) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, unmap);
+        if (wrapper->scene_tree) {
+            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, false);
+        }
+    }
+
+    static void handle_unmanaged_request_configure(struct wl_listener* listener, void* data) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, request_configure);
+        auto* ev = static_cast<struct wlr_xwayland_surface_configure_event*>(data);
+        wlr_xwayland_surface_configure(ev->surface, ev->x, ev->y, ev->width, ev->height);
+        if (wrapper->scene_tree) {
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, ev->x, ev->y);
+        }
+    }
+
+    static void handle_unmanaged_set_geometry(struct wl_listener* listener, void* /*data*/) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, set_geometry);
+        if (wrapper->scene_tree && wrapper->xsurface) {
+            wlr_scene_node_set_position(&wrapper->scene_tree->node, wrapper->xsurface->x, wrapper->xsurface->y);
+        }
+    }
+
+    static void handle_unmanaged_destroy(struct wl_listener* listener, void* /*data*/) {
+        XwaylandUnmanagedWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        if (wrapper->associate.link.next) { wl_list_remove(&wrapper->associate.link); wrapper->associate.link.next = nullptr; }
+        if (wrapper->dissociate.link.next) { wl_list_remove(&wrapper->dissociate.link); wrapper->dissociate.link.next = nullptr; }
+        if (wrapper->map.link.next) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
+        if (wrapper->unmap.link.next) { wl_list_remove(&wrapper->unmap.link); wrapper->unmap.link.next = nullptr; }
+        if (wrapper->destroy.link.next) { wl_list_remove(&wrapper->destroy.link); wrapper->destroy.link.next = nullptr; }
+        if (wrapper->request_configure.link.next) { wl_list_remove(&wrapper->request_configure.link); wrapper->request_configure.link.next = nullptr; }
+        if (wrapper->set_geometry.link.next) { wl_list_remove(&wrapper->set_geometry.link); wrapper->set_geometry.link.next = nullptr; }
+
+        auto& list = wrapper->backend->m_xwayland_unmanaged;
+        for (auto it = list.begin(); it != list.end(); ++it) {
+            if (it->get() == wrapper) {
+                list.erase(it);
+                break;
+            }
+        }
+    }
+
+    static void handle_xwayland_new_surface(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_xwayland_new_surface);
+        auto* xsurface = static_cast<struct wlr_xwayland_surface*>(data);
+        if (!xsurface) return;
+
+        if (xsurface->override_redirect) {
+            log::info("[XWayland] New unmanaged surface (override_redirect=true)");
+            auto unmanaged = std::make_unique<XwaylandUnmanagedWrapper>();
+            unmanaged->xsurface = xsurface;
+            unmanaged->backend = self;
+
+            unmanaged->associate.notify = handle_unmanaged_associate;
+            wl_signal_add(&xsurface->events.associate, &unmanaged->associate);
+
+            unmanaged->dissociate.notify = handle_unmanaged_dissociate;
+            wl_signal_add(&xsurface->events.dissociate, &unmanaged->dissociate);
+
+            unmanaged->destroy.notify = handle_unmanaged_destroy;
+            wl_signal_add(&xsurface->events.destroy, &unmanaged->destroy);
+
+            unmanaged->request_configure.notify = handle_unmanaged_request_configure;
+            wl_signal_add(&xsurface->events.request_configure, &unmanaged->request_configure);
+
+            unmanaged->set_geometry.notify = handle_unmanaged_set_geometry;
+            wl_signal_add(&xsurface->events.set_geometry, &unmanaged->set_geometry);
+
+            if (xsurface->surface != nullptr) {
+                handle_unmanaged_associate(&unmanaged->associate, nullptr);
+            }
+
+            self->m_xwayland_unmanaged.push_back(std::move(unmanaged));
+            return;
+        }
+
+        const char* app_class = xsurface->c_class ? xsurface->c_class : "x11-window";
+        log::info("[XWayland] New managed X11 toplevel (class='{}')", app_class);
+
+        auto wrapper = std::make_unique<XwaylandWrapper>();
+        wrapper->xsurface = xsurface;
+        wrapper->backend = self;
+
+        wrapper->surface_id = SurfaceManager::instance().create_surface(
+            xsurface->pid,
+            app_class
+        );
+        SurfaceManager::instance().assign_role(wrapper->surface_id, SurfaceRole::XwaylandSurface);
+
+        auto& ws_mgr = WorkspaceManager::instance();
+        wrapper->workspace_id = ws_mgr.active_workspace_id();
+        ws_mgr.add_window_to_workspace(wrapper->workspace_id, reinterpret_cast<uint64_t>(wrapper.get()));
+
+        wrapper->associate.notify = handle_xwayland_associate;
+        wl_signal_add(&xsurface->events.associate, &wrapper->associate);
+
+        wrapper->dissociate.notify = handle_xwayland_dissociate;
+        wl_signal_add(&xsurface->events.dissociate, &wrapper->dissociate);
+
+        wrapper->destroy.notify = handle_xwayland_destroy;
+        wl_signal_add(&xsurface->events.destroy, &wrapper->destroy);
+
+        wrapper->request_configure.notify = handle_xwayland_request_configure;
+        wl_signal_add(&xsurface->events.request_configure, &wrapper->request_configure);
+
+        wrapper->request_move.notify = handle_xwayland_request_move;
+        wl_signal_add(&xsurface->events.request_move, &wrapper->request_move);
+
+        wrapper->request_resize.notify = handle_xwayland_request_resize;
+        wl_signal_add(&xsurface->events.request_resize, &wrapper->request_resize);
+
+        wrapper->request_maximize.notify = handle_xwayland_request_maximize;
+        wl_signal_add(&xsurface->events.request_maximize, &wrapper->request_maximize);
+
+        wrapper->request_minimize.notify = handle_xwayland_request_minimize;
+        wl_signal_add(&xsurface->events.request_minimize, &wrapper->request_minimize);
+
+        wrapper->request_fullscreen.notify = handle_xwayland_request_fullscreen;
+        wl_signal_add(&xsurface->events.request_fullscreen, &wrapper->request_fullscreen);
+
+        wrapper->request_activate.notify = handle_xwayland_request_activate;
+        wl_signal_add(&xsurface->events.request_activate, &wrapper->request_activate);
+
+        wrapper->set_title.notify = handle_xwayland_set_title;
+        wl_signal_add(&xsurface->events.set_title, &wrapper->set_title);
+
+        wrapper->set_class.notify = handle_xwayland_set_class;
+        wl_signal_add(&xsurface->events.set_class, &wrapper->set_class);
+
+        if (xsurface->surface != nullptr) {
+            handle_xwayland_associate(&wrapper->associate, nullptr);
+        }
+
+        self->m_xwayland_surfaces.push_back(std::move(wrapper));
     }
 
     static void handle_new_output(struct wl_listener* listener, void* data) {
@@ -883,12 +4131,53 @@ private:
                 log::info("[Backend] Scene output registered for '{}'", wlr_out->name);
             }
 
-            // Milestone 1: Draw a static blue background #0F172A
+            // Bug 3: destroy the previous bg_rect before creating a new one so
+            // hotplug cycles do not stack duplicate full-screen scene nodes.
+            if (self->m_bg_rect) {
+                log::info("[Backend] Hotplug: destroying previous bg_rect ({})", static_cast<void*>(self->m_bg_rect));
+                wlr_scene_node_destroy(&self->m_bg_rect->node);
+                self->m_bg_rect = nullptr;
+            }
             float color[4] = {0.059f, 0.09f, 0.165f, 1.0f}; // roughly #0F172A
-            struct wlr_scene_rect* bg_rect = wlr_scene_rect_create(self->m_scene_tree_background, 10000, 10000, color);
-            wlr_scene_node_set_position(&bg_rect->node, 0, 0);
+            self->m_bg_rect = wlr_scene_rect_create(self->m_scene_tree_background, 10000, 10000, color);
+            wlr_scene_node_set_position(&self->m_bg_rect->node, 0, 0);
+            int bg_node_count = wl_list_length(&self->m_scene_tree_background->children);
+            log::info("[Backend] Hotplug: active bg_rect={}, total background nodes={}",
+                      static_cast<void*>(self->m_bg_rect), bg_node_count);
 
             self->m_outputs.push_back(std::move(output));
+
+            // Reconfigure any layer surfaces with authoritative output geometry
+            for (auto* layer_w : self->m_layer_surfaces) {
+                if (!layer_w || !layer_w->layer_surface) continue;
+                if (!layer_w->layer_surface->output) {
+                    layer_w->layer_surface->output = wlr_out;
+                }
+                struct wlr_box full_area = {0, 0, 0, 0};
+                wlr_output_effective_resolution(layer_w->layer_surface->output, &full_area.width, &full_area.height);
+                struct wlr_box usable_area = full_area;
+                wlr_scene_layer_surface_v1_configure(layer_w->scene_layer, &full_area, &usable_area);
+            }
+
+            // Hotplug geometry synchronization for SSD frames (Bug B-3 fix)
+            for (const auto& w : self->m_toplevels) {
+                if (w && w->frame && w->toplevel && w->toplevel->base) {
+                    int32_t cur_w = w->toplevel->base->current.geometry.width;
+                    int32_t cur_h = w->toplevel->base->current.geometry.height;
+                    if (cur_w > 0 && cur_h > 0) {
+                        w->frame->update_geometry(cur_w, cur_h);
+                    }
+                }
+            }
+            for (const auto& xw : self->m_xwayland_surfaces) {
+                if (xw && xw->frame && xw->xsurface) {
+                    int32_t cur_w = xw->xsurface->width;
+                    int32_t cur_h = xw->xsurface->height;
+                    if (cur_w > 0 && cur_h > 0) {
+                        xw->frame->update_geometry(cur_w, cur_h);
+                    }
+                }
+            }
         } else {
             log::error("[Backend] Failed to initialize TinexusOutput for '{}'", wlr_out->name);
         }
@@ -907,15 +4196,15 @@ private:
                 break;
             case WLR_INPUT_DEVICE_POINTER:
                 log::info("[Input] Detected Pointer: {}", device->name);
-                wlr_cursor_attach_input_device(self->m_cursor, device);
+                self->setup_pointer(device);
                 break;
             case WLR_INPUT_DEVICE_TABLET:
                 log::info("[Input] Detected Tablet (Pointer): {}", device->name);
-                wlr_cursor_attach_input_device(self->m_cursor, device);
+                self->setup_pointer(device);
                 break;
             case WLR_INPUT_DEVICE_TOUCH:
                 log::info("[Input] Detected Touchscreen: {}", device->name);
-                wlr_cursor_attach_input_device(self->m_cursor, device);
+                self->setup_pointer(device);
                 break;
             case WLR_INPUT_DEVICE_TABLET_PAD:
                 log::info("[Input] Detected Tablet Pad: {}", device->name);
@@ -961,6 +4250,9 @@ private:
 
         wlr_seat_set_keyboard(m_seat, keyboard);
         m_keyboards.push_back(std::move(wrapper));
+
+        // Immediately re-assert keyboard focus to the active surface (e.g. lockscreen or active window)
+        FocusManager::instance().reassert_keyboard_focus();
     }
 
     static void handle_keyboard_modifiers(struct wl_listener* listener, void* data) {
@@ -995,9 +4287,16 @@ private:
         // SECURITY: when locked, ALL shortcuts are suppressed — keys go to lock client only
         if (!wrapper->backend->m_is_locked) {
             uint32_t wlr_mods = wlr_keyboard_get_modifiers(wrapper->keyboard);
-            if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed)) {
+            if (ShortcutEngine::instance().process_key_event(wlr_mods, event->keycode, is_pressed, primary_sym)) {
                 log::info("[Keyboard] Global shortcut intercepted — swallowing key event.");
                 return;
+            }
+        } else {
+            // Lock mode safety: ensure focus is strictly on lock surface
+            if (wrapper->backend->m_lock_surface != nullptr &&
+                FocusManager::instance().keyboard_focus() != wrapper->backend->m_lock_surface) {
+                log::warn("[Keyboard] Session locked but keyboard focus lost! Re-asserting lock surface focus.");
+                FocusManager::instance().set_keyboard_focus(wrapper->backend->m_lock_surface);
             }
         }
 
@@ -1009,12 +4308,50 @@ private:
             static_cast<uint32_t>(event->state));
     }
 
+    void setup_pointer(struct wlr_input_device* device) {
+        auto wrapper = std::make_unique<PointerWrapper>();
+        wrapper->device = device;
+        wrapper->backend = this;
+
+        wrapper->destroy.notify = handle_pointer_destroy;
+        wl_signal_add(&device->events.destroy, &wrapper->destroy);
+
+        wlr_cursor_attach_input_device(m_cursor, device);
+        m_pointers.push_back(std::move(wrapper));
+    }
+
+    static void handle_pointer_destroy(struct wl_listener* listener, void* data) {
+        PointerWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        WlrootsBackend* self = wrapper->backend;
+
+        log::info("[Input] Pointer device destroyed: '{}'", wrapper->device->name);
+        wlr_cursor_detach_input_device(self->m_cursor, wrapper->device);
+        wl_list_remove(&wrapper->destroy.link);
+
+        for (auto it = self->m_pointers.begin(); it != self->m_pointers.end(); ++it) {
+            if (it->get() == wrapper) {
+                self->m_pointers.erase(it);
+                break;
+            }
+        }
+    }
+
     static void handle_keyboard_destroy(struct wl_listener* listener, void* data) {
         KeyboardWrapper* wrapper = wl_container_of(listener, wrapper, destroy);
+        WlrootsBackend* self = wrapper->backend;
+
         wl_list_remove(&wrapper->modifiers.link);
         wl_list_remove(&wrapper->key.link);
         wl_list_remove(&wrapper->destroy.link);
-        // Remove from m_keyboards logic (simplified for now)
+
+        if (self) {
+            for (auto it = self->m_keyboards.begin(); it != self->m_keyboards.end(); ++it) {
+                if (it->get() == wrapper) {
+                    self->m_keyboards.erase(it);
+                    break;
+                }
+            }
+        }
     }
 
     static void handle_cursor_motion(struct wl_listener* listener, void* data) {
@@ -1032,20 +4369,176 @@ private:
     }
 
     void process_cursor_motion(uint32_t time) {
-        // [3D.2] Cursor image — keep hardware cursor visible
-        wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, "default");
+        if (m_cursor_mode == CursorMode::Passthrough) {
+            wlr_cursor_set_xcursor(m_cursor, m_cursor_mgr, "default");
+        }
 
         if (m_cursor_mode == CursorMode::Move && m_grabbed_toplevel != nullptr) {
+            // Drag > 8px triggers un-snap / un-maximize
+            double drag_dist = std::hypot(m_cursor->x - m_grab_x, m_cursor->y - m_grab_y);
+            if (drag_dist > 8.0) {
+                if (m_grabbed_toplevel->state_machine.state() == WindowState::Maximized) {
+                    toplevel_set_maximized(m_grabbed_toplevel, false);
+                    const auto& norm = m_grabbed_toplevel->state_machine.geometry().normal_geom;
+                    m_grab_geo_x = static_cast<int>(m_cursor->x - (norm.width / 2.0));
+                    m_grab_geo_y = static_cast<int>(m_cursor->y - 15);
+                    m_grab_x = m_cursor->x;
+                    m_grab_y = m_cursor->y;
+                } else if (m_grabbed_toplevel->state_machine.snap_mode() != SnapMode::None) {
+                    toplevel_restore_snap(m_grabbed_toplevel);
+                    const auto& norm = m_grabbed_toplevel->state_machine.geometry().normal_geom;
+                    m_grab_geo_x = static_cast<int>(m_cursor->x - (norm.width / 2.0));
+                    m_grab_geo_y = static_cast<int>(m_cursor->y - 15);
+                    m_grab_x = m_cursor->x;
+                    m_grab_y = m_cursor->y;
+                }
+            }
+
             int new_x = m_grab_geo_x + static_cast<int>(m_cursor->x - m_grab_x);
             int new_y = m_grab_geo_y + static_cast<int>(m_cursor->y - m_grab_y);
             wlr_scene_node_set_position(&m_grabbed_toplevel->scene_tree->node, new_x, new_y);
+            if (m_grabbed_toplevel->state_machine.state() == WindowState::Normal &&
+                m_grabbed_toplevel->state_machine.snap_mode() == SnapMode::None) {
+                m_grabbed_toplevel->state_machine.update_floating_geometry(
+                    new_x,
+                    new_y,
+                    m_grabbed_toplevel->state_machine.geometry().current_geom.width,
+                    m_grabbed_toplevel->state_machine.geometry().current_geom.height
+                );
+            }
+
+            struct wlr_output* out = wlr_output_layout_output_at(m_output_layout, m_cursor->x, m_cursor->y);
+            if (!out) out = get_output_for_toplevel(m_grabbed_toplevel);
+            m_pending_snap = detect_snap_zone(m_cursor->x, m_cursor->y, out);
+            return;
+        } else if (m_cursor_mode == CursorMode::Move && m_grab_xwayland != nullptr) {
+            double drag_dist = std::hypot(m_cursor->x - m_grab_x, m_cursor->y - m_grab_y);
+            if (drag_dist > 8.0) {
+                if (m_grab_xwayland->is_maximized) {
+                    xwayland_set_maximized(m_grab_xwayland, false);
+                    int32_t rw = m_grab_xwayland->saved_width > 0 ? m_grab_xwayland->saved_width : 800;
+                    m_grab_geo_x = static_cast<int>(m_cursor->x - (rw / 2.0));
+                    m_grab_geo_y = static_cast<int>(m_cursor->y - 15);
+                    m_grab_x = m_cursor->x;
+                    m_grab_y = m_cursor->y;
+                } else if (m_grab_xwayland->state_machine.snap_mode() != SnapMode::None) {
+                    m_grab_xwayland->state_machine.request_restore();
+                    const auto& norm = m_grab_xwayland->state_machine.geometry().normal_geom;
+                    int32_t rw = norm.width > 0 ? norm.width : (m_grab_xwayland->saved_width > 0 ? m_grab_xwayland->saved_width : 800);
+                    int32_t rh = norm.height > 0 ? norm.height : (m_grab_xwayland->saved_height > 0 ? m_grab_xwayland->saved_height : 600);
+                    wlr_xwayland_surface_configure(m_grab_xwayland->xsurface, m_grab_xwayland->saved_x, m_grab_xwayland->saved_y, rw, rh);
+                    if (m_grab_xwayland->frame) {
+                        m_grab_xwayland->frame->update_geometry(rw, rh);
+                    }
+                    m_grab_geo_x = static_cast<int>(m_cursor->x - (rw / 2.0));
+                    m_grab_geo_y = static_cast<int>(m_cursor->y - 15);
+                    m_grab_x = m_cursor->x;
+                    m_grab_y = m_cursor->y;
+                }
+            }
+
+            int new_x = m_grab_geo_x + static_cast<int>(m_cursor->x - m_grab_x);
+            int new_y = m_grab_geo_y + static_cast<int>(m_cursor->y - m_grab_y);
+            if (m_grab_xwayland->scene_tree) {
+                wlr_scene_node_set_position(&m_grab_xwayland->scene_tree->node, new_x, new_y);
+            }
+            if (m_grab_xwayland->xsurface) {
+                wlr_xwayland_surface_configure(m_grab_xwayland->xsurface, new_x, new_y,
+                                               m_grab_xwayland->xsurface->width,
+                                               m_grab_xwayland->xsurface->height);
+            }
+            if (m_grab_xwayland->state_machine.state() == WindowState::Normal &&
+                m_grab_xwayland->state_machine.snap_mode() == SnapMode::None) {
+                m_grab_xwayland->state_machine.update_floating_geometry(
+                    new_x,
+                    new_y,
+                    m_grab_xwayland->xsurface->width > 0 ? m_grab_xwayland->xsurface->width : 800,
+                    m_grab_xwayland->xsurface->height > 0 ? m_grab_xwayland->xsurface->height : 600
+                );
+            }
+
+            struct wlr_output* out = wlr_output_layout_output_at(m_output_layout, m_cursor->x, m_cursor->y);
+            if (!out) out = get_output_for_xwayland(m_grab_xwayland);
+            m_pending_snap = detect_snap_zone(m_cursor->x, m_cursor->y, out);
+            return;
+        } else if (m_cursor_mode == CursorMode::Resize && m_grab_xwayland != nullptr) {
+            double dx = m_cursor->x - m_grab_x;
+            double dy = m_cursor->y - m_grab_y;
+            int32_t init_x = m_grab_geo_x;
+            int32_t init_y = m_grab_geo_y;
+            int32_t init_w = m_grab_geobox.width;
+            int32_t init_h = m_grab_geobox.height;
+            int32_t new_x = init_x;
+            int32_t new_y = init_y;
+            int32_t new_w = init_w;
+            int32_t new_h = init_h;
+
+            if (m_grab_edges & WLR_EDGE_RIGHT) {
+                new_w = std::clamp(init_w + static_cast<int32_t>(dx), 100, 32767);
+            } else if (m_grab_edges & WLR_EDGE_LEFT) {
+                new_w = std::clamp(init_w - static_cast<int32_t>(dx), 100, 32767);
+                new_x = init_x + (init_w - new_w);
+            }
+            if (m_grab_edges & WLR_EDGE_BOTTOM) {
+                new_h = std::clamp(init_h + static_cast<int32_t>(dy), 100, 32767);
+            } else if (m_grab_edges & WLR_EDGE_TOP) {
+                new_h = std::clamp(init_h - static_cast<int32_t>(dy), 100, 32767);
+                new_y = init_y + (init_h - new_h);
+            }
+            if (m_grab_xwayland->scene_tree) {
+                wlr_scene_node_set_position(&m_grab_xwayland->scene_tree->node, new_x, new_y);
+            }
+            if (m_grab_xwayland->xsurface) {
+                wlr_xwayland_surface_configure(m_grab_xwayland->xsurface, new_x, new_y, new_w, new_h);
+            }
+            if (m_grab_xwayland->frame) {
+                m_grab_xwayland->frame->update_geometry(new_w, new_h);
+            }
             return;
         } else if (m_cursor_mode == CursorMode::Resize && m_grabbed_toplevel != nullptr) {
-            // Simplified resize: just update width/height
-            // Edge logic would normally be more complex (adjusting position for left/top edges)
-            int new_width = m_grab_geobox.width + static_cast<int>(m_cursor->x - m_grab_x);
-            int new_height = m_grab_geobox.height + static_cast<int>(m_cursor->y - m_grab_y);
-            wlr_xdg_toplevel_set_size(m_grabbed_toplevel->toplevel, new_width, new_height);
+            double dx = m_cursor->x - m_grab_x;
+            double dy = m_cursor->y - m_grab_y;
+
+            int32_t init_x = m_grab_geo_x;
+            int32_t init_y = m_grab_geo_y;
+            int32_t init_w = m_grab_geobox.width;
+            int32_t init_h = m_grab_geobox.height;
+
+            int32_t new_x = init_x;
+            int32_t new_y = init_y;
+            int32_t new_w = init_w;
+            int32_t new_h = init_h;
+
+            int32_t min_w = std::max(100, m_grabbed_toplevel->toplevel->current.min_width);
+            int32_t min_h = std::max(100, m_grabbed_toplevel->toplevel->current.min_height);
+            int32_t max_w = m_grabbed_toplevel->toplevel->current.max_width > 0 ?
+                            m_grabbed_toplevel->toplevel->current.max_width : 32767;
+            int32_t max_h = m_grabbed_toplevel->toplevel->current.max_height > 0 ?
+                            m_grabbed_toplevel->toplevel->current.max_height : 32767;
+
+            if (m_grab_edges & WLR_EDGE_RIGHT) {
+                new_w = std::clamp(init_w + static_cast<int32_t>(dx), min_w, max_w);
+            } else if (m_grab_edges & WLR_EDGE_LEFT) {
+                new_w = std::clamp(init_w - static_cast<int32_t>(dx), min_w, max_w);
+                new_x = init_x + (init_w - new_w);
+            }
+
+            if (m_grab_edges & WLR_EDGE_BOTTOM) {
+                new_h = std::clamp(init_h + static_cast<int32_t>(dy), min_h, max_h);
+            } else if (m_grab_edges & WLR_EDGE_TOP) {
+                new_h = std::clamp(init_h - static_cast<int32_t>(dy), min_h, max_h);
+                new_y = init_y + (init_h - new_h);
+            }
+
+            if (m_grabbed_toplevel->scene_tree) {
+                wlr_scene_node_set_position(&m_grabbed_toplevel->scene_tree->node, new_x, new_y);
+            }
+            wlr_xdg_toplevel_set_size(m_grabbed_toplevel->toplevel, new_w, new_h);
+            if (m_grabbed_toplevel->state_machine.state() == WindowState::Normal &&
+                m_grabbed_toplevel->state_machine.snap_mode() == SnapMode::None) {
+                m_grabbed_toplevel->state_machine.update_floating_geometry(new_x, new_y, new_w, new_h);
+            }
+            wlr_xdg_surface_schedule_configure(m_grabbed_toplevel->toplevel->base);
             return;
         }
 
@@ -1065,20 +4558,119 @@ private:
 
         // Click-to-focus: on button press, find window from clicked scene node, focus & raise it
         if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
-            double sx{0.0}, sy{0.0};
-            struct wlr_scene_node* node = wlr_scene_node_at(
-                &self->m_scene->tree.node, self->m_cursor->x, self->m_cursor->y, &sx, &sy);
-            if (node) {
-                ToplevelWrapper* clicked_wrapper = self->find_toplevel_from_node(node);
-                if (clicked_wrapper != nullptr) {
-                    self->focus_toplevel(clicked_wrapper);
+            if (self->m_is_locked && self->m_lock_surface != nullptr) {
+                FocusManager::instance().set_keyboard_focus(self->m_lock_surface);
+            } else {
+                double sx{0.0}, sy{0.0};
+                struct wlr_scene_node* node = wlr_scene_node_at(
+                    &self->m_scene->tree.node, self->m_cursor->x, self->m_cursor->y, &sx, &sy);
+                if (node) {
+                    ToplevelWrapper* clicked_wrapper = self->find_toplevel_from_node(node);
+                    if (clicked_wrapper != nullptr) {
+                        const char* app_name = (clicked_wrapper->toplevel && clicked_wrapper->toplevel->app_id)
+                            ? clicked_wrapper->toplevel->app_id : "unknown";
+                        log::info("[Window] Click at ({:.1f}, {:.1f}) focused toplevel '{}' ({})",
+                                  self->m_cursor->x, self->m_cursor->y,
+                                  app_name, static_cast<void*>(clicked_wrapper));
+                        self->focus_toplevel(clicked_wrapper);
+
+                        // If clicked window has an SSD frame, check if titlebar/traffic lights consume the event
+                        if (clicked_wrapper->frame != nullptr) {
+                            bool handled = TinexusDecorationManager::instance().handle_cursor_button(
+                                node, self->m_cursor->x, self->m_cursor->y,
+                                event->button, event->state, clicked_wrapper);
+                            if (handled) {
+                                return; // Consumed by Tinexus SSD titlebar or traffic lights!
+                            }
+                        }
+                    } else {
+                        XwaylandWrapper* clicked_xwayland = self->find_xwayland_from_node(node);
+                        if (clicked_xwayland != nullptr) {
+                            log::info("[XWayland] Click at ({:.1f}, {:.1f}) focused X11 window ({})",
+                                      self->m_cursor->x, self->m_cursor->y,
+                                      static_cast<void*>(clicked_xwayland));
+                            self->focus_xwayland(clicked_xwayland);
+
+                            // If clicked XWayland window has an SSD frame, check if titlebar/traffic lights consume the event
+                            if (clicked_xwayland->frame != nullptr) {
+                                bool handled = TinexusDecorationManager::instance().handle_cursor_button(
+                                    node, self->m_cursor->x, self->m_cursor->y,
+                                    event->button, event->state, clicked_xwayland);
+                                if (handled) {
+                                    return; // Consumed by Tinexus SSD titlebar or traffic lights!
+                                }
+                            }
+                        } else {
+                            // Check if click hit a layer-shell surface with keyboard interactivity (e.g. Launcher)
+                            bool found_layer = false;
+                            for (auto* ls : self->m_layer_surfaces) {
+                                if (ls && ls->layer_surface && ls->layer_surface->surface && ls->scene_layer) {
+                                    struct wlr_scene_node* cur = node;
+                                    while (cur) {
+                                        if (cur == &ls->scene_layer->tree->node) {
+                                            if (ls->layer_surface->current.keyboard_interactive != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) {
+                                                log::info("[LayerShell] Click focused layer surface '{}'",
+                                                          ls->layer_surface->wl_namespace ? ls->layer_surface->wl_namespace : "unnamed");
+                                                FocusManager::instance().set_keyboard_focus(ls->layer_surface->surface);
+                                            }
+                                            found_layer = true;
+                                            break;
+                                        }
+                                        cur = cur->parent ? &cur->parent->node : nullptr;
+                                    }
+                                    if (found_layer) break;
+                                }
+                            }
+                            if (!found_layer) {
+                                if (self->m_cursor->y <= 60.0) {
+                                    log::debug("[Window] Click at ({:.1f}, {:.1f}) hit non-toplevel node {}",
+                                               self->m_cursor->x, self->m_cursor->y, static_cast<void*>(node));
+                                }
+                                // Clear keyboard focus when clicking desktop background / non-interactive layer
+                                FocusManager::instance().set_keyboard_focus(nullptr);
+                            }
+                        }
+                    }
+                } else {
+                    // Click hit empty background area with no node
+                    FocusManager::instance().set_keyboard_focus(nullptr);
                 }
             }
         } else if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+            if (self->m_cursor_mode == CursorMode::Move) {
+                if (self->m_grabbed_toplevel != nullptr) {
+                    if (self->m_pending_snap == SnapMode::Top) {
+                        self->toplevel_set_maximized(self->m_grabbed_toplevel, true);
+                    } else if (self->m_pending_snap != SnapMode::None) {
+                        self->toplevel_set_snap(self->m_grabbed_toplevel, self->m_pending_snap);
+                    }
+                    if (!self->m_grabbed_toplevel->is_fullscreen) {
+                        self->restore_window_node(self->m_grabbed_toplevel->scene_tree, self->m_grabbed_toplevel->workspace_id);
+                    }
+                    self->m_pending_snap = SnapMode::None;
+                } else if (self->m_grab_xwayland != nullptr) {
+                    if (self->m_pending_snap == SnapMode::Top) {
+                        self->xwayland_set_maximized(self->m_grab_xwayland, true);
+                    } else if (self->m_pending_snap != SnapMode::None) {
+                        self->xwayland_set_snap(self->m_grab_xwayland, self->m_pending_snap);
+                    }
+                    if (!self->m_grab_xwayland->is_fullscreen) {
+                        self->restore_window_node(self->m_grab_xwayland->scene_tree, self->m_grab_xwayland->workspace_id);
+                    }
+                    self->m_pending_snap = SnapMode::None;
+                }
+            } else if (self->m_cursor_mode == CursorMode::Resize && self->m_grabbed_toplevel != nullptr) {
+                wlr_xdg_toplevel_set_resizing(self->m_grabbed_toplevel->toplevel, false);
+                wlr_xdg_surface_schedule_configure(self->m_grabbed_toplevel->toplevel->base);
+            }
+
             if (self->m_cursor_mode != CursorMode::Passthrough) {
                 log::info("[Window] Ended grab");
                 self->m_cursor_mode = CursorMode::Passthrough;
                 self->m_grabbed_toplevel = nullptr;
+                self->m_grab_xwayland = nullptr;
+                self->m_grab_edges = 0;
+                wlr_cursor_set_xcursor(self->m_cursor, self->m_cursor_mgr, "default");
             }
         }
 
@@ -1102,6 +4694,72 @@ private:
 
     static void handle_cursor_frame(struct wl_listener* listener, void* data) {
         SeatManager::instance().notify_frame();
+    }
+
+    static void handle_cursor_swipe_begin(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_swipe_begin_listener);
+        auto* event = static_cast<struct wlr_pointer_swipe_begin_event*>(data);
+
+        log::info("[Gesture] Swipe begin: fingers={}", event->fingers);
+
+        // Intercept 3-finger (or 4-finger) horizontal swipe for macOS-style Spaces navigation
+        if (event->fingers >= 3) {
+            self->m_active_swipe_gesture = true;
+            WorkspaceManager::instance().begin_gesture_swipe();
+        } else {
+            self->m_active_swipe_gesture = false;
+            if (self->m_pointer_gestures && self->m_seat) {
+                wlr_pointer_gestures_v1_send_swipe_begin(self->m_pointer_gestures, self->m_seat,
+                                                         event->time_msec, event->fingers);
+            }
+        }
+    }
+
+    static void handle_cursor_swipe_update(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_swipe_update_listener);
+        auto* event = static_cast<struct wlr_pointer_swipe_update_event*>(data);
+
+        if (self->m_active_swipe_gesture) {
+            WorkspaceManager::instance().update_gesture_swipe(event->dx, event->time_msec);
+        } else {
+            if (self->m_pointer_gestures && self->m_seat) {
+                wlr_pointer_gestures_v1_send_swipe_update(self->m_pointer_gestures, self->m_seat,
+                                                          event->time_msec, event->dx, event->dy);
+            }
+        }
+    }
+
+    static void handle_cursor_swipe_end(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_cursor_swipe_end_listener);
+        auto* event = static_cast<struct wlr_pointer_swipe_end_event*>(data);
+
+        log::info("[Gesture] Swipe end: cancelled={}", event->cancelled);
+
+        if (self->m_active_swipe_gesture) {
+            WorkspaceManager::instance().end_gesture_swipe(event->cancelled);
+            self->m_active_swipe_gesture = false;
+        } else {
+            if (self->m_pointer_gestures && self->m_seat) {
+                wlr_pointer_gestures_v1_send_swipe_end(self->m_pointer_gestures, self->m_seat,
+                                                       event->time_msec, event->cancelled);
+            }
+        }
+    }
+
+    static void handle_request_set_selection(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_request_set_selection_listener);
+        auto* event = static_cast<struct wlr_seat_request_set_selection_event*>(data);
+        wlr_seat_set_selection(self->m_seat, event->source, event->serial);
+        log::info("[Clipboard] Selection set on seat0 (source={}, serial={})",
+                  static_cast<void*>(event->source), event->serial);
+    }
+
+    static void handle_request_set_primary_selection(struct wl_listener* listener, void* data) {
+        WlrootsBackend* self = wl_container_of(listener, self, m_request_set_primary_selection_listener);
+        auto* event = static_cast<struct wlr_seat_request_set_primary_selection_event*>(data);
+        wlr_seat_set_primary_selection(self->m_seat, event->source, event->serial);
+        log::info("[Clipboard] Primary selection set on seat0 (source={}, serial={})",
+                  static_cast<void*>(event->source), event->serial);
     }
 };
 

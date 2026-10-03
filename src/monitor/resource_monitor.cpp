@@ -1,8 +1,7 @@
 #include "monitor/resource_monitor.hpp"
 #include "monitor/memory_parser.hpp"
-#include "monitor/disk_parser.hpp"
-#include "monitor/network_parser.hpp"
-#include "monitor/process_tree.hpp"
+#include "monitor/power_parser.hpp"
+#include "monitor/gpu_parser.hpp"
 #include "common/logger.hpp"
 
 namespace tinexus::monitor {
@@ -14,13 +13,14 @@ ResourceMonitor& ResourceMonitor::instance() noexcept {
 
 SystemSnapshot ResourceMonitor::collect_snapshot() {
     SystemSnapshot snap;
-    snap.cpu_cores = m_cpu_parser.parse_cpu_usage();
+    snap.cpu_cores = m_cpu_parser.parse_cpu_usage(snap.cpu_aggregate_usage_percent);
     snap.memory = MemoryParser::parse_memory();
-    snap.disk = DiskParser::parse_diskstats();
-    snap.network = NetworkParser::parse_network();
-    snap.processes = ProcessTree::discover_processes();
+    snap.disk = m_disk_parser.parse_diskstats();
+    snap.network = m_network_parser.parse_network();
+    snap.power = PowerParser::parse_power();
+    snap.gpu = GpuParser::parse_gpu();
+    snap.processes = m_process_tree.discover_processes();
     snap.cpu_temperature_c = 42.5f;
-    snap.gpu_vendor = "Intel/AMD DRM Graphics Device";
 
     std::lock_guard<std::mutex> lock(m_mutex);
     m_history_ring.push_back(snap);
@@ -28,8 +28,6 @@ SystemSnapshot ResourceMonitor::collect_snapshot() {
         m_history_ring.pop_front();
     }
 
-    log::info("ResourceMonitor: Collected snapshot (Cores={}, Processes={}, RAM free={} MB)",
-              snap.cpu_cores.size(), snap.processes.size(), snap.memory.available_ram_bytes / (1024 * 1024));
     return snap;
 }
 

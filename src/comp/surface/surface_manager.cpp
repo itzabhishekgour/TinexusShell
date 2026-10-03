@@ -10,13 +10,22 @@ SurfaceManager& SurfaceManager::instance() noexcept {
 
 uint32_t SurfaceManager::create_surface(pid_t pid, const std::string& app_id) {
     uint32_t id = m_next_id++;
-    SurfaceRecord record{id, pid, app_id, 1, "HDMI-A-1", SurfaceState::Created, SurfaceRole::None, SurfaceLifecycle::Created};
+    SurfaceRecord record{id, pid, app_id, 1, "", SurfaceState::Created, SurfaceRole::None, SurfaceLifecycle::Created};
     m_surfaces[id] = record;
 
     log::info("PID={} APP={} SURFACE={} WORKSPACE={} OUTPUT={} STATE={} LIFECYCLE={}",
               pid, app_id, id, record.workspace_id, record.output_name, surface_state_to_string(record.state), surface_lifecycle_to_string(record.lifecycle));
 
     return id;
+}
+
+bool SurfaceManager::remove_surface(uint32_t surface_id) {
+    auto it = m_surfaces.find(surface_id);
+    if (it == m_surfaces.end()) return false;
+
+    log::info("SURFACE={} LIFECYCLE=Destroyed (removed from SurfaceManager)", surface_id);
+    m_surfaces.erase(it);
+    return true;
 }
 
 bool SurfaceManager::assign_role(uint32_t surface_id, SurfaceRole role) {

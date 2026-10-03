@@ -19,6 +19,7 @@
 #include <memory>
 #include <functional>
 #include <optional>
+#include <vector>
 
 struct xdg_wm_base;
 struct xdg_surface;
@@ -56,10 +57,15 @@ private:
     WindowState m_state{WindowState::Creating};
     bool m_should_close{false};
     bool m_is_maximized{false};
+    bool m_is_fullscreen{false};
+    bool m_is_activated{false};
+    bool m_is_tiled{false};
 
     Ref<Widget> m_root_widget{nullptr};
     bool m_frame_ready{true};
     bool m_configured{false};
+    bool m_needs_repaint{true};
+    std::string m_app_id;
 
     std::optional<wayland::WaylandConnection> m_connection;
     std::optional<wayland::WaylandEventLoop> m_event_loop;
@@ -72,7 +78,14 @@ private:
     xdg_toplevel* m_xdg_toplevel{nullptr};
     zwlr_layer_surface_v1* m_layer_surface{nullptr};
     wl_callback* m_frame_callback{nullptr};
-    int32_t m_output_width{1920}; ///< Compositor output width for centering (updated on configure)
+    uint32_t m_anchors{0};
+    bool m_has_custom_margins{false};
+    int32_t m_margin_top{0};
+    int32_t m_margin_right{0};
+    int32_t m_margin_bottom{0};
+    int32_t m_margin_left{0};
+    std::vector<Rect> m_input_region_rects;
+    bool m_has_custom_input_region{false};
 
     CommandBuffer m_command_buffer;
     std::unique_ptr<Painter> m_painter;
@@ -89,7 +102,14 @@ public:
 
     // Creates a new production Wayland window. Returns Ref<Window> per intrusive Object ref-counting rule.
     [[nodiscard]] static Ref<Window> create(
-        uint32 width, uint32 height, std::string_view title = "Tinexus Application", bool layer_shell = false) noexcept;
+        uint32 width, uint32 height, std::string_view title = "Tinexus Application",
+        bool layer_shell = false, std::string_view app_id = "") noexcept;
+
+    void request_repaint() noexcept { m_needs_repaint = true; }
+    [[nodiscard]] bool needs_repaint() const noexcept { return m_needs_repaint; }
+
+    void set_app_id(std::string_view app_id) noexcept { m_app_id = app_id; }
+    [[nodiscard]] std::string_view app_id() const noexcept { return m_app_id; }
 
     void resize(uint32 width, uint32 height) noexcept;
 
@@ -121,6 +141,15 @@ public:
     // Configure layer shell anchors and exclusive zone. Must be called before wait() or create() if possible.
     // Actually, can be called on a created window.
     void set_layer_shell_config(LayerType layer, uint32_t anchors, int32_t exclusive_zone) noexcept;
+    void set_layer_margins(int32_t top, int32_t right, int32_t bottom, int32_t left) noexcept;
+    [[nodiscard]] uint32_t layer_anchors() const noexcept { return m_anchors; }
+
+    // Input region configuration (Wayland wl_surface_set_input_region)
+    // When configured, pointer events outside these rectangles pass through to surfaces beneath.
+    void set_input_region(const std::vector<Rect>& rects) noexcept;
+    void clear_input_region() noexcept;
+    [[nodiscard]] const std::vector<Rect>& input_region() const noexcept { return m_input_region_rects; }
+    [[nodiscard]] bool has_custom_input_region() const noexcept { return m_has_custom_input_region; }
     
     // Set tick callback to run in the event loop every frame
     void set_tick_callback(std::function<void()> cb) noexcept;
@@ -159,6 +188,10 @@ public:
 
     // Returns true if the window is currently in maximized state.
     [[nodiscard]] bool is_maximized() const noexcept { return m_is_maximized; }
+    [[nodiscard]] bool is_fullscreen() const noexcept { return m_is_fullscreen; }
+    [[nodiscard]] bool is_activated() const noexcept { return m_is_activated; }
+    [[nodiscard]] bool is_tiled() const noexcept { return m_is_tiled; }
+    void set_xdg_states(bool maximized, bool fullscreen, bool activated, bool tiled) noexcept;
 
     void close() noexcept;
 

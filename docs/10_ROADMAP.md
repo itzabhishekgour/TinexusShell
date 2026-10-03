@@ -78,7 +78,8 @@ Version 0.1 is for **developers and architects only**. It is not suitable for da
 - [x] wlroots backend initialization (DRM/KMS, headless)
 - [x] Wayland socket creation and client connection
 - [x] xdg-shell support (basic windows: map, unmap, move, resize)
-- [x] XWayland integration
+- [ ] XWayland integration (NOT implemented — do not claim until infrastructure is built and verified)
+<!-- NOTE: Flatpak/XWayland are NOT implemented — do not add these claims until infrastructure is built and verified. -->
 - [x] Single monitor support
 - [x] Basic window focus management (click to focus)
 - [x] Keyboard input forwarding to apps

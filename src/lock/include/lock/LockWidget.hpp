@@ -1,6 +1,7 @@
 #pragma once
 
 #include <txui/widgets/Widget.hpp>
+#include <txui/widgets/TextInput.hpp>
 #include <txui/math/Rect.hpp>
 #include <string>
 
@@ -8,7 +9,7 @@ namespace tinexus::lock {
 
 class LockWidget : public txui::Widget {
 public:
-    LockWidget() = default;
+    LockWidget();
     ~LockWidget() override = default;
 
     void add_password_char(char c);
@@ -29,10 +30,13 @@ public:
 
 protected:
     txui::Size measure_override(const txui::Constraints& constraints) noexcept override;
+    void layout_override(const txui::Rect& frame) noexcept override;
     void paint_override(txui::Painter& painter) const noexcept override;
 
 private:
     std::string m_password;
+    txui::Ref<txui::TextInput> m_input;
+
     bool m_shaking{false};
     int  m_shake_offset{0};   // pixels of horizontal displacement, updated by advance_shake()
     int  m_shake_frame{0};    // current frame within the 8-frame shake sequence

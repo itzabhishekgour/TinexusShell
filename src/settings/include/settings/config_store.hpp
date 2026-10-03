@@ -19,8 +19,8 @@ struct PlatformSettings {
     std::string wallpaper_mode{"fill"};
 
     // Display
-    float display_scale{1.25f};
-    std::string resolution{"1920x1080@144Hz"};
+    float display_scale{1.0f};
+    std::string resolution{"auto"};
 
     // Input
     std::string keymap{"us"};

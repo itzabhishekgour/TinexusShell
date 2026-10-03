@@ -1,10 +1,12 @@
-# Tinexus Shell — Project Vision
+# Tinexus Platform — Project Vision
 
 > **Document:** 01_VISION.md  
-> **Version:** 1.0.0  
+> **Version:** 1.1.0 (aligned with production codebase, 2026-10-03)  
 > **Status:** FROZEN  
 > **Classification:** Public — Open Source  
-> **Depends on:** ADR-000 (Architecture Review)
+> **Depends on:** ADR-000 (Architecture Review, Revision 1.1.0)
+
+> **Alignment Note (v1.1.0):** The original vision described a strictly empty desktop driven only by `Ctrl+K`. The implemented platform keeps `Ctrl+K` as the primary interaction but ships a deliberately minimal **three-surface shell**: the floating TopBar (`tinexus-shell`), an auto-hiding Dock (`tinexus-dock`) and the Command Palette (`tinexus-launcher`). "Empty by default" now means *quiet and unobtrusive*, not *absent*. Where this document and the code differ, the code and ADR-000 v1.1.0 are authoritative.
 
 ---
 
@@ -64,7 +66,7 @@ If it increases cognitive load without a proportional gain in power or capabilit
 
 **Principle I: The Desktop is a Canvas, Not a Toolbar**
 
-A blank canvas is not empty — it is full of potential. When a user opens their computer, they should see their wallpaper and nothing else. The desktop should feel like opening a clean notebook: ready for whatever the user chooses to create. Every application, every action, every file should be summoned intentionally — not displayed by default.
+A blank canvas is not empty — it is full of potential. When a user opens their computer, the wallpaper dominates. The only persistent chrome is a slim floating TopBar pill (clock, telemetry, quick-settings flyouts) and an **intellihide Dock** that retreats when windows need the space and disappears entirely behind fullscreen content (a dedicated fullscreen scene layer occludes both). Every application, action and file is still summoned intentionally.
 
 **Principle II: Intent Over Discovery**
 
@@ -80,7 +82,7 @@ A 100ms delay is perceived by humans. A 300ms delay breaks flow. A 1-second dela
 
 ## 3. Mission Statement
 
-> Tinexus Shell is an open-source Linux Desktop Environment designed to eliminate visual noise, maximize user focus, and deliver the fastest, most elegant command-palette-first desktop experience on any operating system. It runs on the Linux kernel with Wayland and is built by engineers who believe the desktop can still be reinvented.
+> Tinexus is an open-source, Wayland-native Linux desktop platform designed to eliminate visual noise, maximize user focus, and deliver the fastest, most elegant command-palette-first desktop experience. It consists of a wlroots-based compositor (`tinexus-comp`), a supervised set of pure C++20 daemons, and a Qt6/QML shell (TopBar, Dock, Launcher, Lock Screen), and ships as a bootable live ISO.
 
 ---
 
@@ -94,19 +96,21 @@ A 100ms delay is perceived by humans. A 300ms delay breaks flow. A 1-second dela
 | G-T02 | 60fps minimum animation | ≤16.67ms frame time at 60Hz |
 | G-T03 | Launcher open time | ≤100ms from keypress to visible launcher |
 | G-T04 | Search result latency | ≤50ms for first result set to appear |
-| G-T05 | Idle RAM consumption | ≤150MB for compositor + all core daemons |
+| G-T05 | Idle RAM consumption | ≤150MB for compositor + all core daemons (each pure C++20 daemon <12MB RSS); shell surfaces budgeted separately |
 | G-T06 | Session boot time | ≤3 seconds from login to usable desktop |
-| G-T07 | GPU-accelerated rendering | All animations via GPU pipeline, no CPU compositing |
-| G-T08 | Modular architecture | All components replaceable without rebuilding core |
-| G-T09 | C++20 codebase | Strict C++20, no older standard in new code |
-| G-T10 | Zero crash compositor | Core compositor may not crash on app failure |
+| G-T07 | GPU-accelerated rendering | Compositor via `wlr_renderer_autocreate` (GLES2/Vulkan, Pixman fallback); Qt surfaces via Qt RHI |
+| G-T08 | Modular architecture | All components replaceable without rebuilding core; lifecycle owned by `tinexus-serviced` |
+| G-T09 | C++20 codebase | Strict C++20; core daemons contain zero Qt (ADR 0004) |
+| G-T10 | Zero crash compositor | Core compositor may not crash on app failure; UI crashes are restarted by the supervisor |
+| G-T11 | Secure session lock | `ext_session_lock_v1` + PAM; lock is a security boundary |
+| G-T12 | Uniform window chrome | Server-side decorations for Wayland and XWayland windows |
 
 ### 4.2 Product Goals
 
 | Goal ID | Goal | Description |
 |---|---|---|
-| G-P01 | Distraction-free desktop | Empty desktop by default. No visible UI until summoned. |
-| G-P02 | Unified launcher | All actions accessible from a single Ctrl+K interface |
+| G-P01 | Distraction-free desktop | Minimal chrome: slim TopBar pill + intellihide Dock; both hidden behind fullscreen content. |
+| G-P02 | Unified launcher | All actions accessible from a single Ctrl+K interface (also reachable from TopBar and Dock) |
 | G-P03 | Plugin extensibility | Third-party plugins can add launcher commands safely |
 | G-P04 | Theme engine | Full color/font/motion customization via theme tokens |
 | G-P05 | Accessibility | WCAG 2.1 AA compliant by v1.0 |
@@ -138,7 +142,7 @@ Understanding what Tinexus Shell will **not** do is as important as what it will
 | **Cloud-dependent features** | All v1.0 functionality must work offline. Cloud is a future plugin. |
 | **Mobile/tablet support in v1** | Desktop first. Touch support is a v2.0 research item. |
 | **Replacing systemd** | Tinexus Shell integrates with systemd. Session management uses logind. |
-| **Distributing a full OS** | Tinexus Shell is a Desktop Environment. It runs on existing distros. |
+| **Maintaining a custom kernel / general-purpose distro** | The platform ships a bootable live ISO (SquashFS + GRUB, `src/iso`, `src/liveusb`, installer tooling) built on stock Linux. It does not patch or fork the kernel. |
 | **Creating a display server** | Wayland is the display protocol. We build a compositor, not a server. |
 | **Supporting NVIDIA proprietary drivers** | NVIDIA proprietary Wayland support is a user responsibility. |
 
@@ -159,11 +163,11 @@ The Tinexus Shell AI Layer will add natural language command processing to the l
 
 This will be implemented as a **search provider plugin**, not as a modification to the launcher core. The launcher's pluggable search provider architecture (designed in v1.0) will be the foundation.
 
-### 6.2 Version 3.0 — Tinexus Shell as a Distribution
+### 6.2 Distribution Track — Partially Realized
 
-Long-term, the project may produce an opinionated Linux distribution with:
-- Custom installer (not Calamares, custom-built)
-- Curated application defaults
+The live-media pipeline already exists (bootable hybrid ISO, live USB tooling, login/splash, package tooling). Remaining long-term items:
+- Polished custom installer (not Calamares)
+- Curated application defaults (native `files`, `terminal`, `monitor`, `about`, `settings-ui`, `app-installer`)
 - Optimized kernel parameters
 - Rolling release model
 - First-class hardware support list
@@ -234,13 +238,13 @@ This is not a roadmap. It is a north star. Every engineering decision should ask
 ### 8.1 The Six Principles of Tinexus Shell Design
 
 **P1 — Default to Empty**  
-Every screen, every panel, every surface should be empty until the user needs it. Information should be summoned, not displayed. The user's wallpaper is their desktop. Nothing else belongs there uninvited.
+Every surface should stay out of the way until the user needs it. The TopBar is a slim floating pill, the Dock auto-hides, flyouts open on demand, and fullscreen windows cover everything. Information is summoned or glanceable, never noisy.
 
 **P2 — Speed is Respect**  
 Asking a user to wait is disrespecting their time. Every interaction must have a perceived response within 100ms. Animations must communicate state, not waste time. Loading should be invisible wherever possible.
 
 **P3 — Keyboard First, Pointer Never Excluded**  
-The primary interaction model is keyboard. Every action reachable by mouse must also be reachable by keyboard. The reverse is not required — some power actions are keyboard-only by design.
+The primary interaction model is keyboard, but the pointer is a first-class citizen: TopBar flyouts, Dock launchers and window traffic lights provide complete pointer paths (resolving ADR-000 RISK-004). Every action reachable by mouse must also be reachable by keyboard.
 
 **P4 — Progressive Disclosure**  
 Show minimal information first. Reveal more on request. The launcher shows 5 results by default. It shows 50 when the user scrolls. Settings shows basic options first. Advanced options require one more click.
@@ -297,14 +301,16 @@ Tinexus Shell targets the LIGHT + INNOVATIVE quadrant:
 - Only launcher with **sandboxed plugin isolation** (plugins cannot crash the launcher)
 - Only launcher designed as a **first-class shell component** (not a standalone app)
 - Only launcher with a **designed-in AI search provider slot** (future NLP)
-- Only launcher with **native Wayland layer-shell integration** (appears above fullscreen apps)
+- Only launcher backed by an independent **`tinexus-searchd`** daemon (trigram index + ranking pipeline)
+- Only launcher with **native Wayland layer-shell integration** (`LayerOverlay`, above fullscreen apps)
 
 ### 9.3 Why Tinexus Shell is Different
 
 | Dimension | GNOME | KDE | Hyprland | **Tinexus Shell** |
 |---|---|---|---|---|
-| **Primary paradigm** | Icon+Dock | Icon+Dock | WM only | **Command Palette** |
+| **Primary paradigm** | Icon+Dock | Icon+Dock | WM only | **Command Palette + minimal TopBar/Dock** |
 | **Desktop philosophy** | Content-first | Configurable | Minimal | **Intent-first** |
+| **Architecture** | Monolithic shell | Monolithic shell | Single process | **Supervised microservice daemons** |
 | **Plugin safety** | Unsafe (JS) | Unsafe (C++) | N/A | **Process-isolated** |
 | **Documentation standard** | Good | Excellent | Fair | **Linux Foundation** |
 | **AI integration** | None | None | None | **Roadmapped (v2)** |
@@ -326,12 +332,12 @@ None of these projects are bad. They are excellent projects maintained by talent
 We are building Tinexus Shell because we believe:
 
 1. The keyboard is faster than the mouse for 90% of power user actions
-2. An empty desktop is more productive than a full one
+2. A quiet desktop is more productive than a cluttered one
 3. A command palette is the most efficient application launcher ever designed
 4. Linux deserves a desktop environment built with 2020s design principles
 5. Open source can produce desktop software that rivals commercial products
 
-This project exists for the developers who close every notification, hide every dock, and dream of a desktop that respects their focus.
+This project exists for the developers who dream of a desktop that respects their focus — one whose dock hides itself and whose chrome stays out of the way.
 
 We are building it.
 

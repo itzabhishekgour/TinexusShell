@@ -7,10 +7,12 @@
 #include "ipcd/protocol/uninstall.hpp"
 #include "ipcd/transport/fd_passing.hpp"
 #include "common/logger.hpp"
+#include "common/RuntimePaths.hpp"
 
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <poll.h>
 #include <thread>
 #include <atomic>
 #include <string>
@@ -27,8 +29,7 @@ public:
     }
 
     bool start() {
-        uid_t uid = getuid();
-        m_socket_path = "/run/user/" + std::to_string(uid) + "/tinexus/ipc.sock";
+        m_socket_path = tinexus::common::RuntimePaths::get_ipc_socket_path();
 
         m_running = true;
         m_thread = std::thread(&IpcdClient::run_loop, this);
@@ -117,6 +118,29 @@ private:
         std::vector<uint8_t> read_buf;
         
         while (m_running) {
+            struct pollfd pfd{};
+            pfd.fd = m_fd;
+            pfd.events = POLLIN;
+
+            int poll_ret = ::poll(&pfd, 1, 500);
+            if (poll_ret < 0) {
+                if (errno == EINTR) continue;
+                log::warn("[serviced-ipc] poll error on ipcd socket: {}", strerror(errno));
+                break;
+            }
+            if (poll_ret == 0) {
+                // Timeout (500ms), loops back to check m_running
+                continue;
+            }
+
+            if (!(pfd.revents & POLLIN)) {
+                if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                    log::warn("[serviced-ipc] Connection to ipcd hung up or error (revents=0x{:x})", pfd.revents);
+                    break;
+                }
+                continue;
+            }
+
             std::vector<int> pending_fds;
             ssize_t n = tinexus::ipcd::transport::recvmsg_with_fds(m_fd, read_buf, pending_fds);
             

@@ -1,982 +1,237 @@
-// tinexus-shell — Aura + Pulse Unified Shell
-// Architecture:
-//   Aura  = always-visible top-center pill (time/wifi/avatar/battery)
-//   Pulse = Spotlight-style centered overlay triggered by Ctrl+K
-//
-// Two-surface architecture:
-//   aura_window  : layer=TOP, anchor=TOP|LEFT|RIGHT, centered via margin, KEYBOARD_INTERACTIVITY_NONE
-//   pulse_window : layer=TOP (same surface, but height > 100px → compositor grants focus via heuristic)
-//
-// Focus contract:
-//   Idle:   aura has no keyboard focus. Global shortcuts handled by compositor ShortcutEngine.
-//   Active: Ctrl+K → shell resizes to fullscreen → compositor sees height > 100 → grants exclusive focus.
-//           Escape → shell resizes to 360×48 → compositor clears focus, restores previous window.
-
-#include <txui/window/Window.hpp>
-#include <txui/widgets/SolidColorWidget.hpp>
-#include <txui/widgets/SizedBox.hpp>
-#include <txui/widgets/TextWidget.hpp>
-#include <txui/layout/FlexLayout.hpp>
-#include <txui/theme/Theme.hpp>
-#include <txui/render/WaylandRenderTarget.hpp>
+// ============================================================================
+// main.cpp — tinexus-shell (Qt6 / Layer-shell)
+// ============================================================================
+#include "ShellBridge.hpp"
+#include "TinexusIconProvider.hpp"
 #include <common/logger.hpp>
-#include <indexer/desktop_entry.hpp>
-#include <unistd.h>
-#include <sys/reboot.h>
-#include <csignal>
-#include <cstdlib>
-#include <filesystem>
-#include <vector>
-#include <string>
-#include <sstream>
-#include <algorithm>
-#include <cctype>
-#include <chrono>
+#include <common/SingleInstance.hpp>
+#include <common/DBusNames.hpp>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QFontDatabase>
+#include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlContext>
+#include <QtQuick/QQuickWindow>
+#include <QtQuick/QQuickItem>
+#include <QtCore/QFileInfo>
+#include <QtCore/QUrl>
+#include <iostream>
 #include <cmath>
-#include <stdexcept>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <thread>
-#include <atomic>
 
-using namespace tinexus;
-namespace fs = std::filesystem;
+#include <QtCore/QEvent>
 
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-enum class ResultKind { App, System, Calculator };
+#if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
+#include <LayerShellQt/Window>
+#endif
 
-struct AppItem {
-    std::string name;
-    std::string exec;
-    std::string description;
-    bool is_terminal{false};
-    std::string icon;
-    ResultKind  kind{ResultKind::App};
-};
-
-static std::vector<AppItem> g_recent_launches;
-constexpr size_t MAX_RECENT = 5;
-
-#include <filesystem>
-#include <fstream>
-#include <cctype>
-#include <fcntl.h>
-#include "ipcd/protocol/header.hpp"
-
-// ---------------------------------------------------------------------------
-// is_process_running
-// ---------------------------------------------------------------------------
-static bool is_process_running(const std::string& comm_name) {
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator("/proc", ec)) {
-        if (!entry.is_directory()) continue;
-        std::string pid_str = entry.path().filename().string();
-        if (pid_str.empty() || !std::isdigit(static_cast<unsigned char>(pid_str[0]))) continue;
-
-        std::ifstream comm_file(entry.path() / "comm");
-        if (comm_file.is_open()) {
-            std::string name;
-            std::getline(comm_file, name);
-            if (name == comm_name) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-// ---------------------------------------------------------------------------
-// spawn_app
-// ---------------------------------------------------------------------------
-static pid_t spawn_app(const AppItem& item) {
-    if (item.kind == ResultKind::System) {
-        const std::string& cmd = item.exec;
-        if (cmd == "lock") {
-            log::info("[Pulse] System action: Lock Screen");
-            pid_t pid = fork();
-            if (pid == 0) { setsid(); execlp("tinexus-lock", "tinexus-lock", nullptr); _exit(127); }
-            return pid;
-        } else if (cmd == "shutdown") {
-            log::info("[Pulse] System action: Shutdown");
-            sync();
-            ::reboot(RB_POWER_OFF);
-            return -1;
-        } else if (cmd == "reboot") {
-            log::info("[Pulse] System action: Reboot");
-            sync();
-            ::reboot(RB_AUTOBOOT);
-            return -1;
-        } else if (cmd == "sleep") {
-            log::info("[Pulse] System action: Sleep — suspend not supported in VM");
-            return -1;
-        } else if (cmd == "logout") {
-            log::info("[Pulse] System action: Logout");
-            ::kill(1, SIGTERM);
-            return -1;
-        }
-        return -1;
-    }
-    std::string clean_exec = indexer::DesktopParser::sanitize_exec(item.exec);
-    if (clean_exec.empty()) return -1;
-
-    // Single-instance handling for settings and monitor
-    if (clean_exec == "tinexus-settings-ui" || clean_exec == "tinexus-monitor") {
-        if (is_process_running(clean_exec)) {
-            log::info("[Pulse] App {} is already running — sending focus request to compositor", clean_exec);
-            const char* xdg_runtime = getenv("XDG_RUNTIME_DIR");
-            if (xdg_runtime) {
-                std::string fifo_path = std::string(xdg_runtime) + "/tinexus_comp_cmd";
-                int fd = open(fifo_path.c_str(), O_WRONLY | O_NONBLOCK);
-                if (fd >= 0) {
-                    std::string app_id = (clean_exec == "tinexus-settings-ui") ? "tinexus-settings" : clean_exec;
-                    std::string cmd = "focus " + app_id + "\n";
-                    write(fd, cmd.c_str(), cmd.size());
-                    close(fd);
+namespace {
+class ShellFocusFilter : public QObject {
+public:
+    ShellFocusFilter(QQuickWindow* win, tinexus::shell::ShellBridge* bridge)
+        : m_win(win), m_bridge(bridge) {}
+protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override {
+        if (ev->type() == QEvent::FocusOut || ev->type() == QEvent::ActivationChange) {
+            if (m_win && !m_win->isActive() && m_bridge) {
+                bool anyOpen = m_bridge->logoMenuOpen() || m_bridge->appMenuOpen() ||
+                               m_bridge->calendarOpen() || m_bridge->notificationsOpen() ||
+                               m_bridge->volumeFlyoutOpen() || m_bridge->brightnessFlyoutOpen() ||
+                               m_bridge->rebootConfirmationOpen() || m_bridge->shutdownConfirmationOpen();
+                if (anyOpen) {
+                    tinexus::log::debug("[shell] Focus lost — auto-dismissing active flyout");
+                    m_bridge->closeAllFlyouts();
                 }
             }
-            return -1;
+        }
+        return QObject::eventFilter(obj, ev);
+    }
+private:
+    QQuickWindow* m_win{nullptr};
+    tinexus::shell::ShellBridge* m_bridge{nullptr};
+};
+} // namespace
+
+int main(int argc, char* argv[]) {
+    tinexus::log::set_component_name("shell");
+    tinexus::log::info("tinexus-shell starting (Qt6)...");
+
+    tinexus::common::SingleInstance single_instance("tinexus-shell");
+    if (!single_instance.is_primary()) {
+        tinexus::log::warn("[shell] Another instance of tinexus-shell is already running; exiting secondary instance.");
+        return 0;
+    }
+
+    qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
+    QGuiApplication app(argc, argv);
+    qunsetenv("QT_WAYLAND_SHELL_INTEGRATION");
+    app.setApplicationName(QStringLiteral("tinexus-shell"));
+    app.setDesktopFileName(tinexus::common::dbus::qapp_id::TopBar());
+
+    // ── Enforce "Inter" System Typography ──────────────────────────────────────
+    QStringList fontPaths = {
+        QStringLiteral("/usr/share/fonts/truetype/inter/Inter-Regular.ttf"),
+        QStringLiteral("/usr/share/fonts/truetype/inter/Inter-Bold.ttf"),
+        QStringLiteral("/workspace/assets/fonts/Inter-Regular.ttf"),
+        QStringLiteral("/workspace/assets/fonts/Inter-Bold.ttf")
+    };
+    for (const auto& fp : fontPaths) {
+        if (QFileInfo::exists(fp)) {
+            QFontDatabase::addApplicationFont(fp);
         }
     }
+    QFont defaultFont(QStringLiteral("Inter"));
+    defaultFont.setPixelSize(12);
+    app.setFont(defaultFont);
 
-    auto it = std::find_if(g_recent_launches.begin(), g_recent_launches.end(),
-        [&](const AppItem& a) { return a.exec == item.exec; });
-    if (it != g_recent_launches.end()) g_recent_launches.erase(it);
-    g_recent_launches.insert(g_recent_launches.begin(), item);
-    if (g_recent_launches.size() > MAX_RECENT) g_recent_launches.pop_back();
+    tinexus::shell::ShellBridge bridge;
 
-    pid_t pid = fork();
-    if (pid < 0) { log::error("[Pulse] fork() failed"); return -1; }
-    if (pid == 0) {
-        setsid();
-        if (item.is_terminal) {
-            execlp("foot", "foot", "-e", clean_exec.c_str(), nullptr);
-            execlp("weston-terminal", "weston-terminal", nullptr);
-            _exit(127);
-        }
-        std::vector<std::string> tokens;
-        std::istringstream iss(clean_exec); std::string tok;
-        while (iss >> tok) tokens.push_back(tok);
-        if (tokens.empty()) _exit(1);
-        std::vector<char*> args;
-        for (auto& t : tokens) args.push_back(const_cast<char*>(t.c_str()));
-        args.push_back(nullptr);
-        execvp(args[0], args.data());
-        _exit(127);
-    }
-    log::info("[Pulse] Spawned '{}' PID={}", clean_exec, pid);
-    return pid;
-}
+    QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("icon"), new tinexus::shell::TinexusIconProvider());
+    engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
-// ---------------------------------------------------------------------------
-// Calculator
-// ---------------------------------------------------------------------------
-static bool try_eval_calc(const std::string& q, double& result) {
-    bool has_op = false, has_dig = false;
-    for (char c : q) {
-        if (std::isdigit(static_cast<unsigned char>(c)) || c == '.') has_dig = true;
-        if (c == '+' || c == '-' || c == '*' || c == '/') has_op = true;
-        if (!std::isdigit(static_cast<unsigned char>(c)) && c != '+' && c != '-' &&
-            c != '*' && c != '/' && c != '.' && c != ' ' && c != '(' && c != ')') return false;
-    }
-    if (!has_dig || !has_op) return false;
-    double a{0}, b{0}; char op{'?'};
-    std::istringstream ss(q);
-    if (!(ss >> a) || !(ss >> op) || !(ss >> b)) return false;
-    if (b == 0.0 && op == '/') return false;
-    switch (op) {
-        case '+': result = a + b; break; case '-': result = a - b; break;
-        case '*': result = a * b; break; case '/': result = a / b; break;
-        default: return false;
-    }
-    return true;
-}
-
-static char key_to_char(txui::Key key, bool shift) {
-    if (key >= txui::Key::A && key <= txui::Key::Z) {
-        char c = static_cast<char>('a' + (static_cast<int>(key) - static_cast<int>(txui::Key::A)));
-        if (shift) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return c;
-    }
-    if (key >= txui::Key::N0 && key <= txui::Key::N9)
-        return static_cast<char>('0' + (static_cast<int>(key) - static_cast<int>(txui::Key::N0)));
-    if (key == txui::Key::Space) return ' ';
-    return '\0';
-}
-
-static std::string to_lower(std::string_view sv) {
-    std::string r; r.reserve(sv.size());
-    for (char c : sv) r.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    return r;
-}
-
-static std::vector<AppItem> get_system_actions(const std::string& lq) {
-    struct SA { const char* cmd; const char* label; const char* desc; };
-    constexpr SA kA[] = {
-        {"lock","Lock Screen","Lock the current session"},
-        {"shutdown","Shut Down","Power off the computer"},
-        {"reboot","Restart","Restart the computer"},
-        {"sleep","Sleep","Suspend to RAM"},
-        {"logout","Log Out","End the current session"},
+    QString qmlPath;
+    QStringList candidates = {
+        QStringLiteral("/workspace/src/shell/qml/DesktopShellWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/qml/DesktopShellWindow.qml"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("/usr/share/tinexus/shell/qml/DesktopShellWindow.qml")
     };
-    std::vector<AppItem> out;
-    for (const auto& a : kA) {
-        std::string cmd(a.cmd), label(a.label);
-        if (lq.empty() || cmd.find(lq) != std::string::npos || label.find(lq) != std::string::npos)
-            out.push_back({a.label, a.cmd, a.desc, false, "", ResultKind::System});
-    }
-    return out;
-}
-
-static std::vector<AppItem> load_system_apps() {
-    std::vector<AppItem> apps;
-    apps.push_back({"Tinexus Terminal", "tinexus-terminal", "Default Wayland Terminal", false, ""});
-    apps.push_back({"Foot Terminal", "foot", "Fast Wayland Terminal", true, ""});
-    apps.push_back({"Weston Terminal", "weston-terminal", "Wayland Demo Terminal", true, ""});
-    apps.push_back({"Alacritty", "alacritty", "GPU Accelerated Terminal", true, ""});
-    apps.push_back({"Tinexus System Monitor", "tinexus-monitor", "Resource & Process Monitor", false, ""});
-    apps.push_back({"Tinexus Settings", "tinexus-settings-ui", "System Configuration", false, ""});
-    apps.push_back({"Tinexus Package Manager", "tinexus-pkg", "Software Manager", false, ""});
-    apps.push_back({"Tinexus Files", "tinexus-files", "File Manager", false, ""});
-    apps.push_back({"Tinexus App Installer", "tinexus-app-installer", "Install .txapp packages", false, ""});
-
-    std::vector<fs::path> dirs = {"/usr/share/applications", "/usr/local/share/applications"};
-    const char* home = std::getenv("HOME");
-    if (home) dirs.push_back(fs::path(home) / ".local" / "share" / "applications");
-
-    for (const auto& dir : dirs) {
-        if (!fs::exists(dir)) continue;
-        try {
-            for (const auto& e : fs::directory_iterator(dir)) {
-                if (!e.is_regular_file() || e.path().extension() != ".desktop") continue;
-                auto p = indexer::DesktopParser::parse_file(e.path());
-                if (!p || p->no_display || p->exec.empty()) continue;
-                bool dup = std::any_of(apps.begin(), apps.end(), [&](const AppItem& a) {
-                    return a.name == p->name || a.exec == p->exec; });
-                if (!dup) apps.push_back({p->name, p->exec,
-                    p->comment.empty() ? p->generic_name : p->comment, p->terminal, p->icon});
-            }
-        } catch (...) {}
-    }
-    return apps;
-}
-
-static std::vector<AppItem> build_results(const std::string& q, const std::vector<AppItem>& all) {
-    std::string lq = to_lower(q);
-    std::vector<AppItem> results;
-    double cv{0};
-    if (!lq.empty() && try_eval_calc(lq, cv)) {
-        std::ostringstream os;
-        if (cv == static_cast<long long>(cv)) os << static_cast<long long>(cv); else os << cv;
-        std::string ans = os.str();
-        results.push_back({"= " + ans, ans, q + " = " + ans, false, "", ResultKind::Calculator});
-    }
-    auto sys = get_system_actions(lq);
-    results.insert(results.end(), sys.begin(), sys.end());
-    if (lq.empty()) {
-        for (const auto& r : g_recent_launches) results.push_back(r);
-    } else {
-        for (const auto& a : all)
-            if (to_lower(a.name).find(lq) != std::string::npos ||
-                to_lower(a.exec).find(lq) != std::string::npos ||
-                to_lower(a.description).find(lq) != std::string::npos)
-                results.push_back(a);
-    }
-    return results;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Design tokens
-// ─────────────────────────────────────────────────────────────────────────────
-#include <txui/widgets/Widget.hpp>
-
-namespace aura_ui {
-    // Premium warm-neutral dark palette (Apple HIG dark mode reference)
-    constexpr txui::Color AURA_BG    { 28,  28,  30, 220}; // #1c1c1e @86% — frosted glass feel
-    constexpr txui::Color AURA_BG2   { 35,  35,  38, 220}; // slightly lighter gradient stop
-    constexpr txui::Color BORDER_TOP {255, 255, 255,  20}; // glass top-edge highlight
-    constexpr txui::Color BORDER_RIM {255, 255, 255,   8}; // sides/bottom subtle rim
-    constexpr txui::Color SHADOW_1   {  0,   0,   0,  40}; // closest drop shadow
-    constexpr txui::Color SHADOW_2   {  0,   0,   0,  25}; // mid shadow
-    constexpr txui::Color SHADOW_3   {  0,   0,   0,  15}; // furthest shadow
-    constexpr txui::Color TXT_PRI    {240, 240, 248, 255};
-    constexpr txui::Color WIFI_COL   {100, 210, 100, 220};
-    constexpr txui::Color WIFI_DIM   { 80,  80, 100, 120};
-    constexpr txui::Color ACCENT     {107, 140, 239, 255};
-}
-
-// ── System info helpers ───────────────────────────────────────────────────────
-static double read_battery_percent() {
-    // Try common sysfs paths for battery capacity
-    const char* paths[] = {
-        "/sys/class/power_supply/BAT0/capacity",
-        "/sys/class/power_supply/BAT1/capacity",
-        "/sys/class/power_supply/battery/capacity",
-    };
-    for (const char* p : paths) {
-        FILE* f = fopen(p, "r");
-        if (!f) continue;
-        int cap = -1;
-        fscanf(f, "%d", &cap);
-        fclose(f);
-        if (cap >= 0 && cap <= 100) return static_cast<double>(cap);
-    }
-    return -1.0; // no battery (VM/desktop)
-}
-
-// Returns 0-3: number of WiFi signal bars (0=no signal/no WiFi, 1-3=strength)
-static int read_wifi_bars() {
-    FILE* f = fopen("/proc/net/wireless", "r");
-    if (!f) return 0;
-    char line[256];
-    int bars = 0;
-    while (fgets(line, sizeof(line), f)) {
-        // Lines starting with interface name (not header lines)
-        if (strchr(line, ':') == nullptr) continue;
-        float link = 0.0f;
-        // Format: iface: status link level noise ...
-        char iface[32];
-        int status = 0;
-        if (sscanf(line, " %31[^:]: %d %f", iface, &status, &link) >= 3) {
-            // link is 0-70 typically
-            if      (link >= 50.0f) bars = 3;
-            else if (link >= 25.0f) bars = 2;
-            else if (link >  0.0f)  bars = 1;
-            else                    bars = 0;
+    for (const auto& cand : candidates) {
+        if (QFileInfo::exists(cand)) {
+            qmlPath = cand;
             break;
         }
     }
-    fclose(f);
-    return bars;
-}
 
-// Returns true if any wired/wireless network interface is UP (excluding lo)
-static bool read_network_connected() {
-    FILE* f = fopen("/proc/net/if_inet6", "r");
-    if (!f) f = fopen("/proc/net/fib_trie", "r"); // fallback
-    // Simpler: check /sys/class/net/*/operstate
-    if (f) { fclose(f); }
-    // Check /proc/net/dev for non-loopback interfaces with traffic
-    FILE* dev = fopen("/proc/net/dev", "r");
-    if (!dev) return false;
-    char line[256];
-    bool connected = false;
-    while (fgets(line, sizeof(line), dev)) {
-        if (strstr(line, "lo:") || strstr(line, "Inter-") || strstr(line, "face")) continue;
-        if (strchr(line, ':')) { connected = true; break; }
-    }
-    fclose(dev);
-    return connected;
-}
-
-namespace pulse_ui {
-    constexpr txui::Color SCRIM      {  0,   0,   0, 150}; // fullscreen dim
-    constexpr txui::Color BG_T       { 28,  28,  30, 248}; // card gradient top
-    constexpr txui::Color BG_B       { 22,  22,  25, 248}; // card gradient bottom
-    constexpr txui::Color ACCENT     {107, 140, 239, 255};
-    constexpr txui::Color SEL_APP    { 59, 130, 246, 200};
-    constexpr txui::Color SEL_SYS    {239,  68,  68, 190};
-    constexpr txui::Color SEL_CALC   { 16, 185, 129, 200};
-    constexpr txui::Color TXT_PRI    {240, 240, 248, 255};
-    constexpr txui::Color TXT_SEC    {180, 180, 210, 200};
-    constexpr txui::Color TXT_DIM    {120, 120, 150, 150};
-    constexpr txui::Color BORDER_TOP {255, 255, 255,  20};
-    constexpr txui::Color SHADOW_1   {  0,   0,   0,  40};
-    constexpr txui::Color SHADOW_2   {  0,   0,   0,  25};
-    constexpr txui::Color SHADOW_3   {  0,   0,   0,  15};
-    constexpr double CARD_W    = 680.0;
-    constexpr double PANEL_RAD = 20.0;
-    constexpr double ROW_H     = 46.0;
-    constexpr double ROW_GAP   =  2.0;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AuraWidget — top-center pill display
-// ─────────────────────────────────────────────────────────────────────────────
-class AuraWidget : public txui::Widget {
-public:
-    txui::Size measure_override(const txui::Constraints& c) noexcept override {
-        return txui::Size(c.max_width, c.max_height);
-    }
-
-    void paint_override(txui::Painter& painter) const noexcept override {
-        using namespace aura_ui;
-        const auto& f = frame();
-        const double W  = f.width(), H = f.height();
-        const double cx = f.x() + W / 2.0, cy = f.y() + H / 2.0;
-        const double R  = H / 2.0; // full pill radius — stadium shape
-
-        // ── Fake elevation shadows (Optimized: single pass) ───────────────
-        painter.fill_rounded_rect({f.x() - 2, f.y() + 8, W + 4, H}, static_cast<int>(R), SHADOW_2);
-
-        // ── Pill body ─────────────────────────────────────────────────
-        painter.fill_rounded_rect(f, static_cast<int>(R), AURA_BG);
-
-        constexpr double PAD_H = 18.0;
-
-        // ── LEFT: time + wifi bars ────────────────────────────────────
-        time_t now = time(nullptr);
-        struct tm tb;
-        localtime_r(&now, &tb);
-        char ts[16];
-        strftime(ts, sizeof(ts), "%H:%M", &tb);
-        painter.draw_text({f.x() + PAD_H, cy - 7.5}, ts, TXT_PRI, 15);
-
-        // WiFi bars — real signal from /proc/net/wireless
-        double wx = f.x() + PAD_H + 54.0;
-        int wifi_bars = read_wifi_bars();
-        bool has_net  = (wifi_bars > 0) || read_network_connected();
-        for (int b = 0; b < 3; ++b) {
-            double bh = 6.0 + static_cast<double>(b) * 3.0;
-            // Light bar if signal reaches this level, dim otherwise
-            txui::Color bc = (b < wifi_bars || (b == 0 && has_net))
-                              ? WIFI_COL : WIFI_DIM;
-            painter.fill_rounded_rect(
-                {wx + static_cast<double>(b) * 5.0, cy - bh / 2.0, 3.0, bh},
-                1, bc);
-        }
-
-        // ── CENTER: avatar circle ─────────────────────────────────────
-        const double r = H / 2.0 - 6.0;
-        painter.fill_rounded_rect({cx - r, f.y() + 6.0, r * 2.0, r * 2.0},
-                                   static_cast<int>(r), ACCENT);
-        painter.draw_text({cx - 5.0, cy - 7.5}, "T", txui::Color(255, 255, 255, 240), 15);
-
-        // ── RIGHT: battery ────────────────────────────────────────────
-        double PCT = read_battery_percent();
-        if (PCT < 0.0) {
-            // No battery (VM) — show "DC" for direct current / plugged in
-            painter.draw_text({f.x() + W - PAD_H - 30.0, cy - 6.5},
-                              "DC", TXT_PRI, 11);
-        } else {
-            const txui::Color bc_col = PCT > 20.0
-                ? txui::Color{100, 220, 130, 220}
-                : txui::Color{240,  80,  80, 220};
-            const double bx = f.x() + W - PAD_H - 58.0, by = cy - 7.0;
-            painter.fill_rounded_rect({bx, by, 22.0, 14.0}, 2, txui::Color{60, 60, 80, 200});
-            painter.fill_rounded_rect({bx + 22.0, by + 3.5, 3.0, 7.0}, 1, txui::Color{60, 60, 80, 200});
-            painter.fill_rounded_rect({bx + 2.0, by + 2.0, 18.0 * PCT / 100.0, 10.0}, 1, bc_col);
-            char ps[8]; snprintf(ps, sizeof(ps), "%.0f%%", PCT);
-            painter.draw_text({bx + 28.0, cy - 6.5}, ps, TXT_PRI, 13);
-        }
-    }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PulseWidget — fullscreen overlay: scrim + centered search card
-// ─────────────────────────────────────────────────────────────────────────────
-class PulseWidget : public txui::Widget {
-public:
-    int                  hovered_index{-1};
-    txui::Point          mouse_pos{-100, -100};
-    std::string          query;
-    std::vector<AppItem> results;
-    size_t               selected_index{0};
-    bool                 is_launching{false};
-    AppItem              launch_app;
-
-    txui::Size measure_override(const txui::Constraints& c) noexcept override {
-        return txui::Size(c.max_width, c.max_height);
-    }
-
-    void paint_override(txui::Painter& painter) const noexcept override {
-        using namespace pulse_ui;
-        const double SW = frame().width(), SH = frame().height();
-
-        // Must clear wayland SHM buffer fully before drawing transparent scrim
-        painter.clear(txui::Color(0, 0, 0, 0));
-
-        // ── 1. Fullscreen scrim removed for performance ───────────────
-        if (is_launching) {
-            const double cx = SW * 0.5, cy = SH * 0.5;
-            const double cw = 400.0, ch = 240.0;
-            const double px = cx - cw * 0.5, py = cy - ch * 0.5;
-            painter.fill_gradient_rounded_rect(txui::Rect(px, py, cw, ch), PANEL_RAD, BG_T, BG_B);
-            txui::Color cat = launch_app.kind == ResultKind::Calculator ? SEL_CALC :
-                              launch_app.kind == ResultKind::System ? SEL_SYS : SEL_APP;
-            painter.fill_circle(txui::Point(cx, cy - 20), 40.0, txui::Color(cat.r(), cat.g(), cat.b(), 60));
-            painter.draw_circle(txui::Point(cx, cy - 20), 40.0, 2.0, cat);
-            painter.draw_text(txui::Point(cx - static_cast<double>(launch_app.name.size()) * 4.5, cy + 40),
-                              launch_app.name, TXT_PRI, 1.5);
-            return;
-        }
-
-        // ── 2. Centered search card ───────────────────────────────────
-        const double SEARCH_H = 58.0;
-        const double rows_n   = static_cast<double>(std::min(results.size(), size_t{7}));
-        const double card_h   = SEARCH_H + rows_n * (ROW_H + ROW_GAP) + 20.0;
-        const double px = (SW - CARD_W) * 0.5;
-        const double py = SH * 0.38 - card_h * 0.5; // slightly above center — Spotlight style
-
-        // Fake elevation shadows behind card (Optimized: single pass)
-        painter.fill_rounded_rect({px - 4, py + 10, CARD_W + 8, card_h}, static_cast<int>(PANEL_RAD), SHADOW_2);
-
-        // Card body
-        painter.fill_gradient_rounded_rect(txui::Rect(px, py, CARD_W, card_h), PANEL_RAD, BG_T, BG_B);
-
-        // Glass border
-        painter.fill_rounded_rect({px + 3, py + 1, CARD_W - 6, 1}, 0, BORDER_TOP);
-        painter.fill_rounded_rect({px - 1, py - 1, CARD_W + 2, card_h + 2},
-                                   static_cast<int>(PANEL_RAD) + 1, txui::Color(255, 255, 255, 8));
-
-        // ── 3. Search row ────────────────────────────────────────────
-        const double srch_y = py;
-        painter.fill_gradient_rect(txui::Rect(px, srch_y, CARD_W, SEARCH_H),
-                                   txui::Color(32, 32, 36, 255), txui::Color(26, 26, 30, 255));
-        painter.draw_circle(txui::Point(px + 34, srch_y + SEARCH_H * 0.5), 10.0, 1.5, ACCENT);
-        painter.fill_gradient_rounded_rect(
-            txui::Rect(px + 40, srch_y + SEARCH_H * 0.5 + 5.0, 9.0, 2.0), 1.0,
-            ACCENT, txui::Color(80, 110, 200, 160));
-        const std::string disp = query.empty() ? "Search apps, run commands..." : (query + "_");
-        painter.draw_text(txui::Point(px + 58, srch_y + (SEARCH_H - 16.0) * 0.5),
-                          disp, query.empty() ? TXT_DIM : TXT_PRI, 1.0);
-        painter.fill_gradient_rect(txui::Rect(px + 14, srch_y + SEARCH_H - 1, CARD_W - 28, 1),
-                                   txui::Color(107, 140, 239, 50), txui::Color(107, 140, 239, 0), true);
-
-        // ── 4. Result rows ───────────────────────────────────────────
-        if (!results.empty()) {
-            const size_t n = std::min(results.size(), size_t{7});
-            const double rows_y = srch_y + SEARCH_H + 8.0;
-            for (size_t i = 0; i < n; ++i) {
-                const auto& item = results[i];
-                const bool  sel  = (i == selected_index);
-                const double ry  = rows_y + static_cast<double>(i) * (ROW_H + ROW_GAP);
-                txui::Color cat  = item.kind == ResultKind::Calculator ? SEL_CALC :
-                                   item.kind == ResultKind::System     ? SEL_SYS  : SEL_APP;
-                if (sel) {
-                    painter.fill_gradient_rounded_rect(txui::Rect(px + 8, ry + 1, CARD_W - 16, ROW_H - 2), 10.0,
-                        txui::Color(cat.r(), cat.g(), cat.b(), 52), txui::Color(cat.r(), cat.g(), cat.b(), 22));
-                    painter.fill_gradient_rounded_rect(txui::Rect(px + 10, ry + 8, 3, ROW_H - 16), 1.5,
-                        cat, txui::Color(cat.r(), cat.g(), cat.b(), 110));
-                } else if (static_cast<int>(i) == hovered_index) {
-                    painter.fill_gradient_rounded_rect(txui::Rect(px + 8, ry + 1, CARD_W - 16, ROW_H - 2), 10.0,
-                        txui::Color(255, 255, 255, 15), txui::Color(255, 255, 255, 5));
-                }
-                const double icx = px + 34.0, icy = ry + ROW_H * 0.5;
-                if (sel) {
-                    painter.fill_circle(txui::Point(icx, icy), 13.0, txui::Color(cat.r(), cat.g(), cat.b(), 45));
-                    painter.draw_circle(txui::Point(icx, icy), 13.0, 1.0, txui::Color(cat.r(), cat.g(), cat.b(), 150));
-                } else {
-                    painter.draw_circle(txui::Point(icx, icy), 11.0, 1.0, txui::Color(80, 80, 130, 70));
-                }
-                painter.fill_circle(txui::Point(icx, icy), 3.5, sel ? cat : txui::Color(110, 110, 160, 130));
-                painter.draw_text(txui::Point(px + 56, ry + (ROW_H - 16.0) * 0.5),
-                                  item.name, sel ? TXT_PRI : TXT_SEC, 1.0);
-                if (!item.description.empty()) {
-                    const size_t md = 30;
-                    std::string d = item.description.size() > md
-                        ? item.description.substr(0, md) + "..." : item.description;
-                    const double dx = px + CARD_W - static_cast<double>(d.size()) * 8.0 - 34.0;
-                    if (dx > px + CARD_W * 0.55)
-                        painter.draw_text(txui::Point(dx, ry + (ROW_H - 14.0) * 0.5), d, TXT_DIM, 0.9);
-                }
-                if (i < 9)
-                    painter.draw_text(txui::Point(px + CARD_W - 22, ry + (ROW_H - 16.0) * 0.5),
-                                      std::to_string(i + 1), TXT_DIM, 1.0);
-            }
-        }
-
-        // ── 5. Hint row ──────────────────────────────────────────────
-        const double tip_y = py + card_h + 10.0;
-        const char* tips[] = {"navigate", "launch", "Esc: close", nullptr};
-        const char* keys[] = {"Up/Down: ", "Enter: ", "", nullptr};
-        double tip_x = px + (CARD_W * 0.5) - 180.0;
-        for (int ti = 0; tips[ti]; ++ti) {
-            std::string s = std::string(keys[ti]) + std::string(tips[ti]);
-            painter.draw_text(txui::Point(tip_x, tip_y), s, txui::Color(120, 120, 155, 100), 1.0);
-            tip_x += static_cast<double>(s.size()) * 8.0 + 20.0;
-        }
-    }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IPC listener thread — receives LAUNCHER_SHOW from compositor via ipcd
-// ─────────────────────────────────────────────────────────────────────────────
-
-#include <mutex>
-#include <cstring>
-static std::atomic<int> g_ipc_fd{-1};
-static std::atomic<uint32_t> g_search_seq{0};
-static std::mutex g_results_mutex;
-static std::vector<AppItem> g_search_results;
-static std::atomic<bool> g_results_updated{false};
-
-#pragma pack(push, 1)
-struct IpcHdr {
-    uint32_t magic = 0x544E5853; uint16_t version = 0x0100; uint16_t msg_type;
-    uint16_t flags = 0; uint32_t seq = 0; uint32_t payload_len; uint32_t csum = 0;
-};
-#pragma pack(pop)
-
-static void send_search_query(const std::string& q) {
-    int fd = g_ipc_fd.load();
-    if (fd < 0) return;
-    IpcHdr hdr;
-    hdr.msg_type = 2000; // SEARCH_QUERY
-    hdr.seq = ++g_search_seq;
-    hdr.payload_len = q.size();
-    send(fd, &hdr, sizeof(hdr), MSG_NOSIGNAL);
-    if (!q.empty()) send(fd, q.data(), q.size(), MSG_NOSIGNAL);
-}
-
-static std::atomic<bool> g_toggle_pulse{false};
-
-void ipc_listener_thread() {
-    int fd = -1;
-    for (int a = 0; a < 30 && fd < 0; ++a) {
-        fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd < 0) { ::sleep(1); continue; }
-        struct sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        char path[108];
-        snprintf(path, sizeof(path), "/run/user/%d/tinexus/ipc.sock", static_cast<int>(getuid()));
-        memcpy(addr.sun_path, path, strlen(path) + 1);
-        if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
-            close(fd); fd = -1; ::sleep(1);
-        }
-    }
-    if (fd < 0) { log::warn("[Shell] Could not connect to ipcd"); return; }
-    g_ipc_fd.store(fd);
-
-    uint16_t topic = 1000;
-    IpcHdr sh; sh.msg_type = 2 /* SYS_SUBSCRIBE_TOPIC */; sh.payload_len = sizeof(topic);
-    send(fd, &sh, sizeof(sh), MSG_NOSIGNAL);
-    send(fd, &topic, sizeof(topic), MSG_NOSIGNAL);
-    log::info("[Shell] Subscribed to LAUNCHER_OPEN (1000) via ipcd");
-
-    while (true) {
-        IpcHdr rx; ssize_t got = 0;
-        auto* raw = reinterpret_cast<uint8_t*>(&rx);
-        while (got < static_cast<ssize_t>(sizeof(rx))) {
-            ssize_t n = recv(fd, raw + got, sizeof(rx) - static_cast<size_t>(got), 0);
-            if (n <= 0) goto done;
-            got += n;
-        }
-        std::vector<uint8_t> buf;
-        if (rx.payload_len > 0) {
-            buf.resize(rx.payload_len); ssize_t pg = 0;
-            while (pg < static_cast<ssize_t>(rx.payload_len)) {
-                ssize_t n = recv(fd, buf.data() + pg, rx.payload_len - static_cast<size_t>(pg), 0);
-                if (n <= 0) goto done;
-                pg += n;
-            }
-        }
-        if (rx.msg_type == 1004) {
-            g_toggle_pulse.store(true);
-            log::info("[Shell] LAUNCHER_SHOW received — toggling Pulse");
-        } else if (rx.msg_type == 2001) { // SEARCH_RESULT
-            if (rx.payload_len >= 16) {
-                uint32_t version, result_count;
-                uint64_t latency;
-                size_t offset = 0;
-                std::memcpy(&version, buf.data() + offset, 4); offset += 4;
-                std::memcpy(&result_count, buf.data() + offset, 4); offset += 4;
-                std::memcpy(&latency, buf.data() + offset, 8); offset += 8;
-
-                std::vector<AppItem> parsed;
-                for (uint32_t i = 0; i < result_count; ++i) {
-                    if (offset + 20 > buf.size()) break;
-                    float score;
-                    uint32_t t_len, s_len, a_len, i_len;
-                    
-                    std::memcpy(&score, buf.data() + offset, 4); offset += 4;
-                    
-                    std::memcpy(&t_len, buf.data() + offset, 4); offset += 4;
-                    if (offset + t_len > buf.size()) break;
-                    std::string title(reinterpret_cast<char*>(buf.data() + offset), t_len); offset += t_len;
-                    
-                    if (offset + 4 > buf.size()) break;
-                    std::memcpy(&s_len, buf.data() + offset, 4); offset += 4;
-                    if (offset + s_len > buf.size()) break;
-                    std::string subtitle(reinterpret_cast<char*>(buf.data() + offset), s_len); offset += s_len;
-                    
-                    if (offset + 4 > buf.size()) break;
-                    std::memcpy(&a_len, buf.data() + offset, 4); offset += 4;
-                    if (offset + a_len > buf.size()) break;
-                    std::string action(reinterpret_cast<char*>(buf.data() + offset), a_len); offset += a_len;
-                    
-                    if (offset + 4 > buf.size()) break;
-                    std::memcpy(&i_len, buf.data() + offset, 4); offset += 4;
-                    if (offset + i_len > buf.size()) break;
-                    std::string icon(reinterpret_cast<char*>(buf.data() + offset), i_len); offset += i_len;
-                    
-                    AppItem item;
-                    item.name = title;
-                    item.description = subtitle;
-                    item.exec = action;
-                    item.icon = icon;
-                    if (action == "shutdown" || action == "reboot" || action == "lock" || action == "sleep" || action == "logout") {
-                        item.kind = ResultKind::System;
-                    } else if (title.starts_with("=") || action.find("+") != std::string::npos || action.find("-") != std::string::npos) {
-                        item.kind = ResultKind::Calculator;
-                    } else {
-                        item.kind = ResultKind::App;
-                        item.is_terminal = (subtitle.find("Terminal") != std::string::npos);
-                    }
-                    parsed.push_back(item);
-                }
-                std::lock_guard<std::mutex> lock(g_results_mutex);
-                g_search_results = std::move(parsed);
-                g_results_updated.store(true);
-            }
-        }
-    }
-done:
-    close(fd);
-    log::warn("[Shell] ipcd connection lost");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// main
-// ─────────────────────────────────────────────────────────────────────────────
-int main(int argc, char** argv) {
-    (void)argc; (void)argv;
-    log::set_component_name("shell");
-    log::info("[Shell] Tinexus Unified Shell starting...");
-    signal(SIGCHLD, SIG_IGN);
-
-    // Aura window — top-center pill, KEYBOARD_INTERACTIVITY_NONE, always visible
-    auto window = txui::Window::create(360, 48, "Aura", /*layer_shell=*/true);
-    std::thread(ipc_listener_thread).detach();
-
-    if (!window || !window->is_wayland_connected()) {
-        log::error("[Shell] Failed to connect to Wayland display! Exiting.");
+    if (qmlPath.isEmpty()) {
+        std::cerr << "FAIL: Could not locate DesktopShellWindow.qml" << std::endl;
         return 1;
     }
 
-    // Load all apps once at startup for local search fallback
-    std::vector<AppItem> all_apps = load_system_apps();
-    std::string query;
-    size_t selected_index = 0;
-    std::vector<AppItem> current_results;
-
-    auto aura_widget  = txui::make_ref<AuraWidget>();
-    auto pulse_widget = txui::make_ref<PulseWidget>();
-
-    // Initially, Aura is the root widget (idle pill mode)
-    window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
-
-    auto sync_pulse = [&]() {
-        // Local search runs instantly — no IPC latency
-        current_results = build_results(query, all_apps);
-        if (selected_index >= current_results.size()) {
-            selected_index = current_results.empty() ? 0 : current_results.size() - 1;
-        }
-        pulse_widget->results = current_results;
-        pulse_widget->selected_index = selected_index;
-        pulse_widget->query = query;
-        pulse_widget->mark_needs_paint();
-        // Also fire IPC query so searchd can enrich results asynchronously
-        send_search_query(query);
-    };
-    sync_pulse();
-    aura_widget->mark_needs_paint();
-    window->present();
-
-    bool running = true;
-    bool pulse_active = false;
-    bool needs_redraw = false;
-
-    // Aura size state (for idle pill)
-    constexpr double AURA_W = 360.0, AURA_H = 48.0;
-    // Pulse size state (floating search card)
-    constexpr double PULSE_W = 720.0, PULSE_H = 540.0;
-
-    double current_w = AURA_W, current_h = AURA_H;
-    double target_w = AURA_W, target_h = AURA_H;
-    bool animating = false;
-
-    // Launch Fake Flip state
-    bool launch_animating = false;
-    bool launch_flipped   = false;
-
-    while (running && !window->should_close()) {
-        // ── Handle Ctrl+K toggle ─────────────────────────────────────────
-        if (g_toggle_pulse.exchange(false)) {
-            pulse_active = !pulse_active;
-            if (pulse_active) {
-                log::info("[Shell] Expanding to Pulse mode");
-                query = ""; selected_index = 0;
-                sync_pulse();
-                // Swap root widget to Pulse (fullscreen overlay with scrim)
-                window->set_root_widget(txui::Ref<txui::Widget>(pulse_widget.get()));
-                target_w = PULSE_W; target_h = PULSE_H;
-                window->set_keyboard_interactivity(true);
-            } else {
-                log::info("[Shell] Collapsing to Aura pill mode");
-                window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
-                target_w = AURA_W; target_h = AURA_H;
-                window->set_keyboard_interactivity(false);
-            }
-            animating = true;
-            needs_redraw = true;
-        }
-
-        // ── Animation tick ───────────────────────────────────────────────
-        if (animating) {
-            double dw = target_w - current_w;
-            double dh = target_h - current_h;
-            
-            // Ease-out tuning: fast start, gentle stop (premium feel)
-            // Increased multiplier for faster start, but check for small delta for stop
-            current_w += dw * 0.4;
-            current_h += dh * 0.4;
-            if (std::abs(dw) < 1.0 && std::abs(dh) < 1.0) {
-                current_w = target_w; current_h = target_h;
-                if (!launch_animating) animating = false;
-            }
-            if (launch_animating) {
-                if (!launch_flipped && current_w <= 6.0) {
-                    launch_flipped = true;
-                    pulse_widget->is_launching = true;
-                    target_w = 400.0; target_h = 240.0;
-                } else if (launch_flipped && std::abs(dw) < 2.0 && std::abs(dh) < 2.0) {
-                    spawn_app(pulse_widget->launch_app);
-                    // Smoothly collapse instead of exiting
-                    launch_animating = false;
-                    launch_flipped = false;
-                    pulse_widget->is_launching = false;
-                    pulse_active = false;
-                    query = ""; selected_index = 0;
-                    sync_pulse();
-                    window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
-                    target_w = AURA_W; target_h = AURA_H;
-                    window->set_keyboard_interactivity(false);
-                    animating = true;
-                }
-            }
-            if (current_w > 0.0 && current_h > 0.0) {
-                window->resize(static_cast<uint32_t>(current_w), static_cast<uint32_t>(current_h));
-                needs_redraw = true;
-            }
-        }
-
-        // ── Handle async IPC search results ──────────────────────────────
-        // NOTE: IPC results from searchd are intentionally NOT applied to current_results.
-        // Local build_results() is the authoritative source. Applying async IPC results
-        // mid-interaction caused race conditions where selected_index pointed to wrong item
-        // (e.g., "restart" typed → Enter → app-installer launched because IPC updated list).
-        // Clear the flag to prevent backlog buildup.
-        g_results_updated.store(false);
-        { std::lock_guard<std::mutex> lock(g_results_mutex); g_search_results.clear(); }
-
-        // ── Poll events ──────────────────────────────────────────────────
-        txui::Event event;
-        while (window->poll_event(event)) {
-            if (event.type == txui::EventType::WindowClose) {
-                running = false;
-            } else if (event.type == txui::EventType::PointerMove) {
-                pulse_widget->mouse_pos = txui::Point(event.pointer.x, event.pointer.y);
-                if (pulse_active && !launch_animating) {
-                    const double SW = PULSE_W;
-                    const double SH = PULSE_H;
-                    const double SEARCH_H = 58.0;
-                    const double ROW_H = 44.0;
-                    const double ROW_GAP = 8.0;
-                    const double rows_n = static_cast<double>(std::min(pulse_widget->results.size(), size_t{7}));
-                    const double card_h = SEARCH_H + rows_n * (ROW_H + ROW_GAP) + 20.0;
-                    const double px = (SW - 680.0) * 0.5;
-                    const double py = SH * 0.38 - card_h * 0.5;
-                    const double rows_y = py + SEARCH_H + 8.0;
-                    
-                    int new_hover = -1;
-                    if (event.pointer.x >= px && event.pointer.x <= px + 680.0 && event.pointer.y >= rows_y && event.pointer.y <= rows_y + rows_n * (ROW_H + ROW_GAP)) {
-                        new_hover = static_cast<int>((event.pointer.y - rows_y) / (ROW_H + ROW_GAP));
-                    }
-                    if (pulse_widget->hovered_index != new_hover) {
-                        pulse_widget->hovered_index = new_hover;
-                        needs_redraw = true;
-                    }
-                }
-            } else if (event.type == txui::EventType::PointerButtonPress && !launch_animating) {
-                if (event.pointer.button == txui::MouseButton::Left && pulse_active) {
-                    const double SW = PULSE_W;
-                    const double SH = PULSE_H;
-                    const double SEARCH_H = 58.0;
-                    const double ROW_H = 44.0;
-                    const double ROW_GAP = 8.0;
-                    const double rows_n = static_cast<double>(std::min(pulse_widget->results.size(), size_t{7}));
-                    const double card_h = SEARCH_H + rows_n * (ROW_H + ROW_GAP) + 20.0;
-                    const double px = (SW - 680.0) * 0.5;
-                    const double py = SH * 0.38 - card_h * 0.5;
-                    
-                    if (event.pointer.x < px || event.pointer.x > px + 680.0 || event.pointer.y < py || event.pointer.y > py + card_h) {
-                        pulse_active = false;
-                        query = ""; selected_index = 0; sync_pulse();
-                        window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
-                        target_w = AURA_W; target_h = AURA_H;
-                        window->set_keyboard_interactivity(false);
-                        animating = true;
-                        needs_redraw = true;
-                    } else if (pulse_widget->hovered_index >= 0 && pulse_widget->hovered_index < static_cast<int>(pulse_widget->results.size())) {
-                        pulse_widget->launch_app = pulse_widget->results[static_cast<size_t>(pulse_widget->hovered_index)];
-                        launch_animating = true; animating = true; target_w = 2.0;
-                        needs_redraw = true;
-                    }
-                }
-            } else if (event.type == txui::EventType::KeyDown && !launch_animating) {
-                needs_redraw = true;
-                const bool shift = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Shift);
-                const bool ctrl  = txui::has_modifier(event.keyboard.modifiers, txui::KeyModifier::Ctrl);
-
-                if (pulse_active) {
-                    if (event.keyboard.key == txui::Key::Escape) {
-                        pulse_active = false;
-                        query = ""; selected_index = 0;
-                        window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
-                        target_w = AURA_W; target_h = AURA_H;
-                        window->set_keyboard_interactivity(false);
-                        animating = true;
-                    } else if (event.keyboard.key == txui::Key::Enter) {
-                        if (!current_results.empty() && selected_index < current_results.size()) {
-                            pulse_widget->launch_app = current_results[selected_index];
-                            launch_animating = true; animating = true; target_w = 2.0;
-                        } else if (!query.empty()) {
-                            AppItem ci; ci.name = query; ci.exec = query; ci.kind = ResultKind::App;
-                            pulse_widget->launch_app = ci;
-                            launch_animating = true; animating = true; target_w = 2.0;
-                        }
-                    } else if (event.keyboard.key == txui::Key::Up) {
-                        if (selected_index > 0) { selected_index--; sync_pulse(); }
-                    } else if (event.keyboard.key == txui::Key::Down) {
-                        selected_index++; sync_pulse();
-                    } else if (event.keyboard.key == txui::Key::Tab) {
-                        selected_index = (selected_index + 1) % std::max(current_results.size(), size_t{1});
-                        sync_pulse();
-                    } else if (event.keyboard.key == txui::Key::Backspace) {
-                        if (!query.empty()) { query.pop_back(); selected_index = 0; sync_pulse(); }
-                    } else if (ctrl && event.keyboard.key >= txui::Key::N1 && event.keyboard.key <= txui::Key::N9) {
-                        size_t j = static_cast<size_t>(static_cast<int>(event.keyboard.key) - static_cast<int>(txui::Key::N1));
-                        if (j < current_results.size()) {
-                            spawn_app(current_results[j]);
-                            pulse_active = false;
-                            query = ""; selected_index = 0; sync_pulse();
-                            window->set_root_widget(txui::Ref<txui::Widget>(aura_widget.get()));
-                            target_w = AURA_W; target_h = AURA_H; 
-                            window->set_keyboard_interactivity(false);
-                            animating = true;
-                        }
-                    } else {
-                        char ch = key_to_char(event.keyboard.key, shift);
-                        if (ch != '\0') { query += ch; selected_index = 0; sync_pulse(); }
-                    }
-                }
-            }
-        }
-
-        if (!running) break;
-
-        // ── Render ───────────────────────────────────────────────────────
-        if (needs_redraw) {
-            window->present();
-            needs_redraw = false;
-        }
-
-        window->wait_timeout(animating ? 16 : 100);
+    engine.load(QUrl::fromLocalFile(qmlPath));
+    if (engine.rootObjects().isEmpty()) {
+        std::cerr << "FAIL: Failed to load root QML object for shell" << std::endl;
+        return 1;
     }
 
-    log::info("[Shell] Exiting cleanly.");
-    return 0;
+    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    if (window) {
+#if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
+        auto* lsWin = LayerShellQt::Window::get(window);
+        if (lsWin) {
+            lsWin->setLayer(LayerShellQt::Window::LayerTop);
+            lsWin->setAnchors(LayerShellQt::Window::Anchors::fromInt(LayerShellQt::Window::AnchorTop |
+                                                                    LayerShellQt::Window::AnchorLeft |
+                                                                    LayerShellQt::Window::AnchorRight));
+            lsWin->setExclusiveZone(32);
+            std::cout << "[tinexus-shell] LayerShellQt configured: Layer=Top, ExclusiveZone=32" << std::endl;
+        }
+#else
+        std::cout << "[tinexus-shell] LayerShellQt not linked — running in fallback QWindow mode" << std::endl;
+#endif
+
+        // ── Dynamic input-region mask (Precise Compound Geometry) ───────────
+        // The shell window dynamically expands up to 420px height when a flyout
+        // opens. We construct an exact compound QRegion containing ONLY:
+        //   1. The 32px baseline top bar
+        //   2. The AuraNotch area (either 272x46 idle, or 420x72 expanded)
+        //   3. The exact bounding box of whichever flyout is currently open,
+        //      queried dynamically from the QML item scene mapping to prevent drift.
+        //
+        // All other transparent areas remain excluded from the Wayland input
+        // region mask, allowing pointer events to pass cleanly to underlying windows.
+
+        constexpr int kBarH      = 32;    // flat bar height (exclusive zone)
+        constexpr int kNotchH    = 46;    // total notch height
+        constexpr int kNotchHalf = 136;   // half-width of notch top edge (AuraNotch.qml)
+
+        // Lambda: compute and apply the exact compound mask for current state
+        auto applyInputMask = [window, &bridge, kBarH, kNotchH, kNotchHalf]() {
+            int w  = window->width();
+            int cx = w / 2;
+            QRegion mask;
+
+            // 1. Always mask the top bar
+            mask += QRect(0, 0, w, kBarH);
+
+            // 2. Center notch geometry
+            if (bridge.notchExpanded()) {
+                mask += QRect(cx - 210, 0, 420, 72);
+            } else {
+                mask += QRect(cx - kNotchHalf, 0, kNotchHalf * 2, kNotchH);
+            }
+
+            // 3. Add dynamic geometry for open flyouts by querying actual QQuickItem positions & sizes
+            auto addFlyoutItemMask = [window, &mask](const char* objName, const QRect& fallbackRect) {
+                bool added = false;
+                if (auto* item = window->findChild<QQuickItem*>(QString::fromLatin1(objName))) {
+                    if (item->isVisible() && item->opacity() > 0.01) {
+                        QPointF p = item->mapToScene(QPointF(0, 0));
+                        int rx = static_cast<int>(std::floor(p.x()));
+                        int ry = static_cast<int>(std::floor(p.y()));
+                        int rw = static_cast<int>(std::ceil(item->width()));
+                        int rh = static_cast<int>(std::ceil(item->height()));
+                        if (rw > 0 && rh > 0) {
+                            mask += QRect(rx, ry, rw, rh);
+                            added = true;
+                        }
+                    }
+                }
+                if (!added) {
+                    mask += fallbackRect;
+                }
+            };
+
+            if (bridge.logoMenuOpen()) {
+                addFlyoutItemMask("logoFlyout", QRect(8, 36, 230, 290));
+            }
+            if (bridge.appMenuOpen()) {
+                addFlyoutItemMask("appsFlyout", QRect(48, 36, 350, 390));
+            }
+            if (bridge.calendarOpen()) {
+                addFlyoutItemMask("calFlyout", QRect(cx - 90, 48, 310, 310));
+            }
+            if (bridge.notificationsOpen()) {
+                addFlyoutItemMask("notifFlyout", QRect(w - 398, 36, 390, 370));
+            }
+            if (bridge.volumeFlyoutOpen()) {
+                addFlyoutItemMask("volFlyout", QRect(w - 295, 36, 260, 190));
+            }
+            if (bridge.brightnessFlyoutOpen()) {
+                addFlyoutItemMask("briFlyout", QRect(w - 325, 36, 260, 110));
+            }
+            if (bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen()) {
+                addFlyoutItemMask("powerDialog", QRect(cx - 190, 60, 380, 180));
+            }
+            if (bridge.toastVisible()) {
+                addFlyoutItemMask("notifToast", QRect(w - 370, 38, 360, 72));
+            }
+
+            window->setMask(mask);
+            tinexus::log::debug("[shell] Applied dynamic compound input mask (rect count={})", mask.rectCount());
+        };
+
+        // Install event filter for auto-dismissing flyouts on focus loss
+        auto* focusFilter = new ShellFocusFilter(window, &bridge);
+        window->installEventFilter(focusFilter);
+
+        // Apply initial idle mask
+        applyInputMask();
+
+        // Re-apply whenever flyout state changes
+        QObject::connect(&bridge, &tinexus::shell::ShellBridge::flyoutStateChanged,
+                         window, applyInputMask);
+
+        // Re-apply whenever toast visibility changes
+        QObject::connect(&bridge, &tinexus::shell::ShellBridge::toastVisibleChanged,
+                         window, applyInputMask);
+
+        // Re-apply if window width changes (e.g. dynamic output resize)
+        QObject::connect(window, &QWindow::widthChanged, window,
+                         [applyInputMask](int /*newW*/) { applyInputMask(); });
+
+        window->show();
+    }
+
+    return app.exec();
 }

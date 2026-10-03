@@ -17,18 +17,51 @@ target_link_libraries(unit_test_common PRIVATE
 
 add_test(NAME unit_test_common COMMAND unit_test_common)
 
-add_executable(unit_test_txui_clipboard
-    unit/test_txui_clipboard.cpp
+add_executable(unit_test_graphics_probe
+    unit/test_graphics_probe.cpp
 )
 
-target_link_libraries(unit_test_txui_clipboard PRIVATE
-    txui
+target_link_libraries(unit_test_graphics_probe PRIVATE
     tinexus_common
     tinexus_warnings
     tinexus_sanitizers
 )
 
-add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
+add_test(NAME unit_test_graphics_probe COMMAND unit_test_graphics_probe)
+
+if(ENABLE_LEGACY_TXUI)
+    if(NOT TARGET unit_test_txui_clipboard)
+    add_executable(unit_test_txui_clipboard
+        unit/test_txui_clipboard.cpp
+    )
+
+    target_link_libraries(unit_test_txui_clipboard PRIVATE
+        txui
+        tinexus_common
+        tinexus_warnings
+        tinexus_sanitizers
+    )
+
+    add_test(NAME unit_test_txui_clipboard COMMAND unit_test_txui_clipboard)
+    endif()
+endif()
+
+add_executable(unit_test_wifi_contracts
+    unit/test_wifi_backend_contracts.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings-ui/WifiManager.cpp
+)
+
+target_include_directories(unit_test_wifi_contracts PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/settings-ui/include
+)
+
+target_link_libraries(unit_test_wifi_contracts PRIVATE
+    tinexus_common
+    tinexus_warnings
+    tinexus_sanitizers
+)
+
+add_test(NAME unit_test_wifi_contracts COMMAND unit_test_wifi_contracts)
 
 add_executable(unit_test_searchd
     unit/test_searchd.cpp
@@ -458,27 +491,6 @@ target_link_libraries(integration_test_displayd PRIVATE
 
 add_test(NAME integration_test_displayd COMMAND integration_test_displayd)
 
-add_executable(integration_test_installer
-    integration/test_installer.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/disk_inspector.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/partition_engine.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/squashfs_extractor.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/bootloader_config.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/install_controller.cpp
-)
-
-target_include_directories(integration_test_installer PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/installer/include
-)
-
-target_link_libraries(integration_test_installer PRIVATE
-    tinexus-sdk
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-)
-
-add_test(NAME integration_test_installer COMMAND integration_test_installer)
 
 add_executable(integration_test_iso
     integration/test_iso.cpp
@@ -792,179 +804,6 @@ target_link_libraries(integration_test_first_client PRIVATE
 add_test(NAME integration_test_first_client COMMAND integration_test_first_client)
 endif() # full compositor stack
 
-# Milestone v0.2.2 Software Rendering Pipeline Test Suite
-add_executable(integration_test_pixman_renderer
-    integration/test_pixman_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
-)
-
-target_include_directories(integration_test_pixman_renderer PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
-    ${CMAKE_SOURCE_DIR}/src/comp/render/include
-    ${PIXMAN_INCLUDE_DIRS}
-)
-
-target_link_libraries(integration_test_pixman_renderer PRIVATE
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-    PkgConfig::PIXMAN
-)
-
-add_test(NAME integration_test_pixman_renderer COMMAND integration_test_pixman_renderer)
-
-# Milestone v0.2.3 Window Management & Scene Graph Test Suite
-add_executable(integration_test_scene_graph
-    integration/test_scene_graph.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
-)
-
-target_include_directories(integration_test_scene_graph PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/comp/window/include
-    ${CMAKE_SOURCE_DIR}/src/comp/animation/include
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
-    ${CMAKE_SOURCE_DIR}/src/comp/render/include
-    ${PIXMAN_INCLUDE_DIRS}
-)
-
-target_link_libraries(integration_test_scene_graph PRIVATE
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-    PkgConfig::PIXMAN
-)
-
-add_test(NAME integration_test_scene_graph COMMAND integration_test_scene_graph)
-
-# Milestone v0.2.4 First Real Wayland Application Test Suites
-# NOTE: integration_test_xdg_shell relies on WindowManager::instance() which now pulls
-# in the entire focus, input, and layer subsystems. It requires the full compositor.
-if(FALSE)
-add_executable(integration_test_xdg_shell
-    integration/test_xdg_shell.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/xdg_shell_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/layer_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/MinimizeAnimation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/RestoreAnimation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
-)
-
-target_include_directories(integration_test_xdg_shell PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
-    ${CMAKE_SOURCE_DIR}/src/comp/window/include
-    ${CMAKE_SOURCE_DIR}/src/comp/animation/include
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
-    ${CMAKE_SOURCE_DIR}/src/comp/render/include
-    ${PIXMAN_INCLUDE_DIRS}
-)
-
-target_link_libraries(integration_test_xdg_shell PRIVATE
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-    PkgConfig::PIXMAN
-)
-
-add_test(NAME integration_test_xdg_shell COMMAND integration_test_xdg_shell)
-endif()
-
-# NOTE: integration_test_real_client requires the full compositor stack. See wayland_session note.
-if(FALSE)
-add_executable(integration_test_real_client
-    integration/test_real_client.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/server/server.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/server/global_registry.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/server/surface_tree.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/backend/backend.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/backend/wlroots_backend.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/xdg_toplevel_node.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/scene_graph.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/layer_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/MinimizeAnimation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/RestoreAnimation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/input/keymap_engine.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/input/interaction_controller.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/input/seat_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_state.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/configure_serial.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/buffer_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/frame_callback.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/resource_cleanup.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/xdg_shell_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/output/output_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/cursor/cursor_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/window/window_rules.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/focus/focus_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/workspace/workspace_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/shell/shell_state.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/render/frame_scheduler.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/input/shortcut_engine.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/surface_manager.cpp
-)
-
-target_include_directories(integration_test_real_client PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/comp/server/include
-    ${CMAKE_SOURCE_DIR}/src/comp/backend/include
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
-    ${CMAKE_SOURCE_DIR}/src/comp/window/include
-    ${CMAKE_SOURCE_DIR}/src/comp/animation/include
-    ${CMAKE_SOURCE_DIR}/src/comp/surface/include
-    ${CMAKE_SOURCE_DIR}/src/comp/output/include
-    ${CMAKE_SOURCE_DIR}/src/comp/cursor/include
-    ${CMAKE_SOURCE_DIR}/src/comp/focus/include
-    ${CMAKE_SOURCE_DIR}/src/comp/workspace/include
-    ${CMAKE_SOURCE_DIR}/src/comp/shell/include
-    ${CMAKE_SOURCE_DIR}/src/comp/render/include
-    ${CMAKE_SOURCE_DIR}/src/comp/input/include
-    ${CMAKE_SOURCE_DIR}/src/ipcd/include
-    ${CMAKE_BINARY_DIR}/protocols
-    ${WAYLAND_SERVER_INCLUDE_DIRS}
-    ${WLROOTS_INCLUDE_DIRS}
-    ${PIXMAN_INCLUDE_DIRS}
-)
-
-target_compile_definitions(integration_test_real_client PRIVATE WLR_USE_UNSTABLE=1)
-
-target_link_libraries(integration_test_real_client PRIVATE
-    tinexus-sdk
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-    ${WAYLAND_SERVER_LIBRARIES}
-    PkgConfig::WLROOTS
-    PkgConfig::XKBCOMMON
-    PkgConfig::PIXMAN
-)
-
-add_test(NAME integration_test_real_client COMMAND integration_test_real_client)
-endif() # full compositor stack
-
 # Milestone v0.3.0 Input Subsystem & Live Window Interactivity Test Suites
 # NOTE: integration_test_input_seat and integration_test_keyboard_focus require a live
 # wlr_seat* (SeatManager is now a singleton with private ctor; bind_seat takes wlr_seat*).
@@ -1106,6 +945,7 @@ target_include_directories(smoke_surface_lifecycle PRIVATE
     ${CMAKE_SOURCE_DIR}/src/comp/window/include
     ${CMAKE_SOURCE_DIR}/src/comp/animation/include
     ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
+    ${CMAKE_SOURCE_DIR}/src/comp/output/include
 )
 
 target_link_libraries(smoke_surface_lifecycle PRIVATE
@@ -1375,55 +1215,6 @@ target_link_libraries(smoke_drm_kms PRIVATE
 
 add_test(NAME smoke_drm_kms COMMAND smoke_drm_kms)
 
-# Milestone v0.6B Hardware Acceleration Smoke Test Suites
-add_executable(smoke_render_target
-    smoke/render/test_smoke_render_target.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_target.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/gpu_resource_manager.cpp
-)
-
-target_include_directories(smoke_render_target PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
-)
-
-target_link_libraries(smoke_render_target PRIVATE
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-)
-
-add_test(NAME smoke_render_target COMMAND smoke_render_target)
-
-add_executable(smoke_renderer_fallback
-    smoke/render/test_smoke_renderer_fallback.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/renderer_factory.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_target.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/gpu_resource_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/vulkan_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/opengl_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/pixman_renderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/render_surface.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/render/damage_tracker.cpp
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/blur_pass.cpp
-)
-
-target_include_directories(smoke_renderer_fallback PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/comp/renderer/include
-    ${CMAKE_SOURCE_DIR}/src/comp/render/include
-    ${PIXMAN_INCLUDE_DIRS}
-    ${WLROOTS_INCLUDE_DIRS}
-)
-
-target_link_libraries(smoke_renderer_fallback PRIVATE
-    tinexus_common
-    tinexus_warnings
-    tinexus_sanitizers
-    PkgConfig::PIXMAN
-    PkgConfig::WLROOTS
-)
-
-add_test(NAME smoke_renderer_fallback COMMAND smoke_renderer_fallback)
-
 # Milestone v0.6CD Hardware Discovery & Distribution Stack Smoke Test Suites
 add_executable(smoke_udev_hotplug
     smoke/input/test_smoke_udev_hotplug.cpp
@@ -1446,17 +1237,6 @@ target_include_directories(smoke_pkg_manager PRIVATE ${CMAKE_SOURCE_DIR}/src/pkg
 target_link_libraries(smoke_pkg_manager PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
 add_test(NAME smoke_pkg_manager COMMAND smoke_pkg_manager)
 
-add_executable(smoke_installer_partition
-    smoke/installer/test_smoke_installer_partition.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/install_controller.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/disk_inspector.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/partition_engine.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/squashfs_extractor.cpp
-    ${CMAKE_SOURCE_DIR}/src/installer/bootloader_config.cpp
-)
-target_include_directories(smoke_installer_partition PRIVATE ${CMAKE_SOURCE_DIR}/src/installer/include)
-target_link_libraries(smoke_installer_partition PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
-add_test(NAME smoke_installer_partition COMMAND smoke_installer_partition)
 
 add_executable(smoke_iso_builder
     smoke/iso/test_smoke_iso_builder.cpp
@@ -1497,6 +1277,7 @@ target_include_directories(smoke_release_candidate PRIVATE
 target_link_libraries(smoke_release_candidate PRIVATE tinexus_common tinexus_warnings tinexus_sanitizers)
 add_test(NAME smoke_release_candidate COMMAND smoke_release_candidate)
 
+if(ENABLE_LEGACY_TXUI)
 # Phase 4.1 Step 3 libtxui Core & Math Unit Tests
 add_executable(unit_test_txui_core unit/test_txui_core.cpp)
 target_link_libraries(unit_test_txui_core PRIVATE txui tinexus_warnings)
@@ -1557,3 +1338,98 @@ add_test(NAME unit_test_txui_gate1_resize COMMAND unit_test_txui_gate1_resize)
 add_executable(unit_test_txui_gate1_memory unit/test_txui_gate1_memory.cpp)
 target_link_libraries(unit_test_txui_gate1_memory PRIVATE txui tinexus_warnings)
 add_test(NAME unit_test_txui_gate1_memory COMMAND unit_test_txui_gate1_memory)
+
+add_executable(unit_test_store_render
+    unit/test_store_render.cpp
+    ${CMAKE_SOURCE_DIR}/src/app-installer/StoreWidget.cpp
+)
+target_include_directories(unit_test_store_render PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/app-installer
+)
+target_link_libraries(unit_test_store_render PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_store_render COMMAND unit_test_store_render)
+
+add_executable(unit_test_single_instance unit/test_single_instance.cpp)
+target_link_libraries(unit_test_single_instance PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_single_instance COMMAND unit_test_single_instance)
+
+add_executable(unit_test_app_id_isolation unit/test_app_id_isolation.cpp)
+target_link_libraries(unit_test_app_id_isolation PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_app_id_isolation COMMAND unit_test_app_id_isolation)
+endif()
+
+add_executable(test_window_state_machine unit/test_window_state_machine.cpp)
+target_include_directories(test_window_state_machine PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+target_link_libraries(test_window_state_machine PRIVATE tinexus_common tinexus_warnings)
+add_test(NAME test_window_state_machine COMMAND test_window_state_machine)
+
+add_executable(test_memory_safety_during_anim unit/test_memory_safety_during_anim.cpp)
+target_include_directories(test_memory_safety_during_anim PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+target_link_libraries(test_memory_safety_during_anim PRIVATE tinexus_common tinexus_warnings)
+add_test(NAME test_memory_safety_during_anim COMMAND test_memory_safety_during_anim)
+
+if(ENABLE_LEGACY_TXUI)
+add_executable(unit_test_topbar_geometry unit/test_topbar_geometry.cpp)
+target_link_libraries(unit_test_topbar_geometry PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_topbar_geometry COMMAND unit_test_topbar_geometry)
+
+add_executable(unit_test_input_region unit/test_input_region.cpp)
+target_link_libraries(unit_test_input_region PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_input_region COMMAND unit_test_input_region)
+endif()
+
+add_executable(unit_test_animation_manager
+    unit/test_animation_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/animation.cpp
+)
+target_include_directories(unit_test_animation_manager PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/comp/animation/include
+    ${CMAKE_SOURCE_DIR}/src/comp/window/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+)
+target_link_libraries(unit_test_animation_manager PRIVATE tinexus_common tinexus_warnings)
+add_test(NAME unit_test_animation_manager COMMAND unit_test_animation_manager)
+
+if(ENABLE_LEGACY_TXUI)
+add_executable(unit_test_lifecycle_dock
+    unit/test_lifecycle_dock.cpp
+    ${CMAKE_SOURCE_DIR}/src/dock/ui/DockWidget.cpp
+)
+target_include_directories(unit_test_lifecycle_dock PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/dock/include
+    ${CMAKE_SOURCE_DIR}/src/ipcd/include
+    ${CMAKE_SOURCE_DIR}/src/common/include
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(unit_test_lifecycle_dock PRIVATE txui tinexus_common tinexus_warnings)
+add_test(NAME unit_test_lifecycle_dock COMMAND unit_test_lifecycle_dock)
+endif()
+
+if(TINEXUS_BUILD_QT_APPS)
+    message(STATUS "Qt6 Tier 2 apps/tests enabled (TINEXUS_BUILD_QT_APPS=ON)")
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2)
+    add_subdirectory(qt6_popup_test)
+endif()
+
+# ── Tier 1 Migration Gate ──────────────────────────────────────────────────────
+# test-tier1-gate: validates all blockers for tinexus-shell, tinexus-dock,
+# tinexus-launcher Qt6 migration in one combined proof-of-concept harness.
+# Does NOT require TINEXUS_BUILD_QT_APPS — runs standalone with Qt6 Core/Gui/Quick.
+# Requires Qt6 to be present on the build host.
+find_package(Qt6 QUIET COMPONENTS Core Gui Quick Qml WaylandClient)
+if(Qt6_FOUND AND Qt6Gui_FOUND AND Qt6Quick_FOUND)
+    add_subdirectory(tier1_gate)
+    message(STATUS "Tier 1 Gate: test-tier1-gate enabled")
+    message(STATUS "  Run: cmake --build . --target test-tier1-gate")
+    message(STATUS "  For live layer-shell test: cmake -DTIER1_GATE_LAYERSHELL=ON .")
+else()
+    message(STATUS "Tier 1 Gate: Qt6 not found — test-tier1-gate SKIPPED")
+    message(STATUS "  Install Qt6 and re-run cmake to enable the migration gate.")
+endif()

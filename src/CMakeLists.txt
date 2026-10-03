@@ -2,17 +2,32 @@
 
 add_subdirectory(common)
 add_subdirectory(serviced)
-add_subdirectory(ipcd)
+# Legacy IPC broker (deprecated in Phase 3; standardized on D-Bus)
+# Kept as optional/legacy for staged retirement until D-Bus path is proven in production.
+option(ENABLE_LEGACY_IPCD "Build legacy tinexus-ipcd binary socket broker" ON)
+if(ENABLE_LEGACY_IPCD)
+    add_subdirectory(ipcd)
+endif()
 add_subdirectory(searchd)
-add_subdirectory(txui)
+
+# Legacy Pixman UI rasterizer (deprecated in Phase 4; standardized on Qt6/QML)
+# Kept as optional/legacy for staged retirement until all unmigrated tools are ported.
+option(ENABLE_LEGACY_TXUI "Build legacy handmade txui rendering and unmigrated widgets" ON)
+if(ENABLE_LEGACY_TXUI)
+    add_subdirectory(txui)
+    add_subdirectory(app-installer)
+endif()
+
 add_subdirectory(guard)
 
-# Future step subdirectories
+# Core and desktop subdirectories
 add_subdirectory(comp)
 add_subdirectory(shell)
 add_subdirectory(dock)
+add_subdirectory(launcher)
 add_subdirectory(settings)
 add_subdirectory(settings-ui)
+add_subdirectory(about)
 add_subdirectory(notifications)
 add_subdirectory(clipboard)
 add_subdirectory(indexer)
@@ -25,8 +40,6 @@ add_subdirectory(monitor)
 add_subdirectory(login)
 add_subdirectory(pkg)
 add_subdirectory(displayd)
-add_subdirectory(app-installer)
-add_subdirectory(installer)
 add_subdirectory(iso)
 add_subdirectory(liveusb)
 add_subdirectory(release)

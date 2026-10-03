@@ -3,17 +3,17 @@
 #include "comp/surface/surface_manager.hpp"
 #include "comp/surface/layer_shell_manager.hpp"
 #include "comp/surface/exclusive_zone_calculator.hpp"
-#include "comp/window/window_node.hpp"
-#include "comp/window/layer_manager.hpp"
+#include "comp/output/output_manager.hpp"
 
 using namespace tinexus::comp;
 
 int main() {
     std::cout << "[+] Running smoke_surface_lifecycle test suite..." << std::endl;
 
+    OutputManager::instance().add_output(OutputConfig{"WL-1", 1920, 1080, 60000, 1.0f, 0, 0, true});
+
     auto& surface_mgr = SurfaceManager::instance();
     auto& layer_shell = LayerShellManager::instance();
-    auto& layer_mgr = LayerManager::instance();
 
     // 1. Surface Creation
     uint32_t s1 = surface_mgr.create_surface(1234, "tinexus-panel");
@@ -82,27 +82,7 @@ int main() {
     assert(new_area.y == 48);
     assert(new_area.height == 1032);
 
-    // 6. LayerManager Ordering Verification (Background < Bottom < Normal < Top < Overlay)
-    WindowNode node_bg(1, "wallpaper");
-    WindowNode node_normal(2, "app");
-    WindowNode node_top(3, "panel");
-
-    layer_mgr.add_node(SceneLayer::Background, &node_bg);
-    layer_mgr.add_node(SceneLayer::Normal, &node_normal);
-    layer_mgr.add_node(SceneLayer::Top, &node_top);
-
-    assert(layer_mgr.count_layer(SceneLayer::Background) == 1);
-    assert(layer_mgr.count_layer(SceneLayer::Normal) == 1);
-    assert(layer_mgr.count_layer(SceneLayer::Top) == 1);
-    assert(layer_mgr.total_count() == 3);
-
-    auto ordered = layer_mgr.get_ordered_render_nodes();
-    assert(ordered.size() == 3);
-    assert(ordered[0] == &node_bg);
-    assert(ordered[1] == &node_normal);
-    assert(ordered[2] == &node_top);
-
-    // 7. Surface Destruction
+    // 6. Surface Destruction
     assert(layer_shell.destroy_layer_surface(ls1) == true);
     rec1 = surface_mgr.get_record(s1);
     assert(rec1.lifecycle == SurfaceLifecycle::Destroyed);

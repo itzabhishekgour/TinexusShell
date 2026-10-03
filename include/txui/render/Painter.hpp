@@ -1,6 +1,7 @@
 #pragma once
 
 #include <txui/render/CommandBuffer.hpp>
+#include <txui/render/FontMetrics.hpp>
 
 namespace txui {
 
@@ -89,6 +90,11 @@ public:
     void draw_mono_text(const Point& pos, const std::string& text, const Color& color,
                         double scale = 1.0, bool bold = false) {
         m_buffer.push(DrawTextCommand{pos, text, color, scale, bold, false, FontFamily::Monospace});
+    }
+
+    [[nodiscard]] TextExtents measure_text(std::string_view text, double font_size,
+                                           bool bold = false, FontFamily family = FontFamily::UI) const noexcept {
+        return FontMetrics::measure(text, font_size, bold, family);
     }
 
     void draw_line(const Point& p1, const Point& p2, double thickness, const Color& color) {

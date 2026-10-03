@@ -1,0 +1,20 @@
+// /etc/polkit-1/rules.d/50-tinexus-power.rules
+// Allow tinexus desktop users to shut down, restart, and suspend without password prompt
+
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.power-off-ignore-inhibit" ||
+         action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.reboot-ignore-inhibit" ||
+         action.id == "org.freedesktop.login1.suspend" ||
+         action.id == "org.freedesktop.login1.suspend-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.suspend-ignore-inhibit" ||
+         action.id == "org.freedesktop.login1.hibernate" ||
+         action.id == "org.freedesktop.login1.hibernate-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.hibernate-ignore-inhibit") &&
+        (subject.isInGroup("tinexus") || subject.isInGroup("sudo"))) {
+        return polkit.Result.YES;
+    }
+});

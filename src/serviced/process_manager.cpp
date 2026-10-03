@@ -2,6 +2,7 @@
 #include "serviced/event_journal.hpp"
 #include "serviced/heartbeat_watchdog.hpp"
 #include "common/logger.hpp"
+#include "common/RuntimePaths.hpp"
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
@@ -97,7 +98,7 @@ bool ProcessManager::start_service(const std::string& service_id) {
             setenv("WLR_LIBSEAT_BACKEND", "builtin", 1);
             setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
             unsetenv("WLR_BACKENDS");
-            setenv("WLR_RENDERER", "pixman", 1);
+            // Note: WLR_RENDERER and WLR_DRM_DEVICES are set authoritatively by serviced prior to launch
         } else {
             setenv("WAYLAND_DISPLAY", "wayland-0", 1);
         }
@@ -180,9 +181,8 @@ bool ProcessManager::start_all_services() {
         
         if (id == "comp") {
             log::info("Waiting for Wayland socket (wayland-0)...");
-            int retries = 0;
-            // XDG_RUNTIME_DIR is /run/user/0
-            while (!std::filesystem::exists("/run/user/0/wayland-0") && retries < 300) {
+            std::string wayland_sock = common::RuntimePaths::get_user_runtime_dir() + "/wayland-0";
+            while (!std::filesystem::exists(wayland_sock) && retries < 300) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 retries++;
             }

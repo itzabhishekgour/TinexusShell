@@ -123,6 +123,8 @@ int main() {
     // Load logo — initialize to 0 to avoid UB if stbi_load fails
     int img_w = 0, img_h = 0, img_channels = 0;
     uint8_t* img_data = stbi_load("/tinexus-logo.png", &img_w, &img_h, &img_channels, 4);
+    if (!img_data) img_data = stbi_load("/usr/share/tinexus/tinexus-logo.png", &img_w, &img_h, &img_channels, 4);
+    if (!img_data) img_data = stbi_load("assets/logo/tinexus-logo.png", &img_w, &img_h, &img_channels, 4);
     if (img_data) {
         int x = (static_cast<int>(vinfo.xres) - img_w) / 2;
         int y = (static_cast<int>(vinfo.yres) - img_h) / 2 - 50; // Shift up slightly for progress bar

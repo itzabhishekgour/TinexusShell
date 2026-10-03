@@ -6,6 +6,7 @@ pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
 pkg_check_modules(VULKAN REQUIRED IMPORTED_TARGET vulkan)
 pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(PIXMAN REQUIRED IMPORTED_TARGET pixman-1)
+pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 
 add_executable(tinexus-comp
     main.cpp
@@ -15,22 +16,12 @@ add_executable(tinexus-comp
     backend/headless_backend.cpp
     backend/wlroots_backend.cpp
     backend/drm_backend.cpp
-    renderer/renderer.cpp
-    renderer/render_surface.cpp
-    renderer/pixman_renderer.cpp
     surface/surface_state.cpp
     surface/configure_serial.cpp
     surface/buffer_manager.cpp
     surface/frame_callback.cpp
     surface/resource_cleanup.cpp
-    surface/xdg_shell_manager.cpp
-    window/scene_node.cpp
-    window/window_node.cpp
-    window/xdg_toplevel_node.cpp
-    window/scene_graph.cpp
-    window/window_manager.cpp
-    window/MinimizeAnimation.cpp
-    window/RestoreAnimation.cpp
+    window/decoration_manager.cpp
     input/keymap_engine.cpp
     input/interaction_controller.cpp
     input/seat_manager.cpp
@@ -44,27 +35,20 @@ add_executable(tinexus-comp
     shell/shell_state.cpp
     render/frame_scheduler.cpp
     animation/animation.cpp
+    animation/animation_manager.cpp
     input/shortcut_engine.cpp
     surface/surface_manager.cpp
     surface/layer_shell_manager.cpp
+    surface/blur_manager.cpp
     surface/exclusive_zone_calculator.cpp
     server/protocol_dispatcher.cpp
-    window/layer_manager.cpp
     render/damage_tracker.cpp
     output/output_layout.cpp
-    renderer/renderer_factory.cpp
-    renderer/render_target.cpp
-    renderer/gpu_resource_manager.cpp
-    renderer/vulkan_renderer.cpp
-    renderer/opengl_renderer.cpp
-    renderer/blur_pass.cpp
-    renderer/shadow_generator.cpp
 )
 
 target_include_directories(tinexus-comp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/server/include
     ${CMAKE_CURRENT_SOURCE_DIR}/backend/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/renderer/include
     ${CMAKE_CURRENT_SOURCE_DIR}/output/include
     ${CMAKE_CURRENT_SOURCE_DIR}/cursor/include
     ${CMAKE_CURRENT_SOURCE_DIR}/window/include
@@ -91,6 +75,7 @@ target_link_libraries(tinexus-comp PRIVATE
     PkgConfig::VULKAN
     PkgConfig::XKBCOMMON
     PkgConfig::PIXMAN
+    PkgConfig::SYSTEMD
 )
 
 install(TARGETS tinexus-comp RUNTIME DESTINATION bin)

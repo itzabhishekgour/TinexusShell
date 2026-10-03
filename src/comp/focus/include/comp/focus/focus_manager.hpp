@@ -83,6 +83,9 @@ public:
     /// Give keyboard focus to surface.  Pass nullptr to clear.
     void set_keyboard_focus(struct wlr_surface* surface) noexcept;
 
+    /// Re-assert keyboard focus to m_keyboard_surface if a keyboard device was just attached.
+    void reassert_keyboard_focus() noexcept;
+
     // ------------------------------------------------------------------
     // Legacy API (kept for compatibility with existing callers)
     // ------------------------------------------------------------------

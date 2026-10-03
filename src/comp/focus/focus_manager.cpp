@@ -63,6 +63,11 @@ PickResult FocusManager::pick_surface(double x, double y) const noexcept {
         return {};
     }
 
+    if (y <= 60.0) {
+        log::debug("[Focus] pick_surface ({:.1f}, {:.1f}) -> surf={} sx={:.1f} sy={:.1f}",
+                   x, y, static_cast<void*>(scene_surf->surface), sx, sy);
+    }
+
     return PickResult{ scene_surf->surface, sx, sy };
 }
 
@@ -107,8 +112,8 @@ void FocusManager::set_keyboard_focus(struct wlr_surface* surface) noexcept {
         return;
     }
 
-    // Avoid redundant re-enters
-    if (surface == m_keyboard_surface) {
+    // Avoid redundant re-enters only if the seat actually already has this surface focused
+    if (surface == m_keyboard_surface && m_seat->keyboard_state.focused_surface == surface) {
         return;
     }
 
@@ -123,11 +128,29 @@ void FocusManager::set_keyboard_focus(struct wlr_surface* surface) noexcept {
                 &kb->modifiers);
             log::info("[Focus] Keyboard → surface={}", static_cast<void*>(surface));
         } else {
-            log::warn("[Focus] set_keyboard_focus: no keyboard attached to seat yet");
+            log::warn("[Focus] set_keyboard_focus: no keyboard attached to seat yet (deferred)");
         }
     } else {
         wlr_seat_keyboard_notify_clear_focus(m_seat);
         log::info("[Focus] Keyboard cleared");
+    }
+}
+
+void FocusManager::reassert_keyboard_focus() noexcept {
+    if (!m_seat || !m_keyboard_surface) {
+        return;
+    }
+    struct wlr_keyboard* kb = wlr_seat_get_keyboard(m_seat);
+    if (!kb) {
+        return;
+    }
+    if (m_seat->keyboard_state.focused_surface != m_keyboard_surface) {
+        wlr_seat_keyboard_notify_enter(
+            m_seat, m_keyboard_surface,
+            kb->keycodes, kb->num_keycodes,
+            &kb->modifiers);
+        log::info("[Focus] Reasserted keyboard focus on device attach → surface={}",
+                  static_cast<void*>(m_keyboard_surface));
     }
 }
 

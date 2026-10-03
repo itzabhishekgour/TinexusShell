@@ -1,0 +1,8 @@
+# /etc/udev/rules.d/90-backlight.rules
+# Allow users in video group to control screen backlight brightness directly without root
+
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"
+ACTION=="change", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"
+
+# Also support leds subsystem displays (e.g. keyboard backlights, panel leds)
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="*backlight*", RUN+="/bin/chgrp video /sys/class/leds/%k/brightness", RUN+="/bin/chmod 0664 /sys/class/leds/%k/brightness"

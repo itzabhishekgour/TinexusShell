@@ -34,6 +34,16 @@ option(TINEXUS_ENABLE_SANITIZERS "Enable ASan/UBSan sanitizers in debug builds" 
 option(TINEXUS_WARNINGS_AS_ERRORS "Treat all compiler warnings as errors" OFF)
 option(TINEXUS_ENABLE_LTO "Enable Link-Time Optimization in release builds" OFF)
 option(BUILD_TESTING "Build unit and integration test suites" ON)
+option(TINEXUS_BUILD_QT_APPS "Build Qt6-based Tier 2 applications and test harness" OFF)
+
+# Dynamically query wlroots package version to inject into compositor and UI string queries
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(WLROOTS_GLOBAL QUIET wlroots-0.19 wlroots-0.18 wlroots)
+    if(WLROOTS_GLOBAL_FOUND AND WLROOTS_GLOBAL_VERSION)
+        add_compile_definitions(TINEXUS_WLROOTS_VERSION="${WLROOTS_GLOBAL_VERSION}")
+    endif()
+endif()
 
 # Interface target for warning flags
 add_library(tinexus_warnings INTERFACE)

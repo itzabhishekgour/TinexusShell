@@ -250,6 +250,81 @@ void dispatch_message(int sender_fd,
     }
 
     // -----------------------------------------------------------------------
+    // WALLPAPER_CHANGED (5002) — broadcast WallpaperChangedPayload to all
+    // subscribers of topic 5002.  Subscribers: tinexus-wallpaper, tinexus-lock.
+    //
+    // The payload MUST be exactly sizeof(WallpaperChangedPayload) == 524 bytes.
+    // Reject under-sized frames so receivers can memcpy safely.
+    // -----------------------------------------------------------------------
+    case MT::WALLPAPER_CHANGED: {
+        constexpr uint32_t EXPECTED_PAYLOAD = 524u; // sizeof(WallpaperChangedPayload)
+        if (payload.size() < EXPECTED_PAYLOAD) {
+            tinexus::log::warn("[ipcd] WALLPAPER_CHANGED payload too small ({} bytes, need {}); rejected",
+                               payload.size(), EXPECTED_PAYLOAD);
+            break;
+        }
+        auto subscribers = broker::PubSubBroker::instance()
+            .get_subscribers(static_cast<uint16_t>(MT::WALLPAPER_CHANGED));
+        for (int sub_fd : subscribers) {
+            send_frame(sub_fd, MT::WALLPAPER_CHANGED, hdr.sequence_id,
+                       payload.data(), EXPECTED_PAYLOAD);
+        }
+        tinexus::log::info("[ipcd] WALLPAPER_CHANGED broadcast to {} subscriber(s)", subscribers.size());
+        break;
+    }
+
+    // -----------------------------------------------------------------------
+    // WALLPAPER_STATUS_QUERY (5003) — forwarded directly to the registered
+    // 'wallpaper' service (point-to-point, not pub-sub).
+    // The wallpaper daemon replies with WALLPAPER_STATUS_REPLY (5004) directly
+    // to the requesting client fd, encoded in hdr.flags.
+    // -----------------------------------------------------------------------
+    case MT::WALLPAPER_STATUS_QUERY: {
+        auto svc = registry::ServiceRegistry::instance().lookup_service("wallpaper");
+        if (svc.has_value() && svc->provider_fd != -1) {
+            protocol::Header fwd_hdr = hdr;
+            fwd_hdr.flags = static_cast<uint16_t>(sender_fd & 0xFFFF);
+            send_frame(svc->provider_fd, MT::WALLPAPER_STATUS_QUERY, fwd_hdr.sequence_id,
+                       payload.empty() ? nullptr : payload.data(),
+                       static_cast<uint32_t>(payload.size()));
+            tinexus::log::debug("[ipcd] WALLPAPER_STATUS_QUERY forwarded to wallpaper fd={}", svc->provider_fd);
+        } else {
+            tinexus::log::warn("[ipcd] WALLPAPER_STATUS_QUERY: 'wallpaper' service not registered");
+            send_frame(sender_fd, MT::WALLPAPER_STATUS_REPLY, hdr.sequence_id, nullptr, 0);
+        }
+        break;
+    }
+
+    // -----------------------------------------------------------------------
+    // WALLPAPER_STATUS_REPLY (5004) — route reply from wallpaper daemon back
+    // to the original requester (Settings UI). requester fd in hdr.flags.
+    // -----------------------------------------------------------------------
+    case MT::WALLPAPER_STATUS_REPLY: {
+        int requester_fd = static_cast<int>(hdr.flags);
+        if (requester_fd > 0) {
+            send_frame(requester_fd, MT::WALLPAPER_STATUS_REPLY, hdr.sequence_id,
+                       payload.empty() ? nullptr : payload.data(),
+                       static_cast<uint32_t>(payload.size()));
+            tinexus::log::debug("[ipcd] WALLPAPER_STATUS_REPLY routed back to fd={}", requester_fd);
+        }
+        break;
+    }
+
+    // -----------------------------------------------------------------------
+    // WALLPAPER_FRAME_ADVANCE (5005) — internal: dynamic schedule advances to
+    // next frame.  Forwarded to the registered 'wallpaper' service only.
+    // -----------------------------------------------------------------------
+    case MT::WALLPAPER_FRAME_ADVANCE: {
+        auto svc = registry::ServiceRegistry::instance().lookup_service("wallpaper");
+        if (svc.has_value() && svc->provider_fd != -1) {
+            send_frame(svc->provider_fd, MT::WALLPAPER_FRAME_ADVANCE, hdr.sequence_id,
+                       payload.empty() ? nullptr : payload.data(),
+                       static_cast<uint32_t>(payload.size()));
+        }
+        break;
+    }
+
+    // -----------------------------------------------------------------------
     // SYS_INSTALL_REQUEST — route to the registered "supervisor" service
     // Includes payload file descriptor via SCM_RIGHTS.
     // -----------------------------------------------------------------------

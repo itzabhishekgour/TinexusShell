@@ -1,0 +1,30 @@
+[Unit]
+Description=Tinexus Hardware Environment Probe
+Documentation=https://github.com/itzabhishekgour/TinexusShell
+# Runs once at session start, after udev has settled and DRM nodes exist.
+# Publishes /run/tinexus/env with WLR_RENDERER and WLR_DRM_DEVICES so that
+# tinexus-comp.service picks them up via EnvironmentFile=.
+After=systemd-udev-settle.service
+Before=tinexus-comp.service
+ConditionPathExists=/dev/dri
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+
+# tinexus-hardware-probe replaces the GraphicsProbe::evaluate() logic that
+# previously lived in serviced/main.cpp:444-463.
+# It writes /run/tinexus/env containing:
+#   WLR_RENDERER=gles2              (if hardware confirmed)
+#   WLR_DRM_DEVICES=/dev/dri/cardN  (primary verified KMS node)
+#   LIBSEAT_BACKEND=logind
+#   WLR_DRM_NO_ATOMIC=1             (set if running under QEMU/virtio-gpu)
+#   WLR_NO_HARDWARE_CURSORS=1
+ExecStart=/usr/bin/tinexus-hardware-probe
+
+ExecStartPost=/bin/sh -c 'test -f /run/tinexus/env || (mkdir -p /run/tinexus && printf "WLR_DRM_NO_ATOMIC=1\nWLR_NO_HARDWARE_CURSORS=1\nLIBSEAT_BACKEND=seatd\n" > /run/tinexus/env)'
+ExecStartPost=-/bin/sh -c 'for f in /sys/class/backlight/*/brightness; do [ -f "$f" ] && chgrp video "$f" && chmod 0664 "$f"; done || true'
+
+[Install]
+WantedBy=tinexus-session.target

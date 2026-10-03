@@ -13,7 +13,13 @@ enum class IconType {
     Home,
     Downloads,
     Apps,
-    Trash
+    Trash,
+    Terminal,
+    Settings,
+    Gear,
+    BarChart,
+    Package,
+    Globe
 };
 
 class Icon : public Widget {
@@ -33,6 +39,11 @@ public:
     void set_type(IconType type) noexcept;
     void set_size(double size) noexcept;
     [[nodiscard]] IconType type() const noexcept { return m_type; }
+
+    /// Canonical vector rendering function for all IconTypes.
+    /// Can be called directly by high-performance animation loops (e.g. Dock)
+    /// without widget-tree overhead or parent measure bubbling.
+    static void render(Painter& painter, IconType type, const Rect& bounds) noexcept;
 };
 
 } // namespace txui

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="blur">
+  <copyright>
+    Copyright (C) 2011 Martin Gräßlin
+    Copyright (C) 2015 Marco Martin
+    Copyright (C) 2026 Tinexus Platform Team
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="org_kde_kwin_blur_manager" version="1">
+    <description summary="blur behind window manager">
+      This interface allows clients to request background blurring for windows.
+    </description>
+
+    <request name="create">
+      <description summary="creates a blur object for a surface"/>
+      <arg name="id" type="new_id" interface="org_kde_kwin_blur"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="unset">
+      <description summary="unsets blur for a surface"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="org_kde_kwin_blur" version="1">
+    <description summary="blur object for a surface">
+      Allows setting a region to be blurred behind the surface.
+    </description>
+
+    <request name="commit">
+      <description summary="commit the blur changes"/>
+    </request>
+
+    <request name="set_region">
+      <description summary="set the blur region"/>
+      <arg name="region" type="object" interface="wl_region" allow-null="true"/>
+    </request>
+
+    <request name="release" type="destructor">
+      <description summary="destroys the blur object"/>
+    </request>
+  </interface>
+</protocol>

@@ -12,28 +12,30 @@ enum class DockMessageType : uint16_t {
     DOCK_RESTORE_REQUEST      = 0x0064,  // dock→comp: "restore this window"
     DOCK_RAISE_AND_FOCUS      = 0x0065,  // dock→comp: "raise+focus running-bg window"
     DOCK_NOTIFY_FOCUS_CHANGED = 0x0066,  // comp→dock: "app focus state changed"
+    DOCK_NOTIFY_APP_STARTED   = 0x0067,  // comp→dock: "app window mapped / running"
+    DOCK_NOTIFY_APP_CLOSED    = 0x0068   // comp→dock: "app window unmapped / closed"
 };
 
-struct DockQueryIconPositionPayload {
+struct __attribute__((packed)) DockQueryIconPositionPayload {
     char app_id[128];
 };
 
-struct DockIconPositionPayload {
+struct __attribute__((packed)) DockIconPositionPayload {
     char app_id[128];
-    int32_t x{0};
-    int32_t y{0};
-    int32_t w{0};
-    int32_t h{0};
+    int32_t x;
+    int32_t y;
+    int32_t w;
+    int32_t h;
 };
 
-struct DockNotifyPayload {
+struct __attribute__((packed)) DockNotifyPayload {
     char app_id[128];
-    uint64_t surface_id{0};
+    uint64_t surface_id;
 };
 
-struct DockFocusChangedPayload {
+struct __attribute__((packed)) DockFocusChangedPayload {
     char     app_id[128];
-    uint8_t  is_focused{0};   // 1 = became focused, 0 = lost focus
+    uint8_t  is_focused;   // 1 = became focused, 0 = lost focus
 };
 
 } // namespace tinexus::ipcd::protocol

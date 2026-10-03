@@ -1,0 +1,4 @@
+module Tinexus.Common
+singleton Theme 1.0 Theme.qml
+LiquidGlass 1.0 LiquidGlass.qml
+MacTrafficLights 1.0 MacTrafficLights.qml

@@ -8,13 +8,6 @@
 #include <memory>
 #include <chrono>
 
-struct PendingIconQuery {
-    bool     active{false};
-    uint64_t surface_id{0};
-    std::string app_id;
-    std::chrono::steady_clock::time_point deadline;
-};
-
 struct wl_display;
 struct wl_event_loop;
 
@@ -31,7 +24,11 @@ public:
     bool run();
     void stop();
     
-    void trigger_minimize(uint64_t surface_id);
+    void notify_window_minimized(const std::string& app_id);
+    void notify_window_restored(const std::string& app_id);
+    void notify_app_started(const std::string& app_id);
+    void notify_app_closed(const std::string& app_id);
+    void notify_app_focus_changed(const std::string& app_id, uint8_t is_focused);
 
     [[nodiscard]] const std::string& wayland_display() const noexcept;
     [[nodiscard]] struct wl_display* display_handle() const noexcept { return m_wl_display; }
@@ -54,10 +51,6 @@ private:
     static int handle_ipc_fd(int fd, uint32_t mask, void* data);
     void setup_ipc_connection();
     void process_ipc_message(uint16_t msg_type, const void* payload, uint32_t payload_len);
-    
-public:
-    PendingIconQuery m_pending_icon_query;
-    void check_icon_query_timeout();
 };
 
 } // namespace tinexus::comp

@@ -50,6 +50,7 @@ std::vector<SearchResult> AppProvider::search(const std::string& query, size_t m
     struct BuiltinApp { const char* name; const char* exec; const char* desc; };
     BuiltinApp builtins[] = {
         {"Tinexus Terminal", "tinexus-terminal", "Default Wayland Terminal"},
+        {"Foot Terminal", "foot", "Wayland Lightweight Terminal Emulator"},
         {"Tinexus Settings", "tinexus-settings-ui", "System Configuration"},
         {"Files", "tinexus-files", "File Manager"},
         {"Lock Screen", "tinexus-lock", "Lock the session"},

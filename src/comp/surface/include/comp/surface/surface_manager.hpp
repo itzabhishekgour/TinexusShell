@@ -16,7 +16,8 @@ enum class SurfaceRole : uint8_t {
     LayerSurface = 3,
     Subsurface = 4,
     Cursor = 5,
-    DragIcon = 6
+    DragIcon = 6,
+    XwaylandSurface = 7
 };
 
 inline const char* surface_role_to_string(SurfaceRole role) noexcept {
@@ -28,6 +29,7 @@ inline const char* surface_role_to_string(SurfaceRole role) noexcept {
         case SurfaceRole::Subsurface: return "Subsurface";
         case SurfaceRole::Cursor: return "Cursor";
         case SurfaceRole::DragIcon: return "DragIcon";
+        case SurfaceRole::XwaylandSurface: return "XwaylandSurface";
         default: return "Unknown";
     }
 }
@@ -85,7 +87,7 @@ struct SurfaceRecord {
     pid_t pid{-1};
     std::string app_id;
     uint32_t workspace_id{1};
-    std::string output_name{"HDMI-A-1"};
+    std::string output_name;
     SurfaceState state{SurfaceState::Created};
     SurfaceRole role{SurfaceRole::None};
     SurfaceLifecycle lifecycle{SurfaceLifecycle::Created};
@@ -99,6 +101,7 @@ public:
     ~SurfaceManager() = default;
 
     uint32_t create_surface(pid_t pid, const std::string& app_id);
+    bool remove_surface(uint32_t surface_id);
     bool assign_role(uint32_t surface_id, SurfaceRole role);
     bool transition_lifecycle(uint32_t surface_id, SurfaceLifecycle new_lifecycle);
     bool transition_state(uint32_t surface_id, SurfaceState new_state);

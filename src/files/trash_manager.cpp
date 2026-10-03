@@ -30,15 +30,32 @@ bool TrashManager::move_to_trash(const std::filesystem::path& file_path) {
     std::filesystem::create_directories(files_dir, ec);
     std::filesystem::create_directories(info_dir, ec);
 
+    std::string stem = file_path.stem().string();
+    std::string ext = file_path.has_extension() ? file_path.extension().string() : "";
     std::string filename = file_path.filename().string();
     auto target_files_path = files_dir / filename;
     auto target_info_path = info_dir / (filename + ".trashinfo");
 
+    int collision_counter = 1;
+    while (std::filesystem::exists(target_files_path, ec) || std::filesystem::exists(target_info_path, ec)) {
+        filename = stem + " " + std::to_string(collision_counter) + ext;
+        target_files_path = files_dir / filename;
+        target_info_path = info_dir / (filename + ".trashinfo");
+        collision_counter++;
+    }
+
     // Move file to Trash/files
     std::filesystem::rename(file_path, target_files_path, ec);
     if (ec) {
-        log::error("TrashManager: Failed to move '{}' to trash files: {}", file_path.string(), ec.message());
-        return false;
+        // Cross-filesystem fallback (e.g. /tmp tmpfs -> /root ext4)
+        ec.clear();
+        auto opts = std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks | std::filesystem::copy_options::overwrite_existing;
+        std::filesystem::copy(file_path, target_files_path, opts, ec);
+        if (ec) {
+            log::error("TrashManager: Failed to move '{}' to trash files across device: {}", file_path.string(), ec.message());
+            return false;
+        }
+        std::filesystem::remove_all(file_path, ec);
     }
 
     // Write Freedesktop Trash Specification .trashinfo file
@@ -80,14 +97,25 @@ bool TrashManager::restore_from_trash(const std::string& trash_item_name) {
 
     if (orig_path_str.empty()) return false;
 
+    // Ensure parent directory exists
+    std::filesystem::create_directories(std::filesystem::path(orig_path_str).parent_path(), ec);
+
     std::filesystem::rename(files_path, orig_path_str, ec);
-    if (!ec) {
-        std::filesystem::remove(info_path, ec);
-        log::info("TrashManager: Restored '{}' from trash to '{}'", trash_item_name, orig_path_str);
-        return true;
+    if (ec) {
+        // Cross-filesystem fallback on restore
+        ec.clear();
+        auto opts = std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks;
+        std::filesystem::copy(files_path, orig_path_str, opts, ec);
+        if (ec) {
+            log::error("TrashManager: Failed to restore '{}' across device: {}", trash_item_name, ec.message());
+            return false;
+        }
+        std::filesystem::remove_all(files_path, ec);
     }
 
-    return false;
+    std::filesystem::remove(info_path, ec);
+    log::info("TrashManager: Restored '{}' from trash to '{}'", trash_item_name, orig_path_str);
+    return true;
 }
 
 } // namespace tinexus::files

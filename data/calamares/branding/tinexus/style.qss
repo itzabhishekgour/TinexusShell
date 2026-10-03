@@ -1,0 +1,150 @@
+/* ==============================================================================
+ * Tinexus OS — Calamares Dark LiquidGlass Stylesheet
+ * Strictly maps to docs/05_UI_UX_GUIDELINES.md tokens
+ * ============================================================================== */
+
+QWidget {
+    background-color: #13131A;
+    color: #F0F0F8;
+    font-family: "Inter", "DejaVu Sans", sans-serif;
+    font-size: 13px;
+    selection-background-color: #6B8CEF;
+    selection-color: #FFFFFF;
+}
+
+/* ── Main Window & Sidebar ─────────────────────────────────────────────────── */
+#sidebarApp {
+    background-color: #141420;
+    border-right: 1px solid #2C2C36;
+}
+
+QSplitter::handle {
+    background-color: #2C2C36;
+}
+
+/* ── Push Buttons ──────────────────────────────────────────────────────────── */
+QPushButton {
+    background-color: #1E1E2A;
+    color: #F0F0F8;
+    border: 1px solid #2C2C36;
+    border-radius: 8px;
+    padding: 7px 18px;
+    min-height: 20px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background-color: #252535;
+    border-color: #3C3C48;
+}
+
+QPushButton:pressed {
+    background-color: #1A1A24;
+    border-color: #6B8CEF;
+}
+
+QPushButton:disabled {
+    background-color: #161620;
+    color: #505060;
+    border-color: #202028;
+}
+
+/* Primary Action Buttons (Next / Install / Finish) */
+QPushButton#nextButton, QPushButton#installButton {
+    background-color: #6B8CEF;
+    color: #FFFFFF;
+    border: 1px solid #8AAAF5;
+    font-weight: 600;
+}
+
+QPushButton#nextButton:hover, QPushButton#installButton:hover {
+    background-color: #8AAAF5;
+    border-color: #A4BEFA;
+}
+
+QPushButton#nextButton:pressed, QPushButton#installButton:pressed {
+    background-color: #5070D4;
+    border-color: #5070D4;
+}
+
+/* ── LineEdits & SpinBoxes ─────────────────────────────────────────────────── */
+QLineEdit, QSpinBox, QComboBox {
+    background-color: #1E1E2A;
+    color: #F0F0F8;
+    border: 1px solid #2C2C36;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border: 1px solid #6B8CEF;
+}
+
+/* ── ListViews, TreeViews, TableViews ──────────────────────────────────────── */
+QListView, QTreeView, QTableView {
+    background-color: #161620;
+    border: 1px solid #2C2C36;
+    border-radius: 6px;
+    outline: none;
+}
+
+QListView::item, QTreeView::item {
+    padding: 6px;
+    border-radius: 4px;
+}
+
+QListView::item:hover, QTreeView::item:hover {
+    background-color: #1E1E2A;
+}
+
+QListView::item:selected, QTreeView::item:selected {
+    background-color: #252535;
+    color: #6B8CEF;
+}
+
+/* ── Progress Bar ──────────────────────────────────────────────────────────── */
+QProgressBar {
+    background-color: #1E1E2A;
+    border: 1px solid #2C2C36;
+    border-radius: 6px;
+    text-align: center;
+    color: #F0F0F8;
+    font-weight: bold;
+}
+
+QProgressBar::chunk {
+    background-color: #6B8CEF;
+    border-radius: 5px;
+}
+
+/* ── Labels & Text ─────────────────────────────────────────────────────────── */
+QLabel {
+    background: transparent;
+    color: #F0F0F8;
+}
+
+QLabel#textLabelSubdued, QLabel[secondary="true"] {
+    color: #9090A8;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+QScrollBar:vertical {
+    background: #141420;
+    width: 8px;
+    margin: 0px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical {
+    background: #2C2C36;
+    min-height: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #3C3C48;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}

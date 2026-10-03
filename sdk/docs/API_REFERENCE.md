@@ -7,7 +7,7 @@ The Tinexus Developer SDK provides C++20 object-oriented facades for third-party
 
 ### `tinexus::Client`
 Unified client facade managing connection lifecycle and platform services.
-- `Result<bool> connect(const std::string& endpoint = "/run/user/1000/tinexus/ipc.sock")`
+- `Result<bool> connect(const std::string& endpoint = "")` (defaults to `$XDG_RUNTIME_DIR/tinexus/ipc.sock`)
 - `void disconnect()`
 - `bool is_connected() const noexcept`
 - `SearchService& search() noexcept`

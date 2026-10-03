@@ -8,8 +8,6 @@ pkill -9 -f tinexus-searchd || true
 pkill -9 -f tinexus-comp || true
 
 cd /tmp
-echo "[+] Syncing code to ~/tinexus/..."
-rm -rf ~/tinexus
 mkdir -p ~/tinexus/build/debug
 
 cp -r "/mnt/e/Tinu's Technology/Tinexus Manager/src" ~/tinexus/

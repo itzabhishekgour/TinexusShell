@@ -32,6 +32,9 @@ tinexusctl
 tinexus-comp-inspector
 unit_test_*
 integration_test_*
+tools/test_x11_client
+tools/test_wayland_globals
+tools/test_session_lock_security
 
 # IDE & Editor files
 .vscode/
@@ -46,9 +49,16 @@ integration_test_*
 *.log
 *.tmp
 *.png
+!assets/logo/*.png
 boot_logs.txt
 artifacts/
 .cache/
 Temp/
 qemu_out.txt
-*.deb
+*.deb
+scratch/
+__pycache__/
+*.pyc
+*.ppm
+*.bak
+*.sha256

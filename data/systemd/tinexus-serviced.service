@@ -1,0 +1,44 @@
+[Unit]
+Description=Tinexus Platform Session Watchdog (tinexus-serviced)
+Documentation=https://github.com/itzabhishekgour/TinexusShell
+# serviced no longer manages hardware init (udev, modprobe, networking).
+# It only starts after the compositor is up and the Wayland socket exists.
+After=tinexus-comp.service dbus.service
+Requires=tinexus-comp.service dbus.service
+PartOf=tinexus-session.target
+
+[Service]
+Type=simple
+User=tinexus
+Group=tinexus
+SupplementaryGroups=video input render seat
+
+RuntimeDirectory=user/1000 tinexus
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+ExecStartPre=+/bin/mkdir -p /run/user/1000 /run/tinexus
+ExecStartPre=+/bin/chown -R tinexus:tinexus /run/user/1000 /run/tinexus
+
+EnvironmentFile=-/run/tinexus/env
+Environment="LANG=C.UTF-8"
+Environment="LC_ALL=C.UTF-8"
+Environment="WAYLAND_DISPLAY=wayland-0"
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+
+# serviced's remaining responsibilities post-refactor:
+#   - Tinexus-specific heartbeat watchdog (HeartbeatWatchdog)
+#   - RuntimeControlSocket for tinexusctl commands
+#   - IpcdClient connection to tinexus-ipcd
+#   - LogindMimic D-Bus shim (org.freedesktop.login1 on system bus)
+#   - Hardware state restore: brightness, ALSA volume from hardware.toml
+# All PID-1 init work (udev, modprobe, networking, mount) is gone.
+ExecStart=/usr/bin/tinexus-serviced
+
+KillSignal=SIGTERM
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=tinexus-session.target

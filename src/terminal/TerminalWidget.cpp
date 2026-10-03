@@ -213,6 +213,12 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
             case txui::Key::Down:      vkey = VTERM_KEY_DOWN; break;
             case txui::Key::Left:      vkey = VTERM_KEY_LEFT; break;
             case txui::Key::Right:     vkey = VTERM_KEY_RIGHT; break;
+            case txui::Key::Delete:    vkey = VTERM_KEY_DEL; break;
+            case txui::Key::Home:      vkey = VTERM_KEY_HOME; break;
+            case txui::Key::End:       vkey = VTERM_KEY_END; break;
+            case txui::Key::PageUp:    vkey = VTERM_KEY_PAGEUP; break;
+            case txui::Key::PageDown:  vkey = VTERM_KEY_PAGEDOWN; break;
+            case txui::Key::Insert:    vkey = VTERM_KEY_INS; break;
             case txui::Key::F1:        vkey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(1)); break;
 
             case txui::Key::F2:        vkey = static_cast<VTermKey>(VTERM_KEY_FUNCTION(2)); break;
@@ -253,11 +259,29 @@ bool TerminalWidget::handle_event(const txui::Event& event) noexcept {
             c = (mods & VTERM_MOD_SHIFT) ? '>' : '.';
         } else if (key == txui::Key::Minus) {
             c = (mods & VTERM_MOD_SHIFT) ? '_' : '-';
+        } else if (key == txui::Key::Backslash) {
+            c = (mods & VTERM_MOD_SHIFT) ? '|' : '\\';
+        } else if (key == txui::Key::Comma) {
+            c = (mods & VTERM_MOD_SHIFT) ? '<' : ',';
+        } else if (key == txui::Key::Semicolon) {
+            c = (mods & VTERM_MOD_SHIFT) ? ':' : ';';
+        } else if (key == txui::Key::Apostrophe) {
+            c = (mods & VTERM_MOD_SHIFT) ? '"' : '\'';
+        } else if (key == txui::Key::Grave) {
+            c = (mods & VTERM_MOD_SHIFT) ? '~' : '`';
+        } else if (key == txui::Key::Equal) {
+            c = (mods & VTERM_MOD_SHIFT) ? '+' : '=';
+        } else if (key == txui::Key::LeftBracket) {
+            c = (mods & VTERM_MOD_SHIFT) ? '{' : '[';
+        } else if (key == txui::Key::RightBracket) {
+            c = (mods & VTERM_MOD_SHIFT) ? '}' : ']';
         }
 
         if (c != 0) {
-            // Remove SHIFT if used solely for case conversion, per libvterm docs
-            if ((c >= 'A' && c <= 'Z') || (c >= '!' && c <= ')') || c == '?' || c == '>' || c == '_') {
+            // Remove SHIFT if used solely for case conversion or shifted punctuation, per libvterm docs
+            if ((c >= 'A' && c <= 'Z') || (c >= '!' && c <= ')') ||
+                c == '?' || c == '>' || c == '_' || c == '|' || c == '<' ||
+                c == ':' || c == '"' || c == '~' || c == '+' || c == '{' || c == '}') {
                 vmod = static_cast<VTermModifier>(vmod & ~VTERM_MOD_SHIFT);
             }
             m_emulator->send_unichar(c, vmod);

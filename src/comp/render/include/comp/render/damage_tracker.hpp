@@ -65,8 +65,8 @@ public:
     [[nodiscard]] const DamageRegion& accumulated_damage() const noexcept { return m_accumulated_region; }
 
 private:
-    uint32_t m_screen_width{1920};
-    uint32_t m_screen_height{1080};
+    uint32_t m_screen_width{0};
+    uint32_t m_screen_height{0};
     DamageRegion m_current_region;
     DamageRegion m_accumulated_region;
     static constexpr float FALLBACK_THRESHOLD = 0.80f;
