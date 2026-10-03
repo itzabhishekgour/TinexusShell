@@ -9,6 +9,7 @@
 #include <QtCore/QRegularExpression>
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusConnection>
+#include <common/DBusNames.hpp>
 #include <sstream>
 #include <algorithm>
 
@@ -199,9 +200,9 @@ void LauncherBridge::pinToDock(int idx) {
 void LauncherBridge::pinToDockByAppId(const QString& appId) {
     if (appId.isEmpty()) return;
     QDBusMessage msg = QDBusMessage::createMethodCall(
-        QStringLiteral("io.tinexus.Dock"),
-        QStringLiteral("/io/tinexus/Dock"),
-        QStringLiteral("io.tinexus.Dock"),
+        tinexus::common::dbus::qservice::Dock(),
+        tinexus::common::dbus::qpath::Dock(),
+        tinexus::common::dbus::qinterface::Dock(),
         QStringLiteral("PinApp")
     );
     msg << appId;
