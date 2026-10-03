@@ -22,6 +22,13 @@ struct wl_listener;
 
 namespace tinexus::comp {
 
+struct BlurConfig {
+    int radius{28};
+    uint32_t tint{0x13131ACC}; // Standard Tinexus translucent fluid tint
+
+    static BlurConfig load_from_config(const std::string& path = "");
+};
+
 struct BlurSurfaceState {
     struct wlr_surface* surface{nullptr};
     pixman_region32_t region;
@@ -37,6 +44,10 @@ public:
 
     bool initialize(struct wl_display* display);
     void shutdown();
+
+    [[nodiscard]] const BlurConfig& config() const noexcept { return m_config; }
+    void set_config(const BlurConfig& config);
+    void load_config(const std::string& path = "");
 
     // Protocol handlers
     void register_surface_blur(struct wlr_surface* surface, struct wl_resource* blur_resource);
@@ -61,6 +72,7 @@ private:
     struct wl_global* m_global{nullptr};
     struct wl_display* m_display{nullptr};
 
+    BlurConfig m_config;
     std::unordered_map<struct wlr_surface*, std::unique_ptr<BlurSurfaceState>> m_surfaces;
     std::unordered_set<std::string> m_blurred_namespaces{
         "topbar", "tinexus-shell", "launcher", "tinexus-launcher", "dock", "tinexus-dock", "notifications"

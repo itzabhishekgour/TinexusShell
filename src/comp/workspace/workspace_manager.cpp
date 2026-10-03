@@ -113,7 +113,7 @@ void WorkspaceManager::begin_gesture_swipe() noexcept {
 
     // Determine base workspace closest to current visual position
     double cur_val = m_slide_spring.value;
-    double vw = static_cast<double>(m_viewport_width > 0 ? m_viewport_width : 1920);
+    double vw = effective_viewport_width();
     int nearest_idx = static_cast<int>(std::round(cur_val / vw)) + 1;
     m_gesture_start_ws = static_cast<uint32_t>(std::clamp<int>(nearest_idx, 1, static_cast<int>(m_workspaces.size())));
 
@@ -137,7 +137,7 @@ void WorkspaceManager::begin_gesture_swipe() noexcept {
 void WorkspaceManager::update_gesture_swipe(double dx, uint32_t time_msec) noexcept {
     if (!m_in_gesture) return;
 
-    double vw = static_cast<double>(m_viewport_width > 0 ? m_viewport_width : 1920);
+    double vw = effective_viewport_width();
 
     // Compute velocity (dt in seconds)
     if (m_gesture_last_time > 0 && time_msec > m_gesture_last_time) {
@@ -194,7 +194,7 @@ void WorkspaceManager::end_gesture_swipe(bool cancelled) noexcept {
     if (!m_in_gesture) return;
 
     m_in_gesture = false;
-    double vw = static_cast<double>(m_viewport_width > 0 ? m_viewport_width : 1920);
+    double vw = effective_viewport_width();
     uint32_t target_ws = m_gesture_start_ws;
     double start_offset = static_cast<double>(m_gesture_start_ws - 1) * vw;
     double total_travel = m_slide_spring.value - start_offset; // positive = towards higher workspace
@@ -243,6 +243,10 @@ void WorkspaceManager::set_workspace_scene_tree(uint32_t workspace_id, struct wl
     for (auto& ws : m_workspaces) {
         if (ws.id == workspace_id) {
             ws.scene_tree = tree;
+            if (tree && m_viewport_width > 0) {
+                int32_t initial_x = static_cast<int32_t>(ws.id - 1) * static_cast<int32_t>(m_viewport_width);
+                wlr_scene_node_set_position(&tree->node, initial_x, 0);
+            }
             return;
         }
     }
@@ -257,6 +261,15 @@ struct wlr_scene_tree* WorkspaceManager::get_workspace_scene_tree(uint32_t works
 
 struct wlr_scene_tree* WorkspaceManager::active_scene_tree() const noexcept {
     return get_workspace_scene_tree(m_active_id);
+}
+
+double WorkspaceManager::effective_viewport_width() const noexcept {
+    if (m_viewport_width > 0) return static_cast<double>(m_viewport_width);
+    const auto& outputs = OutputManager::instance().get_active_outputs();
+    for (const auto& out : outputs) {
+        if (out.width > 0) return static_cast<double>(out.width);
+    }
+    return 1920.0;
 }
 
 void WorkspaceManager::set_viewport_width(uint32_t width) noexcept {

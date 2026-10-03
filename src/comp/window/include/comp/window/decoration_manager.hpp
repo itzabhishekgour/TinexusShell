@@ -32,6 +32,25 @@ enum class HitTarget : uint8_t {
     BorderRight
 };
 
+struct DecorationTheme {
+    float title_bg_active[4]{0.070f, 0.078f, 0.105f, 1.0f}; // #12141b
+    float title_bg_inactive[4]{0.051f, 0.055f, 0.078f, 1.0f}; // #0d0e14
+    float divider_active[4]{0.125f, 0.137f, 0.180f, 1.0f}; // #20232e
+    float divider_inactive[4]{0.090f, 0.094f, 0.133f, 1.0f}; // #171822
+    float border_active[4]{0.110f, 0.120f, 0.160f, 1.0f}; // #1c1f29
+    float border_inactive[4]{0.078f, 0.082f, 0.110f, 1.0f}; // #14151c
+    float close_fill[4]{1.0f, 0.373f, 0.337f, 1.0f}; // #ff5f56
+    float close_border[4]{0.878f, 0.267f, 0.243f, 1.0f}; // #e0443e
+    float min_fill[4]{1.0f, 0.741f, 0.180f, 1.0f}; // #ffbd2e
+    float min_border[4]{0.871f, 0.631f, 0.137f, 1.0f}; // #dea123
+    float max_fill[4]{0.153f, 0.788f, 0.247f, 1.0f}; // #27c93f
+    float max_border[4]{0.102f, 0.671f, 0.161f, 1.0f}; // #1aab29
+    float inactive_fill[4]{0.25f, 0.27f, 0.32f, 1.0f};
+    float inactive_border[4]{0.20f, 0.22f, 0.26f, 1.0f};
+
+    static DecorationTheme load_from_config(const std::string& path = "");
+};
+
 struct IWindowActionHandler {
     virtual ~IWindowActionHandler() = default;
     virtual void request_move(void* wrapper) = 0;
@@ -76,6 +95,10 @@ public:
 
     bool init(struct wl_display* display, IWindowActionHandler* action_handler, struct wlr_scene_tree* scene_tree_normal);
     void shutdown();
+
+    [[nodiscard]] const DecorationTheme& theme() const noexcept { return m_theme; }
+    void set_theme(const DecorationTheme& theme);
+    void load_theme(const std::string& path = "");
 
     // Policy check: true for native Tinexus apps or CSD-preferring external apps (Firefox, Chromium)
     static bool is_native_csd_app(const char* app_id) noexcept;
@@ -136,6 +159,7 @@ private:
 
     std::unordered_map<void*, std::unique_ptr<TinexusWindowFrame>> m_frames;
     std::vector<std::unique_ptr<DecorationContext>> m_contexts;
+    DecorationTheme m_theme;
 
     // Double-click detection on titlebar
     uint32_t m_last_click_time{0};

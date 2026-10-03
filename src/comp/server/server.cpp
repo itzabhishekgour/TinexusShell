@@ -149,9 +149,11 @@ bool TinexusServer::initialize() {
     }
 
     // Ensure XDG_RUNTIME_DIR is properly configured and directory exists with mode 0700
+    std::string xdg_runtime_str;
     const char* xdg_runtime = getenv("XDG_RUNTIME_DIR");
     if (!xdg_runtime || !*xdg_runtime) {
-        xdg_runtime = "/run/user/1000";
+        xdg_runtime_str = tinexus::common::RuntimePaths::get_user_runtime_dir();
+        xdg_runtime = xdg_runtime_str.c_str();
         setenv("XDG_RUNTIME_DIR", xdg_runtime, 1);
     }
     struct stat st_xdg{};
@@ -235,9 +237,11 @@ bool TinexusServer::initialize() {
                         for (int fd = 3; fd < 256; ++fd) {
                             ::close(fd);
                         }
+                        std::string rundir_str;
                         const char* rundir = getenv("XDG_RUNTIME_DIR");
                         if (!rundir || !*rundir) {
-                            rundir = "/run/user/0";
+                            rundir_str = tinexus::common::RuntimePaths::get_user_runtime_dir();
+                            rundir = rundir_str.c_str();
                         }
                         setenv("XDG_RUNTIME_DIR", rundir, 1);
                         setenv("WAYLAND_DISPLAY", m_display_socket.c_str(), 1);

@@ -1,7 +1,10 @@
 #include "comp/window/decoration_manager.hpp"
 #include "common/logger.hpp"
+#include "common/DBusNames.hpp"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 
 extern "C" {
 #include <wlr/util/edges.h>
@@ -14,28 +17,96 @@ namespace tinexus::comp {
 
 namespace {
 
-// Tinexus macOS Obsidian Palette tokens
-constexpr float kTitleBgActive[4]    = {0.070f, 0.078f, 0.105f, 1.0f}; // #12141b
-constexpr float kTitleBgInactive[4]  = {0.051f, 0.055f, 0.078f, 1.0f}; // #0d0e14
-constexpr float kDividerActive[4]    = {0.125f, 0.137f, 0.180f, 1.0f}; // #20232e
-constexpr float kDividerInactive[4]  = {0.090f, 0.094f, 0.133f, 1.0f}; // #171822
-constexpr float kBorderActive[4]     = {0.110f, 0.120f, 0.160f, 1.0f}; // #1c1f29
-constexpr float kBorderInactive[4]   = {0.078f, 0.082f, 0.110f, 1.0f}; // #14151c
+static bool parse_hex_color(std::string_view hex_str, float out_rgba[4]) {
+    while (!hex_str.empty() && (hex_str.front() == ' ' || hex_str.front() == '"' || hex_str.front() == '\'')) {
+        hex_str.remove_prefix(1);
+    }
+    while (!hex_str.empty() && (hex_str.back() == ' ' || hex_str.back() == '"' || hex_str.back() == '\'')) {
+        hex_str.remove_suffix(1);
+    }
+    if (hex_str.empty()) return false;
+    if (hex_str.front() == '#') hex_str.remove_prefix(1);
+    else if (hex_str.starts_with("0x") || hex_str.starts_with("0X")) hex_str.remove_prefix(2);
 
-// Colors matching MacTrafficLights.qml exactly:
-// Close: fill #ff5f56, border #e0443e
-constexpr float kCloseFillActive[4]    = {1.0f, 0.373f, 0.337f, 1.0f};
-constexpr float kCloseBorderActive[4]  = {0.878f, 0.267f, 0.243f, 1.0f};
-// Min: fill #ffbd2e, border #dea123
-constexpr float kMinFillActive[4]      = {1.0f, 0.741f, 0.180f, 1.0f};
-constexpr float kMinBorderActive[4]    = {0.871f, 0.631f, 0.137f, 1.0f};
-// Max: fill #27c93f, border #1aab29
-constexpr float kMaxFillActive[4]      = {0.153f, 0.788f, 0.247f, 1.0f};
-constexpr float kMaxBorderActive[4]    = {0.102f, 0.671f, 0.161f, 1.0f};
+    if (hex_str.length() != 6 && hex_str.length() != 8) return false;
 
-// Inactive
-constexpr float kInactiveFill[4]       = {0.25f, 0.27f, 0.32f, 1.0f};
-constexpr float kInactiveBorder[4]     = {0.20f, 0.22f, 0.26f, 1.0f};
+    try {
+        uint32_t val = static_cast<uint32_t>(std::stoul(std::string(hex_str), nullptr, 16));
+        if (hex_str.length() == 6) {
+            out_rgba[0] = ((val >> 16) & 0xFF) / 255.0f;
+            out_rgba[1] = ((val >> 8) & 0xFF) / 255.0f;
+            out_rgba[2] = (val & 0xFF) / 255.0f;
+            out_rgba[3] = 1.0f;
+        } else {
+            out_rgba[0] = ((val >> 24) & 0xFF) / 255.0f;
+            out_rgba[1] = ((val >> 16) & 0xFF) / 255.0f;
+            out_rgba[2] = ((val >> 8) & 0xFF) / 255.0f;
+            out_rgba[3] = (val & 0xFF) / 255.0f;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // anonymous namespace
+
+DecorationTheme DecorationTheme::load_from_config(const std::string& path) {
+    DecorationTheme th;
+    std::string config_file = path;
+    if (config_file.empty()) {
+        const char* home = getenv("HOME");
+        if (home && *home) {
+            std::string user_cfg = std::string(home) + "/.config/tinexus/theme.toml";
+            if (std::filesystem::exists(user_cfg)) {
+                config_file = user_cfg;
+            }
+        }
+        if (config_file.empty()) {
+            std::string sys_cfg = "/etc/tinexus/defaults/theme.toml";
+            if (std::filesystem::exists(sys_cfg)) {
+                config_file = sys_cfg;
+            }
+        }
+    }
+
+    if (config_file.empty() || !std::filesystem::exists(config_file)) {
+        return th;
+    }
+
+    std::ifstream f(config_file);
+    if (!f.is_open()) return th;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+
+        while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+        while (!key.empty() && (key.front() == ' ' || key.front() == '\t')) key.erase(key.begin());
+
+        if (key == "title_bg_active") parse_hex_color(val, th.title_bg_active);
+        else if (key == "title_bg_inactive") parse_hex_color(val, th.title_bg_inactive);
+        else if (key == "divider_active") parse_hex_color(val, th.divider_active);
+        else if (key == "divider_inactive") parse_hex_color(val, th.divider_inactive);
+        else if (key == "border_active") parse_hex_color(val, th.border_active);
+        else if (key == "border_inactive") parse_hex_color(val, th.border_inactive);
+        else if (key == "close_fill") parse_hex_color(val, th.close_fill);
+        else if (key == "close_border") parse_hex_color(val, th.close_border);
+        else if (key == "min_fill") parse_hex_color(val, th.min_fill);
+        else if (key == "min_border") parse_hex_color(val, th.min_border);
+        else if (key == "max_fill") parse_hex_color(val, th.max_fill);
+        else if (key == "max_border") parse_hex_color(val, th.max_border);
+        else if (key == "inactive_fill") parse_hex_color(val, th.inactive_fill);
+        else if (key == "inactive_border") parse_hex_color(val, th.inactive_border);
+    }
+    return th;
+}
+
+namespace {
 
 static void build_circle(struct wlr_scene_tree* parent, int pos_x, int pos_y,
                          const float fill[4], const float border[4],
@@ -108,39 +179,40 @@ void TinexusWindowFrame::update_geometry(int32_t w, int32_t h) {
 
 void TinexusWindowFrame::set_active(bool active) {
     is_active = active;
+    const auto& th = TinexusDecorationManager::instance().theme();
 
     if (titlebar_bg) {
-        wlr_scene_rect_set_color(titlebar_bg, active ? kTitleBgActive : kTitleBgInactive);
+        wlr_scene_rect_set_color(titlebar_bg, active ? th.title_bg_active : th.title_bg_inactive);
     }
     if (titlebar_divider) {
-        wlr_scene_rect_set_color(titlebar_divider, active ? kDividerActive : kDividerInactive);
+        wlr_scene_rect_set_color(titlebar_divider, active ? th.divider_active : th.divider_inactive);
     }
     if (border_top) {
-        wlr_scene_rect_set_color(border_top, active ? kBorderActive : kBorderInactive);
+        wlr_scene_rect_set_color(border_top, active ? th.border_active : th.border_inactive);
     }
     if (border_bottom) {
-        wlr_scene_rect_set_color(border_bottom, active ? kBorderActive : kBorderInactive);
+        wlr_scene_rect_set_color(border_bottom, active ? th.border_active : th.border_inactive);
     }
     if (border_left) {
-        wlr_scene_rect_set_color(border_left, active ? kBorderActive : kBorderInactive);
+        wlr_scene_rect_set_color(border_left, active ? th.border_active : th.border_inactive);
     }
     if (border_right) {
-        wlr_scene_rect_set_color(border_right, active ? kBorderActive : kBorderInactive);
+        wlr_scene_rect_set_color(border_right, active ? th.border_active : th.border_inactive);
     }
 
     for (size_t i = 0; i < close_rects.size(); ++i) {
-        const float* col = (i < 7) ? (active ? kCloseBorderActive : kInactiveBorder)
-                                   : (active ? kCloseFillActive : kInactiveFill);
+        const float* col = (i < 7) ? (active ? th.close_border : th.inactive_border)
+                                   : (active ? th.close_fill : th.inactive_fill);
         wlr_scene_rect_set_color(close_rects[i], col);
     }
     for (size_t i = 0; i < min_rects.size(); ++i) {
-        const float* col = (i < 7) ? (active ? kMinBorderActive : kInactiveBorder)
-                                   : (active ? kMinFillActive : kInactiveFill);
+        const float* col = (i < 7) ? (active ? th.min_border : th.inactive_border)
+                                   : (active ? th.min_fill : th.inactive_fill);
         wlr_scene_rect_set_color(min_rects[i], col);
     }
     for (size_t i = 0; i < max_rects.size(); ++i) {
-        const float* col = (i < 7) ? (active ? kMaxBorderActive : kInactiveBorder)
-                                   : (active ? kMaxFillActive : kInactiveFill);
+        const float* col = (i < 7) ? (active ? th.max_border : th.inactive_border)
+                                   : (active ? th.max_fill : th.inactive_fill);
         wlr_scene_rect_set_color(max_rects[i], col);
     }
 }
@@ -227,8 +299,23 @@ bool TinexusDecorationManager::init(struct wl_display* display, IWindowActionHan
     m_new_decoration_listener.notify = handle_new_toplevel_decoration;
     wl_signal_add(&m_manager_v1->events.new_toplevel_decoration, &m_new_decoration_listener);
 
+    load_theme();
+
     log::info("[Decoration] TinexusDecorationManager initialized successfully with zxdg_decoration_manager_v1");
     return true;
+}
+
+void TinexusDecorationManager::set_theme(const DecorationTheme& theme) {
+    m_theme = theme;
+    for (auto& [key, frame] : m_frames) {
+        if (frame) {
+            frame->set_active(frame->is_active);
+        }
+    }
+}
+
+void TinexusDecorationManager::load_theme(const std::string& path) {
+    set_theme(DecorationTheme::load_from_config(path));
 }
 
 void TinexusDecorationManager::shutdown() {
@@ -253,7 +340,7 @@ bool TinexusDecorationManager::is_native_csd_app(const char* app_id) noexcept {
 
     // 1. Native Tinexus shell and UI components (Qt6 / txui client-side decoration)
     if (id.starts_with("tinexus-") ||
-        id.starts_with("io.tinexus.") ||
+        id.starts_with(tinexus::common::dbus::app_id::Prefix) ||
         id.starts_with("txui-") ||
         id == "lock" ||
         id == "launcher") {
@@ -307,33 +394,33 @@ TinexusWindowFrame* TinexusDecorationManager::create_frame_impl(void* window_key
     if (!frame->frame_tree) return nullptr;
 
     // 2. Titlebar background (28px)
-    frame->titlebar_bg = wlr_scene_rect_create(frame->frame_tree, 802, 28, kTitleBgActive);
+    frame->titlebar_bg = wlr_scene_rect_create(frame->frame_tree, 802, 28, m_theme.title_bg_active);
     wlr_scene_node_set_position(&frame->titlebar_bg->node, 0, 1);
 
     // 3. Titlebar bottom divider (1px line at y=28)
-    frame->titlebar_divider = wlr_scene_rect_create(frame->frame_tree, 802, 1, kDividerActive);
+    frame->titlebar_divider = wlr_scene_rect_create(frame->frame_tree, 802, 1, m_theme.divider_active);
     wlr_scene_node_set_position(&frame->titlebar_divider->node, 0, 28);
 
     // 4. Subtle outer borders (1px)
-    frame->border_top = wlr_scene_rect_create(frame->frame_tree, 802, 1, kBorderActive);
+    frame->border_top = wlr_scene_rect_create(frame->frame_tree, 802, 1, m_theme.border_active);
     wlr_scene_node_set_position(&frame->border_top->node, 0, 0);
 
-    frame->border_bottom = wlr_scene_rect_create(frame->frame_tree, 802, 1, kBorderActive);
+    frame->border_bottom = wlr_scene_rect_create(frame->frame_tree, 802, 1, m_theme.border_active);
     wlr_scene_node_set_position(&frame->border_bottom->node, 0, 629);
 
-    frame->border_left = wlr_scene_rect_create(frame->frame_tree, 1, 630, kBorderActive);
+    frame->border_left = wlr_scene_rect_create(frame->frame_tree, 1, 630, m_theme.border_active);
     wlr_scene_node_set_position(&frame->border_left->node, 0, 0);
 
-    frame->border_right = wlr_scene_rect_create(frame->frame_tree, 1, 630, kBorderActive);
+    frame->border_right = wlr_scene_rect_create(frame->frame_tree, 1, 630, m_theme.border_active);
     wlr_scene_node_set_position(&frame->border_right->node, 801, 0);
 
     // 5. Traffic lights container (14px left margin, 8px top)
     frame->traffic_tree = wlr_scene_tree_create(frame->frame_tree);
     wlr_scene_node_set_position(&frame->traffic_tree->node, 14, 8);
 
-    build_circle(frame->traffic_tree, 0, 0, kCloseFillActive, kCloseBorderActive, frame->close_rects);
-    build_circle(frame->traffic_tree, 20, 0, kMinFillActive, kMinBorderActive, frame->min_rects);
-    build_circle(frame->traffic_tree, 40, 0, kMaxFillActive, kMaxBorderActive, frame->max_rects);
+    build_circle(frame->traffic_tree, 0, 0, m_theme.close_fill, m_theme.close_border, frame->close_rects);
+    build_circle(frame->traffic_tree, 20, 0, m_theme.min_fill, m_theme.min_border, frame->min_rects);
+    build_circle(frame->traffic_tree, 40, 0, m_theme.max_fill, m_theme.max_border, frame->max_rects);
 
     // 6. Client tree container (offset by 1px left, 29px top)
     frame->client_tree = wlr_scene_tree_create(frame->frame_tree);
@@ -413,8 +500,12 @@ bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*nod
 
     for (const auto& [key, f] : m_frames) {
         if (f && f->frame_tree) {
-            double local_x = cursor_x - f->frame_tree->node.x;
-            double local_y = cursor_y - f->frame_tree->node.y;
+            int world_x = 0, world_y = 0;
+            if (!wlr_scene_node_coords(&f->frame_tree->node, &world_x, &world_y)) {
+                continue;
+            }
+            double local_x = cursor_x - static_cast<double>(world_x);
+            double local_y = cursor_y - static_cast<double>(world_y);
             HitTarget target = f->hit_test(local_x, local_y);
             if (target != HitTarget::None) {
                 frame = f.get();
@@ -428,8 +519,12 @@ bool TinexusDecorationManager::handle_cursor_button(struct wlr_scene_node* /*nod
         return false;
     }
 
-    double local_x = cursor_x - frame->frame_tree->node.x;
-    double local_y = cursor_y - frame->frame_tree->node.y;
+    int world_x = 0, world_y = 0;
+    if (!wlr_scene_node_coords(&frame->frame_tree->node, &world_x, &world_y)) {
+        return false;
+    }
+    double local_x = cursor_x - static_cast<double>(world_x);
+    double local_y = cursor_y - static_cast<double>(world_y);
     HitTarget target = frame->hit_test(local_x, local_y);
 
     switch (target) {

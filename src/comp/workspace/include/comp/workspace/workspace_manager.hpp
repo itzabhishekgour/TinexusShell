@@ -48,6 +48,7 @@ public:
     // Slide animation & viewport control
     void set_viewport_width(uint32_t width) noexcept;
     [[nodiscard]] uint32_t viewport_width() const noexcept { return m_viewport_width; }
+    [[nodiscard]] double effective_viewport_width() const noexcept;
 
     void set_frame_scheduler(std::function<void()> scheduler) noexcept {
         m_frame_scheduler = std::move(scheduler);
@@ -75,7 +76,7 @@ private:
     // Spaces horizontal slide spring physics
     SpringState           m_slide_spring{0.0, 0.0, 0.0};
     bool                  m_is_sliding{false};
-    uint32_t              m_viewport_width{1920};
+    uint32_t              m_viewport_width{0};
     std::function<void()> m_frame_scheduler;
 
     // Interactive gesture tracking state

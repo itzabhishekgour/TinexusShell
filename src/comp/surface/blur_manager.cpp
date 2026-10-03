@@ -3,6 +3,9 @@
 // ============================================================================
 #include "comp/surface/blur_manager.hpp"
 #include "common/logger.hpp"
+#include <filesystem>
+#include <fstream>
+
 extern "C" {
 #define static
 #include <wlr/types/wlr_compositor.h>
@@ -12,6 +15,68 @@ extern "C" {
 }
 
 namespace tinexus::comp {
+
+BlurConfig BlurConfig::load_from_config(const std::string& path) {
+    BlurConfig cfg;
+    std::string config_file = path;
+    if (config_file.empty()) {
+        const char* home = getenv("HOME");
+        if (home && *home) {
+            std::string user_cfg = std::string(home) + "/.config/tinexus/compositor.toml";
+            if (std::filesystem::exists(user_cfg)) {
+                config_file = user_cfg;
+            }
+        }
+        if (config_file.empty()) {
+            std::string sys_cfg = "/etc/tinexus/defaults/compositor.toml";
+            if (std::filesystem::exists(sys_cfg)) {
+                config_file = sys_cfg;
+            }
+        }
+    }
+
+    if (config_file.empty() || !std::filesystem::exists(config_file)) {
+        return cfg;
+    }
+
+    std::ifstream f(config_file);
+    if (!f.is_open()) return cfg;
+
+    std::string line;
+    bool in_blur_section = false;
+    while (std::getline(f, line)) {
+        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.erase(line.begin());
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) line.pop_back();
+
+        if (line.starts_with("[")) {
+            in_blur_section = (line == "[blur]" || line == "[appearance]");
+            continue;
+        }
+
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+
+        while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+        while (!key.empty() && (key.front() == ' ' || key.front() == '\t')) key.erase(key.begin());
+        while (!val.empty() && (val.back() == ' ' || val.back() == '\t' || val.back() == '"' || val.back() == '\'')) val.pop_back();
+        while (!val.empty() && (val.front() == ' ' || val.front() == '\t' || val.front() == '"' || val.front() == '\'')) val.erase(val.begin());
+
+        if (in_blur_section) {
+            if (key == "radius" || key == "backdrop_blur_radius") {
+                try { cfg.radius = std::stoi(val); } catch (...) {}
+            } else if (key == "tint") {
+                try {
+                    if (val.starts_with("#")) val.erase(val.begin());
+                    cfg.tint = static_cast<uint32_t>(std::stoul(val, nullptr, 16));
+                } catch (...) {}
+            }
+        }
+    }
+    return cfg;
+}
 
 namespace {
 
@@ -106,14 +171,31 @@ bool BlurManager::initialize(struct wl_display* display) {
     if (!display) return false;
     m_display = display;
 
+    load_config();
+
     m_global = wl_global_create(display, &org_kde_kwin_blur_manager_interface, 1, this, blur_manager_bind);
     if (!m_global) {
         log::error("[BlurManager] Failed to create org_kde_kwin_blur_manager global");
         return false;
     }
 
-    log::info("[BlurManager] Successfully registered org_kde_kwin_blur_manager Wayland protocol global");
+    log::info("[BlurManager] Successfully registered org_kde_kwin_blur_manager Wayland protocol global (radius={}, tint=0x{:08X})",
+              m_config.radius, m_config.tint);
     return true;
+}
+
+void BlurManager::set_config(const BlurConfig& config) {
+    m_config = config;
+    for (auto& [surf, state] : m_surfaces) {
+        if (state) {
+            state->radius = m_config.radius;
+            state->tint = m_config.tint;
+        }
+    }
+}
+
+void BlurManager::load_config(const std::string& path) {
+    set_config(BlurConfig::load_from_config(path));
 }
 
 void BlurManager::shutdown() {
@@ -133,8 +215,8 @@ void BlurManager::register_surface_blur(struct wlr_surface* surface, struct wl_r
         state->surface = surface;
         pixman_region32_init(&state->region);
         state->has_custom_region = false;
-        state->radius = 28;
-        state->tint = 0x13131ACC;
+        state->radius = m_config.radius;
+        state->tint = m_config.tint;
 
         state->destroy_listener.notify = [](struct wl_listener* l, void* /*data*/) {
             BlurSurfaceState* s = wl_container_of(l, s, destroy_listener);
