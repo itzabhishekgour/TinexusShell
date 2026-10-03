@@ -2,6 +2,7 @@
 #include "settings/WifiManager.hpp"
 #include <common/logger.hpp>
 #include <common/version.hpp>
+#include <common/DBusNames.hpp>
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -25,7 +26,7 @@ int main(int argc, char* argv[]) {
 
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("tinexus-settings-render"));
-    app.setDesktopFileName(QStringLiteral("io.tinexus.Settings"));
+    app.setDesktopFileName(tinexus::common::dbus::qapp_id::Settings());
 
     std::cout << "=== Tinexus Settings UI Visual Test Suite (Qt6) ===" << std::endl;
 

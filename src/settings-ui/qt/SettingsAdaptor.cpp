@@ -1,5 +1,5 @@
 // ============================================================================
-// SettingsAdaptor.cpp — Qt6 D-Bus Adaptor implementation for io.tinexus.Settings
+// SettingsAdaptor.cpp — Qt6 D-Bus Adaptor implementation for io.tinexus.shell.Settings
 // ============================================================================
 #include "settings-ui/SettingsAdaptor.hpp"
 #include "SettingsBridge.hpp"

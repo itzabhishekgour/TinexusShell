@@ -2,12 +2,13 @@
 // settings_daemon.cpp — tinexus-settings
 // ============================================================================
 // Manages live platform configuration and broadcasts changes over D-Bus
-// (io.tinexus.Settings / io.tinexus.Wallpaper) so all subscribed daemons
+// (io.tinexus.shell.Settings / io.tinexus.shell.Wallpaper) so all subscribed daemons
 // (wallpaper, lock, shell) react instantly.
 // ============================================================================
 #include "settings/settings_daemon.hpp"
 #include "settings/schema_validator.hpp"
 #include "common/logger.hpp"
+#include "common/DBusNames.hpp"
 
 #include <systemd/sd-bus.h>
 
@@ -218,23 +219,38 @@ bool SettingsDaemon::start_dbus_service() {
         return false;
     }
 
-    r = sd_bus_add_object_vtable(m_bus, &m_slot_io, "/io/tinexus/Settings", "io.tinexus.Settings", settings_vtable, this);
+    r = sd_bus_add_object_vtable(m_bus, &m_slot_io,
+                                 tinexus::common::dbus::path::Settings,
+                                 tinexus::common::dbus::interface::Settings,
+                                 settings_vtable, this);
     if (r < 0) {
-        log::error("SettingsDaemon: Failed to add /io/tinexus/Settings vtable: {}", std::strerror(-r));
+        log::error("SettingsDaemon: Failed to add {} vtable: {}",
+                   tinexus::common::dbus::path::Settings, std::strerror(-r));
         stop_dbus_service();
         return false;
     }
 
-    sd_bus_add_object_vtable(m_bus, &m_slot_root, "/Settings", "io.tinexus.Settings", settings_vtable, this);
+    // Legacy paths and interfaces for backward compatibility
+    sd_bus_add_object_vtable(m_bus, &m_slot_root,
+                             tinexus::common::dbus::legacy::SettingsPath,
+                             tinexus::common::dbus::legacy::Settings,
+                             settings_vtable, this);
+    sd_bus_add_object_vtable(m_bus, nullptr,
+                             "/Settings",
+                             tinexus::common::dbus::legacy::Settings,
+                             settings_vtable, this);
 
-    r = sd_bus_request_name(m_bus, "io.tinexus.Settings", 0);
+    r = sd_bus_request_name(m_bus, tinexus::common::dbus::service::Settings, 0);
     if (r < 0) {
-        log::warn("SettingsDaemon: Failed to acquire 'io.tinexus.Settings': {}", std::strerror(-r));
+        log::warn("SettingsDaemon: Failed to acquire '{}': {}",
+                  tinexus::common::dbus::service::Settings, std::strerror(-r));
     } else {
-        log::info("SettingsDaemon: Acquired D-Bus service 'io.tinexus.Settings'");
+        log::info("SettingsDaemon: Acquired D-Bus service '{}'",
+                  tinexus::common::dbus::service::Settings);
     }
 
-    sd_bus_request_name(m_bus, "io.tinexus.shell.Settings", 0);
+    // Also acquire legacy service name
+    sd_bus_request_name(m_bus, tinexus::common::dbus::legacy::Settings, 0);
     return true;
 }
 
@@ -284,10 +300,18 @@ void SettingsDaemon::broadcast_settings_changed(const std::string& category) {
         opened_temp = true;
     }
 
-    // 1. Emit ConfigChanged signal on /io/tinexus/Settings and /Settings
+    // 1. Emit ConfigChanged signal on canonical path and legacy paths
     sd_bus_emit_signal(bus,
-                       "/io/tinexus/Settings",
-                       "io.tinexus.Settings",
+                       tinexus::common::dbus::path::Settings,
+                       tinexus::common::dbus::interface::Settings,
+                       "ConfigChanged",
+                       "sv",
+                       category.c_str(),
+                       "s", category.c_str());
+
+    sd_bus_emit_signal(bus,
+                       tinexus::common::dbus::legacy::SettingsPath,
+                       tinexus::common::dbus::legacy::Settings,
                        "ConfigChanged",
                        "sv",
                        category.c_str(),
@@ -295,7 +319,7 @@ void SettingsDaemon::broadcast_settings_changed(const std::string& category) {
 
     sd_bus_emit_signal(bus,
                        "/Settings",
-                       "io.tinexus.Settings",
+                       tinexus::common::dbus::legacy::Settings,
                        "ConfigChanged",
                        "sv",
                        category.c_str(),
@@ -305,15 +329,22 @@ void SettingsDaemon::broadcast_settings_changed(const std::string& category) {
     if (category == "appearance" || category == "theme") {
         auto settings = ConfigStore::instance().get_settings();
         sd_bus_emit_signal(bus,
-                           "/io/tinexus/Settings",
-                           "io.tinexus.Settings",
+                           tinexus::common::dbus::path::Settings,
+                           tinexus::common::dbus::interface::Settings,
+                           "ThemeChanged",
+                           "s",
+                           settings.theme.c_str());
+
+        sd_bus_emit_signal(bus,
+                           tinexus::common::dbus::legacy::SettingsPath,
+                           tinexus::common::dbus::legacy::Settings,
                            "ThemeChanged",
                            "s",
                            settings.theme.c_str());
 
         sd_bus_emit_signal(bus,
                            "/Settings",
-                           "io.tinexus.Settings",
+                           tinexus::common::dbus::legacy::Settings,
                            "ThemeChanged",
                            "s",
                            settings.theme.c_str());
@@ -362,7 +393,7 @@ bool SettingsDaemon::update_wallpaper(const std::string& new_path,
         return false;
     }
 
-    // 3. Single authoritative trigger: Invoke io.tinexus.Wallpaper.SetWallpaper
+    // 3. Single authoritative trigger: Invoke Wallpaper.SetWallpaper
     sd_bus* bus = nullptr;
     int r = sd_bus_open_user(&bus);
     if (r < 0 || !bus) {
@@ -375,9 +406,9 @@ bool SettingsDaemon::update_wallpaper(const std::string& new_path,
     sd_bus_error error = SD_BUS_ERROR_NULL;
     sd_bus_message* reply = nullptr;
     r = sd_bus_call_method(bus,
-                           "io.tinexus.Wallpaper",
-                           "/io/tinexus/Wallpaper",
-                           "io.tinexus.Wallpaper",
+                           tinexus::common::dbus::service::Wallpaper,
+                           tinexus::common::dbus::path::Wallpaper,
+                           tinexus::common::dbus::interface::Wallpaper,
                            "SetWallpaper",
                            &error,
                            &reply,
@@ -386,6 +417,24 @@ bool SettingsDaemon::update_wallpaper(const std::string& new_path,
                            mode,
                            is_dynamic ? 1 : 0,
                            fade_ms);
+    if (r < 0) {
+        // Fallback to legacy service if needed
+        sd_bus_error_free(&error);
+        if (reply) { sd_bus_message_unref(reply); reply = nullptr; }
+        r = sd_bus_call_method(bus,
+                               tinexus::common::dbus::legacy::Wallpaper,
+                               tinexus::common::dbus::legacy::WallpaperPath,
+                               tinexus::common::dbus::legacy::Wallpaper,
+                               "SetWallpaper",
+                               &error,
+                               &reply,
+                               "sybq",
+                               new_path.c_str(),
+                               mode,
+                               is_dynamic ? 1 : 0,
+                               fade_ms);
+    }
+
     if (r < 0) {
         log::warn("[settings] SetWallpaper D-Bus call failed: {} "
                   "(wallpaper daemon may not be running yet; settings saved)",
@@ -397,8 +446,16 @@ bool SettingsDaemon::update_wallpaper(const std::string& new_path,
 
     // Also broadcast ConfigChanged for UI binding
     sd_bus_emit_signal(bus,
-                       "/io/tinexus/Settings",
-                       "io.tinexus.Settings",
+                       tinexus::common::dbus::path::Settings,
+                       tinexus::common::dbus::interface::Settings,
+                       "ConfigChanged",
+                       "sv",
+                       "wallpaper",
+                       "s", new_path.c_str());
+
+    sd_bus_emit_signal(bus,
+                       tinexus::common::dbus::legacy::SettingsPath,
+                       tinexus::common::dbus::legacy::Settings,
                        "ConfigChanged",
                        "sv",
                        "wallpaper",

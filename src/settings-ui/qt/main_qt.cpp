@@ -1,6 +1,7 @@
 #include "SettingsBridge.hpp"
 #include <common/logger.hpp>
 #include <common/version.hpp>
+#include <common/DBusNames.hpp>
 #include <txui/core/SingleInstance.hpp>
 
 #include <QGuiApplication>
@@ -33,7 +34,7 @@ int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("tinexus-settings"));
     app.setApplicationDisplayName(QStringLiteral("Tinexus Settings"));
-    app.setDesktopFileName(QStringLiteral("io.tinexus.Settings"));
+    app.setDesktopFileName(tinexus::common::dbus::qapp_id::Settings());
 
     tinexus::settings_ui::SettingsBridge bridge;
 

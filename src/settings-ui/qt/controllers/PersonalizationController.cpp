@@ -1,5 +1,6 @@
 #include "PersonalizationController.hpp"
 #include <common/logger.hpp>
+#include <common/RuntimePaths.hpp>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 #include <QtCore/QFile>
@@ -61,33 +62,15 @@ void PersonalizationController::setSelectedWallpaperIndex(int index) {
         QString path = m_wallpapers[index].toMap().value(QStringLiteral("path")).toString();
 
         // 1. Write to runtime current_wallpaper files if possible
-        const char* runtime_dir = std::getenv("XDG_RUNTIME_DIR");
-        if (runtime_dir) {
-            QFile curWall(QString::fromLocal8Bit(runtime_dir) + QStringLiteral("/tinexus/current_wallpaper"));
-            if (curWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                curWall.write((path + QStringLiteral("\n")).toUtf8());
-                curWall.flush();
-                curWall.close();
-            }
-        }
-        QFile rootWall(QStringLiteral("/run/user/0/tinexus/current_wallpaper"));
-        if (rootWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            rootWall.write((path + QStringLiteral("\n")).toUtf8());
-            rootWall.flush();
-            rootWall.close();
+        std::string wall_path = tinexus::common::RuntimePaths::get_runtime_dir() + "/current_wallpaper";
+        QFile curWall(QString::fromStdString(wall_path));
+        if (curWall.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            curWall.write((path + QStringLiteral("\n")).toUtf8());
+            curWall.flush();
+            curWall.close();
         }
 
         emit selectedWallpaperIndexChanged();
-
-        // 2. Command wallpaper renderer directly via D-Bus for instant live cross-fade
-        QDBusMessage wallMsg = QDBusMessage::createMethodCall(
-            QStringLiteral("io.tinexus.Wallpaper"),
-            QStringLiteral("/io/tinexus/Wallpaper"),
-            QStringLiteral("io.tinexus.Wallpaper"),
-            QStringLiteral("SetWallpaper")
-        );
-        wallMsg << path << static_cast<uchar>(0) << false << static_cast<ushort>(500);
-        QDBusConnection::sessionBus().send(wallMsg);
 
         emit toastRequested(QStringLiteral("Wallpaper applied: %1").arg(m_wallpapers[index].toMap().value(QStringLiteral("name")).toString()), false);
         emit settingModified(QStringLiteral("selected_wallpaper_idx"), index);

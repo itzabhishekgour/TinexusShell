@@ -1,5 +1,6 @@
 #include "SettingsBridge.hpp"
 #include <common/logger.hpp>
+#include <common/DBusNames.hpp>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusVariant>
@@ -98,22 +99,32 @@ void SettingsBridge::initDbusClient() {
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (bus.isConnected()) {
         bus.connect(
-            QStringLiteral("io.tinexus.Settings"),
-            QStringLiteral("/io/tinexus/Settings"),
-            QStringLiteral("io.tinexus.Settings"),
+            tinexus::common::dbus::qservice::Settings(),
+            tinexus::common::dbus::qpath::Settings(),
+            tinexus::common::dbus::qinterface::Settings(),
+            QStringLiteral("ConfigChanged"),
+            this,
+            SLOT(onDaemonConfigChanged(QString,QDBusVariant))
+        );
+        // Connect to legacy endpoints as well
+        bus.connect(
+            tinexus::common::dbus::qservice::legacy::Settings(),
+            tinexus::common::dbus::qpath::legacy::Settings(),
+            tinexus::common::dbus::qinterface::legacy::Settings(),
             QStringLiteral("ConfigChanged"),
             this,
             SLOT(onDaemonConfigChanged(QString,QDBusVariant))
         );
         bus.connect(
-            QStringLiteral("io.tinexus.Settings"),
+            tinexus::common::dbus::qservice::legacy::Settings(),
             QStringLiteral("/Settings"),
-            QStringLiteral("io.tinexus.Settings"),
+            tinexus::common::dbus::qinterface::legacy::Settings(),
             QStringLiteral("ConfigChanged"),
             this,
             SLOT(onDaemonConfigChanged(QString,QDBusVariant))
         );
-        tinexus::log::info("[SettingsBridge] Connected as D-Bus client to io.tinexus.Settings");
+        tinexus::log::info("[SettingsBridge] Connected as D-Bus client to {}",
+                           tinexus::common::dbus::service::Settings);
     } else {
         tinexus::log::warn("[SettingsBridge] Session D-Bus not available — operating in local standalone mode");
     }
@@ -133,9 +144,9 @@ void SettingsBridge::syncSettingToDaemon(const QString& key, const QVariant& val
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (bus.isConnected()) {
         QDBusMessage msg = QDBusMessage::createMethodCall(
-            QStringLiteral("io.tinexus.Settings"),
-            QStringLiteral("/io/tinexus/Settings"),
-            QStringLiteral("io.tinexus.Settings"),
+            tinexus::common::dbus::qservice::Settings(),
+            tinexus::common::dbus::qpath::Settings(),
+            tinexus::common::dbus::qinterface::Settings(),
             QStringLiteral("SetValue")
         );
         msg << key << QVariant::fromValue(QDBusVariant(value));

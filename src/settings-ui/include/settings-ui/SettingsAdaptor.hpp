@@ -1,8 +1,9 @@
 // ============================================================================
-// SettingsAdaptor.hpp — Qt6 D-Bus Adaptor for io.tinexus.Settings
+// SettingsAdaptor.hpp — Qt6 D-Bus Adaptor for io.tinexus.shell.Settings
 // ============================================================================
 #pragma once
 
+#include <common/DBusNames.hpp>
 #include <QtDBus/QDBusAbstractAdaptor>
 #include <QtDBus/QDBusVariant>
 #include <QtCore/QString>
@@ -14,9 +15,9 @@ class SettingsBridge;
 
 class SettingsAdaptor : public QDBusAbstractAdaptor {
     Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "io.tinexus.Settings")
+    Q_CLASSINFO("D-Bus Interface", TINEXUS_DBUS_INTERFACE_SETTINGS)
     Q_CLASSINFO("D-Bus Introspection", ""
-"  <interface name=\"io.tinexus.Settings\">\n"
+"  <interface name=\"" TINEXUS_DBUS_INTERFACE_SETTINGS "\">\n"
 "    <property name=\"CurrentTheme\" type=\"s\" access=\"readwrite\"/>\n"
 "    <property name=\"Language\" type=\"s\" access=\"readwrite\"/>\n"
 "    <method name=\"GetValue\">\n"
