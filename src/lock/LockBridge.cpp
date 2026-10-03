@@ -1,10 +1,11 @@
 // ============================================================================
 // LockBridge.cpp — Qt6 Bridge for tinexus-lock
 //   • PAM authentication (existing)
-//   • D-Bus subscriber for live wallpaper sync (io.tinexus.Wallpaper)
+//   • D-Bus subscriber for live wallpaper sync (io.tinexus.shell.Wallpaper)
 // ============================================================================
 #include "LockBridge.hpp"
 #include <common/logger.hpp>
+#include <common/DBusNames.hpp>
 
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
@@ -54,7 +55,7 @@ LockBridge::LockBridge(QObject* parent)
     connect(&m_clockTimer, &QTimer::timeout, this, &LockBridge::updateClock);
     m_clockTimer.start(1000);
 
-    // Subscribe to D-Bus io.tinexus.Wallpaper for instantaneous wallpaper updates
+    // Subscribe to D-Bus io.tinexus.shell.Wallpaper for instantaneous wallpaper updates
     setupDBus();
 }
 
@@ -139,7 +140,7 @@ void LockBridge::resetAuthFailed() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D-Bus Live Wallpaper Sync (io.tinexus.Wallpaper)
+// D-Bus Live Wallpaper Sync (io.tinexus.shell.Wallpaper)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void LockBridge::setupDBus() {
@@ -160,11 +161,11 @@ void LockBridge::setupDBus() {
         }
     }
 
-    // 2. Connect to io.tinexus.Wallpaper signal WallpaperChanged (instant D-Bus subscription)
+    // 2. Connect to Wallpaper signal WallpaperChanged (instant D-Bus subscription)
     bool ok = QDBusConnection::sessionBus().connect(
-        QStringLiteral("io.tinexus.Wallpaper"),
-        QStringLiteral("/io/tinexus/Wallpaper"),
-        QStringLiteral("io.tinexus.Wallpaper"),
+        tinexus::common::dbus::qservice::Wallpaper(),
+        tinexus::common::dbus::qpath::Wallpaper(),
+        tinexus::common::dbus::qinterface::Wallpaper(),
         QStringLiteral("WallpaperChanged"),
         this,
         SLOT(onWallpaperChanged(QString, uchar, bool))
@@ -174,7 +175,17 @@ void LockBridge::setupDBus() {
     QDBusConnection::sessionBus().connect(
         QString(),
         QString(),
-        QStringLiteral("io.tinexus.Wallpaper"),
+        tinexus::common::dbus::qinterface::Wallpaper(),
+        QStringLiteral("WallpaperChanged"),
+        this,
+        SLOT(onWallpaperChanged(QString, uchar, bool))
+    );
+
+    // Also connect to legacy Wallpaper interface for backward compatibility
+    QDBusConnection::sessionBus().connect(
+        QString(),
+        QString(),
+        tinexus::common::dbus::qinterface::legacy::Wallpaper(),
         QStringLiteral("WallpaperChanged"),
         this,
         SLOT(onWallpaperChanged(QString, uchar, bool))
@@ -185,9 +196,9 @@ void LockBridge::setupDBus() {
     // 3. Query GetStatus asynchronously if wallpaper path not yet known
     if (QDBusConnection::sessionBus().isConnected()) {
         QDBusMessage msg = QDBusMessage::createMethodCall(
-            QStringLiteral("io.tinexus.Wallpaper"),
-            QStringLiteral("/io/tinexus/Wallpaper"),
-            QStringLiteral("io.tinexus.Wallpaper"),
+            tinexus::common::dbus::qservice::Wallpaper(),
+            tinexus::common::dbus::qpath::Wallpaper(),
+            tinexus::common::dbus::qinterface::Wallpaper(),
             QStringLiteral("GetStatus")
         );
         QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(msg);

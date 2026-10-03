@@ -1,7 +1,7 @@
 // ============================================================================
 // LockBridge.hpp — Qt6 Bridge for tinexus-lock
 //   • PAM authentication (existing)
-//   • D-Bus subscriber for live wallpaper sync (io.tinexus.Wallpaper)
+//   • D-Bus subscriber for live wallpaper sync (io.tinexus.shell.Wallpaper)
 // ============================================================================
 #pragma once
 
@@ -20,7 +20,7 @@ class LockBridge : public QObject {
     Q_PROPERTY(QString username      READ username      CONSTANT)
     Q_PROPERTY(bool   isAuthenticating READ isAuthenticating NOTIFY authStateChanged)
     Q_PROPERTY(bool   authFailed     READ authFailed    NOTIFY authFailedChanged)
-    // Live wallpaper path — updated instantly via io.tinexus.Wallpaper.WallpaperChanged
+    // Live wallpaper path — updated instantly via io.tinexus.shell.Wallpaper.WallpaperChanged
     Q_PROPERTY(QString wallpaperPath READ wallpaperPath NOTIFY wallpaperPathChanged)
 
 public:
@@ -42,11 +42,11 @@ signals:
     void authStateChanged();
     void authFailedChanged();
     void unlockSuccess();
-    // Emitted when io.tinexus.Wallpaper broadcasts a new wallpaper via D-Bus
+    // Emitted when io.tinexus.shell.Wallpaper broadcasts a new wallpaper via D-Bus
     void wallpaperPathChanged();
 
 public slots:
-    // Slot connected to io.tinexus.Wallpaper.WallpaperChanged via D-Bus
+    // Slot connected to io.tinexus.shell.Wallpaper.WallpaperChanged via D-Bus
     void onWallpaperChanged(const QString& path, uchar mode = 0, bool isDynamic = false);
     void onWallpaperPathReceived(const QString& path);
 
