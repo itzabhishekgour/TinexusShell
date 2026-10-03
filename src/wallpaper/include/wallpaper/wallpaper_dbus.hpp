@@ -1,5 +1,5 @@
 // ============================================================================
-// wallpaper_dbus.hpp — D-Bus Service for io.tinexus.Wallpaper
+// wallpaper_dbus.hpp — D-Bus Service for io.tinexus.shell.Wallpaper
 // ============================================================================
 // Implements the D-Bus interface for tinexus-wallpaper via sd-bus.
 // Pure C++20, zero Qt dependency.

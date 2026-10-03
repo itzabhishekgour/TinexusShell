@@ -1,11 +1,12 @@
 // ============================================================================
-// wallpaper_dbus.cpp — D-Bus Service for io.tinexus.Wallpaper
+// wallpaper_dbus.cpp — D-Bus Service for io.tinexus.shell.Wallpaper
 // ============================================================================
 // Implements the D-Bus interface for tinexus-wallpaper via sd-bus.
 // Pure C++20, zero Qt dependency.
 // ============================================================================
 #include "wallpaper/wallpaper_dbus.hpp"
 #include "common/logger.hpp"
+#include "common/DBusNames.hpp"
 
 #include <cstring>
 #include <cerrno>
@@ -50,37 +51,48 @@ bool WallpaperDBus::init(SetWallpaperHandler on_set,
 
     r = sd_bus_add_object_vtable(m_bus,
                                  &m_slot_io,
-                                 "/io/tinexus/Wallpaper",
-                                 "io.tinexus.Wallpaper",
+                                 tinexus::common::dbus::path::Wallpaper,
+                                 tinexus::common::dbus::interface::Wallpaper,
                                  wallpaper_vtable,
                                  this);
     if (r < 0) {
-        log::error("[wallpaper/dbus] Failed to add /io/tinexus/Wallpaper vtable: {}", std::strerror(-r));
+        log::error("[wallpaper/dbus] Failed to add {} vtable: {}",
+                   tinexus::common::dbus::path::Wallpaper, std::strerror(-r));
         shutdown();
         return false;
     }
 
-    // Also register on /Wallpaper for compatibility
+    // Also register on legacy paths for compatibility
     sd_bus_add_object_vtable(m_bus,
                              &m_slot_root,
+                             tinexus::common::dbus::legacy::WallpaperPath,
+                             tinexus::common::dbus::legacy::Wallpaper,
+                             wallpaper_vtable,
+                             this);
+    sd_bus_add_object_vtable(m_bus,
+                             nullptr,
                              "/Wallpaper",
-                             "io.tinexus.Wallpaper",
+                             tinexus::common::dbus::legacy::Wallpaper,
                              wallpaper_vtable,
                              this);
 
-    r = sd_bus_request_name(m_bus, "io.tinexus.Wallpaper", 0);
+    r = sd_bus_request_name(m_bus, tinexus::common::dbus::service::Wallpaper, 0);
     if (r < 0) {
-        log::warn("[wallpaper/dbus] Failed to acquire 'io.tinexus.Wallpaper': {}", std::strerror(-r));
+        log::warn("[wallpaper/dbus] Failed to acquire '{}': {}",
+                  tinexus::common::dbus::service::Wallpaper, std::strerror(-r));
     } else {
-        log::info("[wallpaper/dbus] Acquired service name 'io.tinexus.Wallpaper'");
+        log::info("[wallpaper/dbus] Acquired service name '{}'",
+                  tinexus::common::dbus::service::Wallpaper);
     }
+    // Also acquire legacy service name
+    sd_bus_request_name(m_bus, tinexus::common::dbus::legacy::Wallpaper, 0);
 
-    // Subscribe to io.tinexus.Settings signals for automatic theme/config reload
+    // Subscribe to Settings signals for automatic theme/config reload
     r = sd_bus_match_signal(m_bus,
                             &m_match_theme,
                             nullptr,
                             nullptr,
-                            "io.tinexus.Settings",
+                            tinexus::common::dbus::interface::Settings,
                             "ThemeChanged",
                             on_settings_signal,
                             this);
@@ -92,7 +104,7 @@ bool WallpaperDBus::init(SetWallpaperHandler on_set,
                             &m_match_config,
                             nullptr,
                             nullptr,
-                            "io.tinexus.Settings",
+                            tinexus::common::dbus::interface::Settings,
                             "ConfigChanged",
                             on_settings_signal,
                             this);
@@ -100,7 +112,26 @@ bool WallpaperDBus::init(SetWallpaperHandler on_set,
         log::warn("[wallpaper/dbus] Match ConfigChanged failed: {}", std::strerror(-r));
     }
 
-    log::info("[wallpaper/dbus] io.tinexus.Wallpaper registered on user session bus");
+    // Also subscribe to legacy Settings signals
+    sd_bus_match_signal(m_bus,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        tinexus::common::dbus::legacy::Settings,
+                        "ThemeChanged",
+                        on_settings_signal,
+                        this);
+    sd_bus_match_signal(m_bus,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        tinexus::common::dbus::legacy::Settings,
+                        "ConfigChanged",
+                        on_settings_signal,
+                        this);
+
+    log::info("[wallpaper/dbus] {} registered on user session bus",
+              tinexus::common::dbus::service::Wallpaper);
     return true;
 }
 
@@ -133,8 +164,17 @@ void WallpaperDBus::emit_wallpaper_changed(const std::string& path, uint8_t mode
     if (!m_bus) return;
 
     sd_bus_emit_signal(m_bus,
-                       "/io/tinexus/Wallpaper",
-                       "io.tinexus.Wallpaper",
+                       tinexus::common::dbus::path::Wallpaper,
+                       tinexus::common::dbus::interface::Wallpaper,
+                       "WallpaperChanged",
+                       "syb",
+                       path.c_str(),
+                       mode,
+                       dynamic ? 1 : 0);
+
+    sd_bus_emit_signal(m_bus,
+                       tinexus::common::dbus::legacy::WallpaperPath,
+                       tinexus::common::dbus::legacy::Wallpaper,
                        "WallpaperChanged",
                        "syb",
                        path.c_str(),
@@ -143,7 +183,7 @@ void WallpaperDBus::emit_wallpaper_changed(const std::string& path, uint8_t mode
 
     sd_bus_emit_signal(m_bus,
                        "/Wallpaper",
-                       "io.tinexus.Wallpaper",
+                       tinexus::common::dbus::legacy::Wallpaper,
                        "WallpaperChanged",
                        "syb",
                        path.c_str(),

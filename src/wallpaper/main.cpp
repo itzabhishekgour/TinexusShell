@@ -14,6 +14,8 @@
 #include "wallpaper/solar_schedule.hpp"
 #include "wallpaper/shm_surface.hpp"
 #include <common/logger.hpp>
+#include <common/RuntimePaths.hpp>
+#include <common/DBusNames.hpp>
 #include "wallpaper/wallpaper_dbus.hpp"
 
 #include <wlr-layer-shell-unstable-v1-client-protocol.h>
@@ -321,8 +323,7 @@ static const struct wl_registry_listener registry_listener = {
     // 1. Check runtime wallpaper override files written by SettingsBridge
     const std::vector<std::string> runtime_files = {
         "/tmp/current_wallpaper",
-        "/run/user/" + std::to_string(static_cast<unsigned>(::getuid())) + "/tinexus/current_wallpaper",
-        "/run/user/0/tinexus/current_wallpaper"
+        tinexus::common::RuntimePaths::get_runtime_dir() + "/current_wallpaper"
     };
     for (const auto& rf : runtime_files) {
         if (fs::exists(rf, ec) && !ec) {
@@ -549,7 +550,7 @@ int main() {
     sigaction(SIGUSR1, &sa, nullptr);
 
     log::set_component_name("wallpaper");
-    log::info("[wallpaper] tinexus-wallpaper starting (D-Bus io.tinexus.Wallpaper)...");
+    log::info("[wallpaper] tinexus-wallpaper starting (D-Bus {})...", tinexus::common::dbus::service::Wallpaper);
 
     // ── Cross-fade timerfd (60fps, disarmed when no fade is active) ──
     g_fade_timer_fd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -626,7 +627,7 @@ int main() {
     uint16_t    current_fade_ms = 500;
     auto        current_mode    = wallpaper::FitMode::Fill;
 
-    // ── Initialize D-Bus service (io.tinexus.Wallpaper) ──
+    // ── Initialize D-Bus service (io.tinexus.shell.Wallpaper) ──
     wallpaper::WallpaperDBus::instance().init(
         // on_set (SetWallpaper method call)
         [&](const std::string& path, uint8_t mode, bool dynamic, uint16_t fade_ms) {
@@ -687,7 +688,7 @@ int main() {
                     frame->path, static_cast<uint8_t>(current_mode), true);
             }
         },
-        // on_reload (io.tinexus.Settings ThemeChanged/ConfigChanged signal)
+        // on_reload (io.tinexus.shell.Settings ThemeChanged/ConfigChanged signal)
         [&]() {
             current_path = resolve_wallpaper_path_from_settings();
             log::info("[wallpaper] Settings signal received -> crossfade to '{}'", current_path);
