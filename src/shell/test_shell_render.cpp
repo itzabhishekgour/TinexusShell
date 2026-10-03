@@ -51,10 +51,11 @@ int main(int argc, char* argv[]) {
 
     QString qmlPath;
     QStringList candidates = {
+        QStringLiteral("/workspace/src/shell/qml/DesktopShellWindow.qml"),
+        QStringLiteral("/usr/share/tinexus/shell/qml/DesktopShellWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/qml/DesktopShellWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/../src/shell/qml/DesktopShellWindow.qml"),
-        QStringLiteral("src/shell/qml/DesktopShellWindow.qml"),
-        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/shell/qml/DesktopShellWindow.qml")
+        QStringLiteral("src/shell/qml/DesktopShellWindow.qml")
     };
     for (const auto& cand : candidates) {
         if (QFileInfo::exists(cand)) {

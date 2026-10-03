@@ -7,7 +7,7 @@ import "../../common/qml"
 Item {
     id: root
     width: 250
-    height: 160
+    height: 106
 
     LiquidGlass {
         anchors.fill: parent
@@ -25,12 +25,29 @@ Item {
             width: parent.width
             spacing: 8
 
-            Text { text: "☀️"; font.pixelSize: 16; anchors.verticalCenter: parent.verticalCenter }
-            Text { text: "Display"; color: "#FFFFFF"; font.pixelSize: 14; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+            Image {
+                width: 16
+                height: 16
+                anchors.verticalCenter: parent.verticalCenter
+                fillMode: Image.PreserveAspectFit
+                source: "image://icon/display-brightness-symbolic?color=#FF9F0A"
+            }
+
+            Text {
+                text: "Display"
+                color: "#FFFFFF"
+                font.family: "Inter"
+                font.pixelSize: 14
+                font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
             Item { width: 10 }
+
             Text {
                 text: (typeof bridge !== "undefined" ? bridge.brightness : 80) + "%"
                 color: Qt.rgba(1, 1, 1, 0.60)
+                font.family: "Inter"
                 font.pixelSize: 12
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -78,25 +95,6 @@ Item {
                 onClicked: function(mouse) {
                     updateBrightness(mouse.x);
                 }
-            }
-        }
-
-        // Night Shift / Dark Mode Pill
-        Rectangle {
-            width: parent.width
-            height: 32
-            radius: 8
-            color: Qt.rgba(1, 1, 1, 0.08)
-            border.color: Qt.rgba(1, 1, 1, 0.10)
-
-            Row {
-                anchors.left: parent.left
-                anchors.leftMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 8
-
-                Text { text: "🌙"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                Text { text: "Night Light"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
             }
         }
     }

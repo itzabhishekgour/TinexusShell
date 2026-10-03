@@ -4,14 +4,18 @@
 #include "ShellBridge.hpp"
 #include "TinexusIconProvider.hpp"
 #include <common/logger.hpp>
+#include <common/SingleInstance.hpp>
+#include <common/DBusNames.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QFontDatabase>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
+#include <QtQuick/QQuickItem>
 #include <QtCore/QFileInfo>
 #include <QtCore/QUrl>
 #include <iostream>
+#include <cmath>
 
 #include <QtCore/QEvent>
 
@@ -50,11 +54,17 @@ int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("shell");
     tinexus::log::info("tinexus-shell starting (Qt6)...");
 
+    tinexus::common::SingleInstance single_instance("tinexus-shell");
+    if (!single_instance.is_primary()) {
+        tinexus::log::warn("[shell] Another instance of tinexus-shell is already running; exiting secondary instance.");
+        return 0;
+    }
+
     qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
     QGuiApplication app(argc, argv);
     qunsetenv("QT_WAYLAND_SHELL_INTEGRATION");
     app.setApplicationName(QStringLiteral("tinexus-shell"));
-    app.setDesktopFileName(QStringLiteral("io.tinexus.shell.TopBar"));
+    app.setDesktopFileName(tinexus::common::dbus::qapp_id::TopBar());
 
     // ── Enforce "Inter" System Typography ──────────────────────────────────────
     QStringList fontPaths = {
@@ -80,10 +90,10 @@ int main(int argc, char* argv[]) {
 
     QString qmlPath;
     QStringList candidates = {
+        QStringLiteral("/workspace/src/shell/qml/DesktopShellWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/qml/DesktopShellWindow.qml"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/../src/shell/qml/DesktopShellWindow.qml"),
         QStringLiteral("src/shell/qml/DesktopShellWindow.qml"),
-        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/shell/qml/DesktopShellWindow.qml"),
         QStringLiteral("/usr/share/tinexus/shell/qml/DesktopShellWindow.qml")
     };
     for (const auto& cand : candidates) {
@@ -122,15 +132,11 @@ int main(int argc, char* argv[]) {
 
         // ── Dynamic input-region mask (Precise Compound Geometry) ───────────
         // The shell window dynamically expands up to 420px height when a flyout
-        // opens. Previously, unmasking the entire window caused clicks across the
-        // entire 1920x420 screen area (including empty transparent areas) to be
-        // intercepted by the TOP layer shell window — creating an "invisible wall"
-        // that blocked application windows behind it.
-        //
-        // Fix: We construct an exact compound QRegion containing ONLY:
+        // opens. We construct an exact compound QRegion containing ONLY:
         //   1. The 32px baseline top bar
         //   2. The AuraNotch area (either 272x46 idle, or 420x72 expanded)
-        //   3. The exact bounding box of whichever flyout is currently open
+        //   3. The exact bounding box of whichever flyout is currently open,
+        //      queried dynamically from the QML item scene mapping to prevent drift.
         //
         // All other transparent areas remain excluded from the Wayland input
         // region mask, allowing pointer events to pass cleanly to underlying windows.
@@ -155,34 +161,54 @@ int main(int argc, char* argv[]) {
                 mask += QRect(cx - kNotchHalf, 0, kNotchHalf * 2, kNotchH);
             }
 
-            // 3. Add precise geometry for open flyouts
+            // 3. Add dynamic geometry for open flyouts by querying actual QQuickItem positions & sizes
+            auto addFlyoutItemMask = [window, &mask](const char* objName, const QRect& fallbackRect) {
+                bool added = false;
+                if (auto* item = window->findChild<QQuickItem*>(QString::fromLatin1(objName))) {
+                    if (item->isVisible() && item->opacity() > 0.01) {
+                        QPointF p = item->mapToScene(QPointF(0, 0));
+                        int rx = static_cast<int>(std::floor(p.x()));
+                        int ry = static_cast<int>(std::floor(p.y()));
+                        int rw = static_cast<int>(std::ceil(item->width()));
+                        int rh = static_cast<int>(std::ceil(item->height()));
+                        if (rw > 0 && rh > 0) {
+                            mask += QRect(rx, ry, rw, rh);
+                            added = true;
+                        }
+                    }
+                }
+                if (!added) {
+                    mask += fallbackRect;
+                }
+            };
+
             if (bridge.logoMenuOpen()) {
-                mask += QRect(8, 36, 230, 270);
+                addFlyoutItemMask("logoFlyout", QRect(8, 36, 230, 290));
             }
             if (bridge.appMenuOpen()) {
-                mask += QRect(48, 36, 350, 390);
+                addFlyoutItemMask("appsFlyout", QRect(48, 36, 350, 390));
             }
             if (bridge.calendarOpen()) {
-                mask += QRect(cx - 90, 48, 310, 290);
+                addFlyoutItemMask("calFlyout", QRect(cx - 90, 48, 310, 310));
             }
             if (bridge.notificationsOpen()) {
-                mask += QRect(w - 398, 36, 390, 370);
+                addFlyoutItemMask("notifFlyout", QRect(w - 398, 36, 390, 370));
             }
             if (bridge.volumeFlyoutOpen()) {
-                mask += QRect(w - 295, 36, 260, 190);
+                addFlyoutItemMask("volFlyout", QRect(w - 295, 36, 260, 190));
             }
             if (bridge.brightnessFlyoutOpen()) {
-                mask += QRect(w - 325, 36, 260, 190);
+                addFlyoutItemMask("briFlyout", QRect(w - 325, 36, 260, 110));
             }
             if (bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen()) {
-                mask += QRect(cx - 180, 60, 360, 190);
+                addFlyoutItemMask("powerDialog", QRect(cx - 190, 60, 380, 180));
             }
             if (bridge.toastVisible()) {
-                mask += QRect(w - 370, 38, 360, 72);
+                addFlyoutItemMask("notifToast", QRect(w - 370, 38, 360, 72));
             }
 
             window->setMask(mask);
-            tinexus::log::debug("[shell] Applied compound input mask (rect count={})", mask.rectCount());
+            tinexus::log::debug("[shell] Applied dynamic compound input mask (rect count={})", mask.rectCount());
         };
 
         // Install event filter for auto-dismissing flyouts on focus loss

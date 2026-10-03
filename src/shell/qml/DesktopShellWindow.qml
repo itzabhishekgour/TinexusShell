@@ -55,58 +55,68 @@ Window {
         // ── Logo Menu Flyout ────────────────────────────────────────
         LogoMenuFlyout {
             id: logoFlyout
-            x: 8
-            y: 36
+            objectName: "logoFlyout"
+            x: topBar.logoTriggerItem ? Math.max(8, Math.round(topBar.logoTriggerItem.mapToItem(container, 0, 0).x)) : 8
+            y: topBar.height + 4
             visible: typeof bridge !== "undefined" && bridge.logoMenuOpen
         }
 
         // ── Applications Dropdown Flyout ────────────────────────────
         ApplicationsFlyout {
             id: appsFlyout
-            x: 48
-            y: 36
+            objectName: "appsFlyout"
+            x: topBar.appTriggerItem ? Math.max(8, Math.round(topBar.appTriggerItem.mapToItem(container, 0, 0).x)) : 48
+            y: topBar.height + 4
             visible: typeof bridge !== "undefined" && bridge.appMenuOpen
         }
 
         // ── Calendar Flyout (Directly under Aura Notch Date Pill) ──
         CalendarFlyout {
             id: calFlyout
+            objectName: "calFlyout"
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.horizontalCenterOffset: 60
             y: 48
             visible: typeof bridge !== "undefined" && bridge.calendarOpen
         }
 
-        // ── Notifications Flyout (Under Notification Bell) ───────────
+        // ── Notifications Flyout (Dynamically Centered Under Bell Icon) ──
         NotificationFlyout {
             id: notifFlyout
-            anchors.right: parent.right
-            anchors.rightMargin: 8
-            y: 36
+            objectName: "notifFlyout"
+            x: topBar.notifTriggerItem
+               ? Math.min(container.width - width - 8, Math.max(8, Math.round(topBar.notifTriggerItem.mapToItem(container, 0, 0).x + (topBar.notifTriggerItem.width / 2) - (width / 2))))
+               : (container.width - width - 8)
+            y: topBar.height + 4
             visible: typeof bridge !== "undefined" && bridge.notificationsOpen
         }
 
-        // ── Volume Flyout (Under Volume Tray Icon) ───────────────────
+        // ── Volume Flyout (Dynamically Centered Under Volume Tray Icon) ──
         VolumeFlyout {
             id: volFlyout
-            anchors.right: parent.right
-            anchors.rightMargin: 40
-            y: 36
+            objectName: "volFlyout"
+            x: topBar.volTriggerItem
+               ? Math.min(container.width - width - 8, Math.max(8, Math.round(topBar.volTriggerItem.mapToItem(container, 0, 0).x + (topBar.volTriggerItem.width / 2) - (width / 2))))
+               : (container.width - width - 40)
+            y: topBar.height + 4
             visible: typeof bridge !== "undefined" && bridge.volumeFlyoutOpen
         }
 
-        // ── Brightness Flyout (Under Brightness Tray Icon) ───────────
+        // ── Brightness Flyout (Dynamically Centered Under Brightness Icon) ─
         BrightnessFlyout {
             id: briFlyout
-            anchors.right: parent.right
-            anchors.rightMargin: 70
-            y: 36
+            objectName: "briFlyout"
+            x: topBar.briTriggerItem
+               ? Math.min(container.width - width - 8, Math.max(8, Math.round(topBar.briTriggerItem.mapToItem(container, 0, 0).x + (topBar.briTriggerItem.width / 2) - (width / 2))))
+               : (container.width - width - 70)
+            y: topBar.height + 4
             visible: typeof bridge !== "undefined" && bridge.brightnessFlyoutOpen
         }
 
         // ── Power Confirmation Modal ────────────────────────────────
         PowerConfirmationDialog {
             id: powerDialog
+            objectName: "powerDialog"
             anchors.horizontalCenter: parent.horizontalCenter
             y: 60
             visible: typeof bridge !== "undefined" && (bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen)
@@ -115,6 +125,7 @@ Window {
         // ── Notification Toast Overlay (Top Right below TopBar) ─────
         NotificationToast {
             id: notifToast
+            objectName: "notifToast"
             anchors.right: parent.right
             anchors.rightMargin: 12
             y: 40

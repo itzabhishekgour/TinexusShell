@@ -11,6 +11,16 @@ Item {
     height: 32
     readonly property bool notchExpanded: centerNotch.expanded
 
+    // Canonical trigger item references for precise dynamic flyout alignment
+    readonly property Item logoTriggerItem: logoBtn
+    readonly property Item appTriggerItem: appTrigger
+    readonly property Item briTriggerItem: briTrigger
+    readonly property Item volTriggerItem: volTrigger
+    readonly property Item batTriggerItem: batTrigger
+    readonly property Item wifiTriggerItem: wifiTrigger
+    readonly property Item notifTriggerItem: notifTrigger
+    readonly property Item centerNotchItem: centerNotch
+
     LiquidGlass {
         id: barBg
         anchors.fill: parent

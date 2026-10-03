@@ -98,9 +98,9 @@ void ShellBridge::resolveLogoUrl() {
         QStringLiteral("../assets/logo/tinexus-logo-32.png"),
         QStringLiteral("../../assets/logo/tinexus-logo-32.png"),
         QCoreApplication::applicationDirPath() + QStringLiteral("/../assets/logo/tinexus-logo-32.png"),
-        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/assets/logo/tinexus-logo-32.png"),
+        QStringLiteral("/workspace/assets/logo/tinexus-logo-32.png"),
         QStringLiteral("assets/logo/tinexus-logo.svg"),
-        QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/assets/logo/tinexus-logo.svg")
+        QStringLiteral("/workspace/assets/logo/tinexus-logo.svg")
     };
 
     for (const auto& cand : candidates) {

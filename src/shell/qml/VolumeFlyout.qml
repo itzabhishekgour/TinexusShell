@@ -30,10 +30,14 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
 
-                Text {
-                    text: typeof bridge !== "undefined" && bridge.soundMuted ? "🔇" : "🔊"
-                    font.pixelSize: 16
+                Image {
+                    width: 16
+                    height: 16
                     anchors.verticalCenter: parent.verticalCenter
+                    fillMode: Image.PreserveAspectFit
+                    source: "image://icon/" + (typeof bridge !== "undefined" && (bridge.soundMuted || bridge.volume === 0)
+                            ? "audio-volume-muted-symbolic?color=#FF453A"
+                            : "audio-volume-high-symbolic?color=#38BDF8")
                 }
 
                 Text {
@@ -102,7 +106,13 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
 
-                Text { text: "🎧"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                Image {
+                    width: 14
+                    height: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    fillMode: Image.PreserveAspectFit
+                    source: "image://icon/audio-speakers-symbolic?color=#38BDF8"
+                }
                 Text { text: "Internal Speakers"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
             }
         }
