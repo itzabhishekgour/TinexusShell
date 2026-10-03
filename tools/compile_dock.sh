@@ -55,16 +55,16 @@ QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
 echo "[INFO] Generating MOC for tinexus-dock..."
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockBridge.hpp -o /tmp/build_apps/moc_DockBridge.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockModel.hpp -o /tmp/build_apps/moc_DockModel.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/ToplevelTracker.hpp -o /tmp/build_apps/moc_ToplevelTracker.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockMenuPopup.hpp -o /tmp/build_apps/moc_DockMenuPopup.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockWindow.hpp -o /tmp/build_apps/moc_DockWindow.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DnDHandler.hpp -o /tmp/build_apps/moc_DnDHandler.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/StacksModel.hpp -o /tmp/build_apps/moc_StacksModel.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/StacksPopup.hpp -o /tmp/build_apps/moc_StacksPopup.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockIpcClient.hpp -o /tmp/build_apps/moc_DockIpcClient.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/dock/include/dock/DockAdaptor.hpp -o /tmp/build_apps/moc_DockAdaptor.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DockBridge.hpp -o /tmp/build_apps/moc_DockBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DockModel.hpp -o /tmp/build_apps/moc_DockModel.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/ToplevelTracker.hpp -o /tmp/build_apps/moc_ToplevelTracker.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DockMenuPopup.hpp -o /tmp/build_apps/moc_DockMenuPopup.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DockWindow.hpp -o /tmp/build_apps/moc_DockWindow.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DnDHandler.hpp -o /tmp/build_apps/moc_DnDHandler.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/StacksModel.hpp -o /tmp/build_apps/moc_StacksModel.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/StacksPopup.hpp -o /tmp/build_apps/moc_StacksPopup.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DockIpcClient.hpp -o /tmp/build_apps/moc_DockIpcClient.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/dock/include/dock/DockAdaptor.hpp -o /tmp/build_apps/moc_DockAdaptor.cpp
 
 echo "[INFO] Compiling Wayland Foreign Toplevel protocol glue..."
 chroot /mnt/rootfs /usr/bin/gcc -O2 -fPIC -I/workspace/src/dock -I/usr/include/wayland \

@@ -34,6 +34,7 @@ unit_test_*
 integration_test_*
 tools/test_x11_client
 tools/test_wayland_globals
+tools/test_session_lock_security
 
 # IDE & Editor files
 .vscode/

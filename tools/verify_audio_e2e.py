@@ -48,8 +48,8 @@ def main():
             print(f"  [FAIL] {b} MISSING!")
             sys.exit(1)
 
-    # 2. Setup Runtime Environment as UID 1000
-    runtime_dir = "/run/user/1000"
+    # 2. Setup Runtime Environment
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     os.makedirs(runtime_dir, exist_ok=True)
     os.makedirs(f"{runtime_dir}/pulse", exist_ok=True)
     os.chmod(runtime_dir, 0o700)

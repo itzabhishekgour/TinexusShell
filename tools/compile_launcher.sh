@@ -64,7 +64,7 @@ QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
 echo "[INFO] Running moc on LauncherBridge.hpp..."
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/launcher/LauncherBridge.hpp -o /tmp/build_apps/moc_LauncherBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/launcher/LauncherBridge.hpp -o /tmp/build_apps/moc_LauncherBridge.cpp
 
 echo "[INFO] Compiling tinexus-launcher..."
 mkdir -p /workspace/build/bin

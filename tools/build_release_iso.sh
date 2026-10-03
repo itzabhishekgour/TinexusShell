@@ -616,9 +616,11 @@ EOF_TTYS0
     chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         usermod -aG video,input,render,seat tinexus 2>/dev/null || true
     chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        systemctl preset tinexus-session.target seatd.service tinexus-comp.service tinexus-serviced.service tinexus-shell.service tinexus-dock.service tinexus-hardware-env.service tinexus-splash.service 2>/dev/null || true
+        systemctl preset tinexus-session.target seatd.service tinexus-comp.service tinexus-serviced.service tinexus-hardware-env.service tinexus-splash.service 2>/dev/null || true
     chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        systemctl enable tinexus-session.target seatd.service tinexus-comp.service tinexus-serviced.service tinexus-shell.service tinexus-dock.service tinexus-hardware-env.service 2>/dev/null || true
+        systemctl enable tinexus-session.target seatd.service tinexus-comp.service tinexus-serviced.service tinexus-hardware-env.service 2>/dev/null || true
+    chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        systemctl disable tinexus-shell.service tinexus-dock.service 2>/dev/null || true
     chroot "$ROOTFS_DIR" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         systemctl set-default tinexus-session.target 2>/dev/null || true
 

@@ -75,12 +75,19 @@ done
 mkdir -p /mnt/rootfs/usr/share/tinexus-settings/qml 2>/dev/null || true
 cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus-settings/qml/ 2>/dev/null || true
 
-# Ensure seatd and device groups
-echo "[INFO] Ensuring seatd and device permissions..."
+# Ensure seatd, presets, and disable duplicate shell/dock services
+echo "[INFO] Ensuring systemd unit presets, seatd, and device permissions..."
+if [ -f "/workspace/data/systemd/90-tinexus.preset" ]; then
+    mkdir -p /mnt/rootfs/etc/systemd/system-preset /mnt/rootfs/lib/systemd/system-preset
+    cp -f /workspace/data/systemd/90-tinexus.preset /mnt/rootfs/etc/systemd/system-preset/ 2>/dev/null || true
+    cp -f /workspace/data/systemd/90-tinexus.preset /mnt/rootfs/lib/systemd/system-preset/ 2>/dev/null || true
+fi
 chroot /mnt/rootfs /bin/bash -c "
     groupadd -r -f seat 2>/dev/null || true
     usermod -aG video,input,render,seat tinexus 2>/dev/null || true
     systemctl enable seatd.service 2>/dev/null || true
+    systemctl disable tinexus-shell.service 2>/dev/null || true
+    systemctl disable tinexus-dock.service 2>/dev/null || true
 "
 
 echo "[INFO] Verifying rootfs binaries..."
@@ -88,7 +95,10 @@ ls -lh /mnt/rootfs/usr/bin/tinexus-settings \
        /mnt/rootfs/usr/bin/tinexus-settings-ui \
        /mnt/rootfs/usr/bin/tinexus-session \
        /mnt/rootfs/usr/bin/tinexus-notifications \
-       /mnt/rootfs/usr/bin/tinexus-shell
+       /mnt/rootfs/usr/bin/tinexus-shell \
+       /mnt/rootfs/usr/bin/tinexus-dock \
+       /mnt/rootfs/usr/bin/tinexus-launcher \
+       /mnt/rootfs/usr/bin/tinexus-comp
 
 echo "[INFO] Unmounting chroot bind mounts before squashfs..."
 umount -l /mnt/rootfs/mnt/rootfs/workspace 2>/dev/null || true
