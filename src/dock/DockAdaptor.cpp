@@ -1,5 +1,5 @@
 // ============================================================================
-// DockAdaptor.cpp — Qt6 D-Bus Adaptor implementation for io.tinexus.Dock
+// DockAdaptor.cpp — Qt6 D-Bus Adaptor implementation for io.tinexus.shell.Dock
 // ============================================================================
 #include "dock/DockAdaptor.hpp"
 #include "dock/DockBridge.hpp"

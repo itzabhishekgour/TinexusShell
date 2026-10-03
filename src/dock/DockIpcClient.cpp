@@ -5,6 +5,7 @@
 #include "dock/DockIpcClient.hpp"
 #include "dock/DockModel.hpp"
 #include <common/logger.hpp>
+#include <common/DBusNames.hpp>
 
 #if __has_include(<QtDBus/QDBusConnection>)
 #include <QtDBus/QDBusConnection>
@@ -35,11 +36,11 @@ bool DockIpcClient::init() {
         return false;
     }
 
-    // Subscribe to io.tinexus.shell.Notifications.BadgeCountChanged(QString appId, uint count)
+    // Subscribe to Notifications.BadgeCountChanged(QString appId, uint count)
     bool ok = bus.connect(
-        QStringLiteral("io.tinexus.shell.Notifications"),
-        QStringLiteral("/io/tinexus/shell/Notifications"),
-        QStringLiteral("io.tinexus.shell.Notifications"),
+        tinexus::common::dbus::qservice::Notifications(),
+        tinexus::common::dbus::qpath::Notifications(),
+        tinexus::common::dbus::qinterface::Notifications(),
         QStringLiteral("BadgeCountChanged"),
         this,
         SLOT(onBadgeCountChanged(QString, uint))
@@ -47,7 +48,7 @@ bool DockIpcClient::init() {
 
     if (ok) {
         m_connected = true;
-        tinexus::log::info("[DockIpcClient] Subscribed to io.tinexus.shell.Notifications.BadgeCountChanged signal");
+        tinexus::log::info("[DockIpcClient] Subscribed to Notifications.BadgeCountChanged signal");
         emit connectionStatusChanged(true);
         return true;
     } else {
@@ -69,9 +70,9 @@ void DockIpcClient::shutdown() {
         QDBusConnection bus = QDBusConnection::sessionBus();
         if (bus.isConnected()) {
             bus.disconnect(
-                QStringLiteral("io.tinexus.shell.Notifications"),
-                QStringLiteral("/io/tinexus/shell/Notifications"),
-                QStringLiteral("io.tinexus.shell.Notifications"),
+                tinexus::common::dbus::qservice::Notifications(),
+                tinexus::common::dbus::qpath::Notifications(),
+                tinexus::common::dbus::qinterface::Notifications(),
                 QStringLiteral("BadgeCountChanged"),
                 this,
                 SLOT(onBadgeCountChanged(QString, uint))

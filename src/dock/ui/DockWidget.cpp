@@ -43,12 +43,12 @@ DockWidget::~DockWidget() {
 }
 
 void DockWidget::setup_ipc() {
-    // Deprecated in Phase 3: migrated to Qt6 D-Bus (io.tinexus.Dock)
+    // Deprecated in Phase 3: migrated to Qt6 D-Bus (io.tinexus.shell.Dock)
     m_ipc_socket = -1;
 }
 
 void DockWidget::send_ipc(uint16_t /*msg_type*/, const std::string& /*app_id*/) {
-    // Deprecated in Phase 3: migrated to Qt6 D-Bus (io.tinexus.Dock)
+    // Deprecated in Phase 3: migrated to Qt6 D-Bus (io.tinexus.shell.Dock)
 }
 
 void DockWidget::spawn_app(const std::string& exec_cmd) {
@@ -143,10 +143,10 @@ void DockWidget::on_icon_clicked(size_t idx) {
         icon.bounce_offset_spring.reset(0.4, 0.0);
         break;
     case DockIconAppState::Minimized:
-        // Migrated to D-Bus io.tinexus.Dock
+        // Migrated to D-Bus io.tinexus.shell.Dock
         break;
     case DockIconAppState::RunningBg:
-        // Migrated to D-Bus io.tinexus.Dock
+        // Migrated to D-Bus io.tinexus.shell.Dock
         break;
     case DockIconAppState::RunningFocused:
         icon.bounce_offset_spring.reset(0.22, 0.0);

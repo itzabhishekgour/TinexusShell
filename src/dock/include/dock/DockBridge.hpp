@@ -6,7 +6,7 @@
 // Slice 4: Fisheye Magnification & Auto-Hide State Controller
 // Slice 6: Wayland File Drag-and-Drop Drop Target Integration
 // Slice 7: Stacks Popover & D-Bus Badges Integration
-// Phase 3: Standardized on Qt6 D-Bus (io.tinexus.Dock)
+// Phase 3: Standardized on Qt6 D-Bus (io.tinexus.shell.Dock)
 // ============================================================================
 #pragma once
 

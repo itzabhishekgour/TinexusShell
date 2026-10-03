@@ -13,6 +13,8 @@
 #include "dock/DockIpcClient.hpp"
 #include <common/logger.hpp>
 #include <common/RuntimePaths.hpp>
+#include <common/SingleInstance.hpp>
+#include <common/DBusNames.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -34,6 +36,12 @@ int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("dock");
     tinexus::log::info("tinexus-dock starting (Slice 2 — Live Window Tracking)...");
 
+    tinexus::common::SingleInstance single_instance("tinexus-dock");
+    if (!single_instance.is_primary()) {
+        tinexus::log::warn("[dock] Another instance of tinexus-dock is already running; exiting secondary instance.");
+        return 0;
+    }
+
     // ── Force Wayland platform with LayerShell integration ───────────────────
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "wayland");
@@ -42,7 +50,7 @@ int main(int argc, char* argv[]) {
 
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("tinexus-dock"));
-    app.setDesktopFileName(QStringLiteral("io.tinexus.shell.Dock"));
+    app.setDesktopFileName(tinexus::common::dbus::qapp_id::Dock());
 
     // ── Data Models & Bridge ─────────────────────────────────────────────────
     // DockModel: the QAbstractListModel — pinned items, separator, trash

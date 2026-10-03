@@ -1,8 +1,9 @@
 // ============================================================================
-// DockAdaptor.hpp — Qt6 D-Bus Adaptor for io.tinexus.Dock
+// DockAdaptor.hpp — Qt6 D-Bus Adaptor for io.tinexus.shell.Dock
 // ============================================================================
 #pragma once
 
+#include <common/DBusNames.hpp>
 #include <QtDBus/QDBusAbstractAdaptor>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -14,9 +15,9 @@ class DockBridge;
 
 class DockAdaptor : public QDBusAbstractAdaptor {
     Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "io.tinexus.Dock")
+    Q_CLASSINFO("D-Bus Interface", TINEXUS_DBUS_INTERFACE_DOCK)
     Q_CLASSINFO("D-Bus Introspection", ""
-"  <interface name=\"io.tinexus.Dock\">\n"
+"  <interface name=\"" TINEXUS_DBUS_INTERFACE_DOCK "\">\n"
 "    <property name=\"RunningApps\" type=\"as\" access=\"read\"/>\n"
 "    <property name=\"FocusedApp\" type=\"s\" access=\"read\"/>\n"
 "    <property name=\"BadgeCount\" type=\"u\" access=\"read\"/>\n"

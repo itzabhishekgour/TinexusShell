@@ -20,6 +20,7 @@
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusMessage>
 #include <common/SingleInstance.hpp>
+#include <common/DBusNames.hpp>
 #include <files/trash_manager.hpp>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -622,8 +623,8 @@ void DockBridge::forceQuitApp(const QString& appId) {
     closeApp(appId);
 
     QString binName = appId;
-    if (binName.startsWith(QStringLiteral("io.tinexus.shell."))) {
-        binName = binName.mid(17);
+    if (binName.startsWith(tinexus::common::dbus::qapp_id::ShellPrefix())) {
+        binName = binName.mid(tinexus::common::dbus::qapp_id::ShellPrefix().length());
     } else if (binName.contains(QLatin1Char('.'))) {
         binName = binName.section(QLatin1Char('.'), -1);
     }
@@ -872,36 +873,40 @@ void DockBridge::setupDBus() {
 
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (bus.isConnected()) {
-        bus.registerService(QStringLiteral("io.tinexus.Dock"));
+        bus.registerService(tinexus::common::dbus::qservice::Dock());
+        bus.registerService(tinexus::common::dbus::qservice::legacy::Dock());
+        bus.registerObject(tinexus::common::dbus::qpath::Dock(), this);
         bus.registerObject(QStringLiteral("/Dock"), this);
-        bus.registerObject(QStringLiteral("/io/tinexus/Dock"), this);
+        bus.registerObject(tinexus::common::dbus::qpath::legacy::Dock(), this);
 
         // Subscribe to compositor notifications if compositor emits D-Bus signals
         bus.connect(
-            QStringLiteral("io.tinexus.Compositor"),
-            QStringLiteral("/io/tinexus/Compositor"),
-            QStringLiteral("io.tinexus.Compositor"),
+            tinexus::common::dbus::qservice::Compositor(),
+            tinexus::common::dbus::qpath::Compositor(),
+            tinexus::common::dbus::qinterface::Compositor(),
             QStringLiteral("WindowMinimized"),
             this,
             SLOT(onDBusNotifyMinimized(QString, qulonglong))
         );
         bus.connect(
-            QStringLiteral("io.tinexus.Compositor"),
-            QStringLiteral("/io/tinexus/Compositor"),
-            QStringLiteral("io.tinexus.Compositor"),
+            tinexus::common::dbus::qservice::Compositor(),
+            tinexus::common::dbus::qpath::Compositor(),
+            tinexus::common::dbus::qinterface::Compositor(),
             QStringLiteral("WindowRestored"),
             this,
             SLOT(onDBusNotifyRestored(QString, qulonglong))
         );
         bus.connect(
-            QStringLiteral("io.tinexus.Compositor"),
-            QStringLiteral("/io/tinexus/Compositor"),
-            QStringLiteral("io.tinexus.Compositor"),
+            tinexus::common::dbus::qservice::Compositor(),
+            tinexus::common::dbus::qpath::Compositor(),
+            tinexus::common::dbus::qinterface::Compositor(),
             QStringLiteral("FocusChanged"),
             this,
             SLOT(onDBusNotifyFocusChanged(QString, bool))
         );
-        tinexus::log::info("[DockBridge] Registered on session D-Bus as io.tinexus.Dock at /Dock");
+        tinexus::log::info("[DockBridge] Registered on session D-Bus as {} at {}",
+                           tinexus::common::dbus::service::Dock,
+                           tinexus::common::dbus::path::Dock);
     } else {
         tinexus::log::warn("[DockBridge] Session D-Bus not connected — running in standalone mode");
     }
@@ -914,9 +919,9 @@ void DockBridge::sendRaiseAndFocus(const QString& appId) {
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (bus.isConnected()) {
         QDBusMessage msg = QDBusMessage::createMethodCall(
-            QStringLiteral("io.tinexus.Compositor"),
-            QStringLiteral("/io/tinexus/Compositor"),
-            QStringLiteral("io.tinexus.Compositor"),
+            tinexus::common::dbus::qservice::Compositor(),
+            tinexus::common::dbus::qpath::Compositor(),
+            tinexus::common::dbus::qinterface::Compositor(),
             QStringLiteral("RaiseAndFocus")
         );
         msg << appId;

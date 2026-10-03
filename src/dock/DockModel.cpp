@@ -6,6 +6,7 @@
 #include "dock/ToplevelTracker.hpp"
 #include <common/logger.hpp>
 #include <common/AppId.hpp>
+#include <common/DBusNames.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -375,8 +376,8 @@ QString DockModel::resolveDisplayName(const QString& appId, const QString& title
         return title;
     }
     QString name = appId;
-    if (name.startsWith(QStringLiteral("io.tinexus.shell."))) {
-        name = name.mid(17);
+    if (name.startsWith(tinexus::common::dbus::qapp_id::ShellPrefix())) {
+        name = name.mid(tinexus::common::dbus::qapp_id::ShellPrefix().length());
     } else if (name.startsWith(QStringLiteral("tinexus-"))) {
         name = name.mid(8);
     } else if (name.contains(QLatin1Char('.'))) {
