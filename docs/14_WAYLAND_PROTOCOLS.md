@@ -49,7 +49,7 @@ Allows shell clients (specifically `tinexus-launcher`) to register global shortc
 <?xml version="1.0" encoding="UTF-8"?>
 <protocol name="tinexus_global_shortcut_v1">
   <copyright>
-    Copyright 2026 Tinexus Platform Team.
+    Copyright 2026 Abhishek Gour.
     Licensed under Apache-2.0.
   </copyright>
 

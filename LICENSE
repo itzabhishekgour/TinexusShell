@@ -1,7 +1,10 @@
 Tinexus Platform — Licensing Overview
 =====================================
 
-Copyright 2026 Tinexus Platform Team.
+Copyright (c) 2026 Abhishek Gour.
+
+Tinexus Platform is an independent, standalone project created and
+maintained by Abhishek Gour.
 
 Tinexus Platform uses a per-component licensing split. No single file is
 offered under a choice of licenses; the license that applies is determined
@@ -66,4 +69,6 @@ license stated in its own header:
 Contributions
 -------------
 Contributions are accepted under the license of the component they modify
-(see docs/18_GOVERNANCE.md, section 6: CLA / DCO).
+(see docs/18_GOVERNANCE.md, section 6: CLA / DCO). Contributors retain
+copyright in their own contributions; the project copyright holder is
+listed above.
