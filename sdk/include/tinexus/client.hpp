@@ -13,7 +13,7 @@ public:
     Client();
     ~Client();
 
-    Result<bool> connect(const std::string& endpoint = "/run/user/1000/tinexus/ipc.sock");
+    Result<bool> connect(const std::string& endpoint = "");
     void disconnect();
     [[nodiscard]] bool is_connected() const noexcept;
 

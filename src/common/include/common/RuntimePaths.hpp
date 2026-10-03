@@ -7,20 +7,28 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <cerrno>
+#include <filesystem>
 
 namespace tinexus::common {
 
 class RuntimePaths {
 public:
     /**
+     * @brief Get the user runtime directory ($XDG_RUNTIME_DIR or /run/user/<uid>).
+     */
+    static inline std::string get_user_runtime_dir() noexcept {
+        const char* xdg = ::getenv("XDG_RUNTIME_DIR");
+        if (xdg && *xdg != '\0') {
+            return std::string(xdg);
+        }
+        return "/run/user/" + std::to_string(::getuid());
+    }
+
+    /**
      * @brief Get the base Tinexus runtime directory ($XDG_RUNTIME_DIR/tinexus or /run/user/<uid>/tinexus).
      */
     static inline std::string get_runtime_dir() noexcept {
-        const char* xdg = ::getenv("XDG_RUNTIME_DIR");
-        if (xdg && *xdg != '\0') {
-            return std::string(xdg) + "/tinexus";
-        }
-        return "/run/user/" + std::to_string(::getuid()) + "/tinexus";
+        return get_user_runtime_dir() + "/tinexus";
     }
 
     /**
@@ -45,26 +53,19 @@ public:
     }
 
     /**
-     * @brief Ensures that the Tinexus runtime directory exists with safe 0700 permissions.
+     * @brief Ensures that the Tinexus runtime directory exists with safe permissions.
      */
     static inline bool ensure_runtime_dir() noexcept {
         std::string dir = get_runtime_dir();
-        const char* xdg = ::getenv("XDG_RUNTIME_DIR");
-        if (xdg && *xdg != '\0') {
-            struct stat st_xdg{};
-            if (::stat(xdg, &st_xdg) != 0) {
-                ::mkdir(xdg, 0700);
-            } else {
-                ::chmod(xdg, 0700);
-            }
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (!ec) {
+            std::filesystem::permissions(dir,
+                std::filesystem::perms::owner_all,
+                std::filesystem::perm_options::replace, ec);
+            return true;
         }
-        struct stat st{};
-        if (::stat(dir.c_str(), &st) != 0) {
-            if (::mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
-                return false;
-            }
-        }
-        return true;
+        return false;
     }
 };
 

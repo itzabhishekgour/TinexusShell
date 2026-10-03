@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <utility>
 #include <common/logger.hpp>
 #include <common/RuntimePaths.hpp>
@@ -29,10 +30,18 @@ public:
 
         m_lock_fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
         if (m_lock_fd < 0) {
-            tinexus::log::error("[SingleInstance] Failed to open lock file '{}': {}",
-                                lock_path, strerror(errno));
-            m_is_primary = true;
-            return;
+            std::string tmp_dir = "/tmp/tinexus";
+            std::error_code ec;
+            std::filesystem::create_directories(tmp_dir, ec);
+            std::string fallback_path = tmp_dir + "/" + std::string(m_app_id) + ".lock";
+            m_lock_fd = ::open(fallback_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+            if (m_lock_fd < 0) {
+                tinexus::log::error("[SingleInstance] Failed to open lock file '{}' and fallback '{}': {}",
+                                    lock_path, fallback_path, strerror(errno));
+                m_is_primary = true;
+                return;
+            }
+            lock_path = fallback_path;
         }
 
         int res = ::flock(m_lock_fd, LOCK_EX | LOCK_NB);
@@ -104,7 +113,9 @@ public:
         std::string lock_path = RuntimePaths::get_app_lock_path(app_id);
         int fd = ::open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
         if (fd < 0) {
-            return false;
+            std::string fallback_path = "/tmp/tinexus/" + std::string(app_id) + ".lock";
+            fd = ::open(fallback_path.c_str(), O_RDWR | O_CLOEXEC);
+            if (fd < 0) return false;
         }
         int res = ::flock(fd, LOCK_EX | LOCK_NB);
         if (res == 0) {

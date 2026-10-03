@@ -1,5 +1,6 @@
 #include "tinexus/client.hpp"
 #include "common/logger.hpp"
+#include "common/RuntimePaths.hpp"
 #include <iostream>
 
 namespace tinexus {
@@ -15,7 +16,8 @@ Client::Client() : m_impl(std::make_unique<Impl>()) {}
 Client::~Client() = default;
 
 Result<bool> Client::connect(const std::string& endpoint) {
-    log::info("SDK Client: Negotiating connection with platform IPC at '{}'...", endpoint);
+    std::string target = endpoint.empty() ? common::RuntimePaths::get_ipc_socket_path() : endpoint;
+    log::info("SDK Client: Negotiating connection with platform IPC at '{}'...", target);
     m_impl->connected = true;
     return Result<bool>(true);
 }
