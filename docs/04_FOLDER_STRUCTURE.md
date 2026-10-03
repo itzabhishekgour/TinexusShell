@@ -42,7 +42,9 @@ Tinexus Platform/
 ├── 📄 .gitignore               # Git ignore rules
 ├── 📄 CHANGELOG.md             # Version-by-version changelog
 ├── 📄 CONTRIBUTING.md          # Contributor guide
-├── 📄 LICENSE                  # License file (GPL-2+ / Apache-2.0)
+├── 📄 LICENSE                  # Per-component license mapping (GPL-2.0-or-later / Apache-2.0)
+├── 📄 LICENSE-GPL-2.0          # GPL-2.0 full text
+├── 📄 LICENSE-Apache-2.0       # Apache-2.0 full text
 ├── 📄 README.md                # Project overview
 ├── 📄 SECURITY.md              # Security disclosure policy
 └── 📄 VERSION                  # Current version string (e.g., "0.1.0")
