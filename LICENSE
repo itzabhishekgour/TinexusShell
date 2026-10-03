@@ -1,0 +1,74 @@
+Tinexus Platform — Licensing Overview
+=====================================
+
+Copyright (c) 2026 Abhishek Gour.
+
+Tinexus Platform is an independent, standalone project created and
+maintained by Abhishek Gour.
+
+Tinexus Platform uses a per-component licensing split. No single file is
+offered under a choice of licenses; the license that applies is determined
+by the directory the file lives in, as listed below.
+
+Full license texts:
+  - LICENSE-GPL-2.0        GNU General Public License, version 2
+  - LICENSE-Apache-2.0     Apache License, version 2.0
+
+
+1. GPL-2.0-or-later  (SPDX: GPL-2.0-or-later)
+---------------------------------------------
+Core platform components, daemons and applications. This is the default for
+everything not listed under sections 2 or 3.
+
+  src/comp/            Wayland compositor (tinexus-comp)
+  src/serviced/        Platform supervisor
+  src/ipcd/            IPC broker
+  src/searchd/         Search engine
+  src/session/         Session lifecycle
+  src/settings/        Settings daemon
+  src/notifications/   Notification daemon
+  src/clipboard/       Clipboard manager
+  src/wallpaper/       Wallpaper renderer
+  src/shell/           TopBar (tinexus-shell)
+  src/dock/            Dock
+  src/launcher/        Command palette
+  src/lock/            Lock screen
+  src/settings-ui/, src/about/, src/files/, src/terminal/, src/monitor/,
+  src/login/, src/splash/, src/indexer/, src/guard/, src/displayd/,
+  src/pkg/, src/app-installer/, src/iso/, src/liveusb/, src/release/
+  tools/, tests/, benchmarks/, examples/ (unless a file states otherwise)
+
+
+2. Apache-2.0  (SPDX: Apache-2.0)
+---------------------------------
+SDKs, shared libraries and Tinexus-authored protocol definitions, so that
+third-party plugins and applications may link against them freely.
+
+  sdk/                 Plugin SDK
+  src/sdk/             SDK headers and build files
+  src/common/          Shared C++ libraries (D-Bus names, logging, pools)
+  src/txui/            libtxui UI framework
+  include/             Public headers
+  protocols/tinexus-global-shortcut-v1.xml
+  protocols/tinexus-shell-helper-v1.xml
+
+
+3. Third-party material (own licenses retained)
+-----------------------------------------------
+The following files are NOT covered by sections 1 or 2. Each keeps the
+license stated in its own header:
+
+  protocols/xdg-shell.xml
+  protocols/wlr-layer-shell-unstable-v1.xml
+  protocols/wlr-screencopy-unstable-v1.xml
+  protocols/wlr-foreign-toplevel-management-unstable-v1.xml
+  protocols/org-kde-kwin-blur.xml
+  assets/fonts/            see assets/fonts/LICENSE.txt
+
+
+Contributions
+-------------
+Contributions are accepted under the license of the component they modify
+(see docs/18_GOVERNANCE.md, section 6: CLA / DCO). Contributors retain
+copyright in their own contributions; the project copyright holder is
+listed above.

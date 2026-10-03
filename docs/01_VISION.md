@@ -117,7 +117,7 @@ A 100ms delay is perceived by humans. A 300ms delay breaks flow. A 1-second dela
 | G-P06 | Multi-monitor support | Full HiDPI and mixed-DPI multi-monitor |
 | G-P07 | Developer-first | Best-in-class developer workflow (terminal, IDE launch, git) |
 | G-P08 | Privacy by default | No telemetry, no cloud, all data local |
-| G-P09 | Open source | 100% open source, Apache 2.0 / GPL-2+ dual licensed |
+| G-P09 | Open source | 100% open source; per-component split: GPL-2.0-or-later (core) / Apache-2.0 (SDK, libraries, protocols) — see `LICENSE` |
 
 ### 4.3 Community Goals
 

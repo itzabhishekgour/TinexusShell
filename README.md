@@ -150,8 +150,9 @@ cmake --build build -j$(nproc)
 
 ## 📜 License
 
-Tinexus Platform is dual-licensed:
-- Core platform components & daemons: **GPL-2.0-or-later**
-- SDKs, protocols, and shared libraries: **Apache-2.0**
+Tinexus Platform uses a **per-component license split** (the license depends on the directory, not on a choice by the user):
+- Core platform components, daemons & applications: **GPL-2.0-or-later** ([LICENSE-GPL-2.0](LICENSE-GPL-2.0))
+- SDK, shared libraries, `libtxui` and Tinexus-authored protocols: **Apache-2.0** ([LICENSE-Apache-2.0](LICENSE-Apache-2.0))
+- Third-party protocol XMLs and fonts keep their own licenses.
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE](LICENSE) for the exact directory-to-license mapping.
