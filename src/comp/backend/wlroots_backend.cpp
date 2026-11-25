@@ -155,10 +155,66 @@ public:
             return false;
         }
 
-        // 2. Create renderer
+        // 2. 3-TIER RENDERER & ALLOCATOR INITIALIZATION PIPELINE
+        // Tier 1: Full Hardware GLES2 / Vulkan + Atomic KMS
+        log::info("[Renderer] Attempting Tier-1: Hardware GLES2 / Vulkan + DRM Atomic KMS...");
         m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
+        if (m_wlr_renderer) {
+            m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+        }
+
+        // Tier 2: Hardware GLES2 Safe Mode (NO_ATOMIC=1, NO_HARDWARE_CURSORS=1 for VMs / quirky GPUs)
+        if (!m_wlr_renderer || !m_wlr_allocator) {
+            log::warn("[Renderer] Tier-1 Hardware acceleration failed. Attempting Tier-2: Hardware GLES2 Safe Mode (NO_ATOMIC=1, NO_HW_CURSORS=1)...");
+            if (m_wlr_allocator) {
+                wlr_allocator_destroy(m_wlr_allocator);
+                m_wlr_allocator = nullptr;
+            }
+            if (m_wlr_renderer) {
+                wlr_renderer_destroy(m_wlr_renderer);
+                m_wlr_renderer = nullptr;
+            }
+
+            ::setenv("WLR_DRM_NO_ATOMIC", "1", 1);
+            ::setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
+
+            m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
+            if (m_wlr_renderer) {
+                m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+            }
+        }
+
+        // Tier 3: Guaranteed Software Fallback (Pixman CPU Rasterizer + SHM)
+        if (!m_wlr_renderer || !m_wlr_allocator) {
+            log::warn("[Renderer] Tier-2 Hardware Safe Mode failed. Falling back to Tier-3: Guaranteed Software Mode (Pixman CPU Rasterizer)...");
+            if (m_wlr_allocator) {
+                wlr_allocator_destroy(m_wlr_allocator);
+                m_wlr_allocator = nullptr;
+            }
+            if (m_wlr_renderer) {
+                wlr_renderer_destroy(m_wlr_renderer);
+                m_wlr_renderer = nullptr;
+            }
+
+            ::setenv("WLR_RENDERER", "pixman", 1);
+            ::setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+
+            m_wlr_renderer = wlr_pixman_renderer_create();
+            if (!m_wlr_renderer) {
+                m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
+            }
+            if (m_wlr_renderer) {
+                m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+            }
+        }
+
         if (!m_wlr_renderer) {
-            log::error("[Renderer] Failed to autocreate wlroots renderer.");
+            log::error("[Renderer] CRITICAL: All 3 render tiers failed to initialize.");
+            return false;
+        }
+
+        if (!m_wlr_allocator) {
+            log::error("[Backend] CRITICAL: Failed to autocreate wlroots allocator across all 3 tiers.");
             return false;
         }
 
@@ -188,16 +244,15 @@ public:
             if (rf_legacy.is_open()) {
                 rf_legacy << active_renderer_str << "\n";
             }
+            if (active_renderer_str == "pixman") {
+                std::ofstream sf("/run/tinexus/safe_graphics_mode");
+                if (sf.is_open()) {
+                    sf << "1\n";
+                }
+            }
         } catch (...) {}
 
         wlr_renderer_init_wl_display(m_wlr_renderer, m_display);
-
-        // 3. Create allocator
-        m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
-        if (!m_wlr_allocator) {
-            log::error("[Backend] Failed to autocreate wlroots allocator.");
-            return false;
-        }
 
         // 4. Create compositor
         m_wlr_compositor = wlr_compositor_create(m_display, 6, m_wlr_renderer);
@@ -230,6 +285,7 @@ public:
         m_scene_tree_bottom     = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_normal     = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_top        = wlr_scene_tree_create(&m_scene->tree);
+        m_scene_tree_popup      = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_fullscreen = wlr_scene_tree_create(&m_scene->tree);
         m_scene_tree_overlay    = wlr_scene_tree_create(&m_scene->tree);
 
@@ -535,6 +591,14 @@ public:
             if (m_output_layout) wlr_output_layout_destroy(m_output_layout);
 
             m_outputs.clear();
+            if (m_wlr_allocator) {
+                wlr_allocator_destroy(m_wlr_allocator);
+                m_wlr_allocator = nullptr;
+            }
+            if (m_wlr_renderer) {
+                wlr_renderer_destroy(m_wlr_renderer);
+                m_wlr_renderer = nullptr;
+            }
             wlr_backend_destroy(m_wlr_backend);
             m_wlr_backend = nullptr;
         }
@@ -584,6 +648,7 @@ private:
     struct wlr_scene_tree* m_scene_tree_bottom{nullptr};
     struct wlr_scene_tree* m_scene_tree_normal{nullptr};
     struct wlr_scene_tree* m_scene_tree_top{nullptr};
+    struct wlr_scene_tree* m_scene_tree_popup{nullptr};
     struct wlr_scene_tree* m_scene_tree_fullscreen{nullptr};
     struct wlr_scene_tree* m_scene_tree_overlay{nullptr};
     struct wlr_foreign_toplevel_manager_v1* m_foreign_toplevel_mgr{nullptr};
@@ -1020,6 +1085,7 @@ private:
         wrapper->destroy.notify = [](struct wl_listener* l, void* d) {
             LayerSurfaceWrapper* w = wl_container_of(l, w, destroy);
             WlrootsBackend* b = w->backend;
+            struct wlr_output* out = (w->layer_surface) ? w->layer_surface->output : nullptr;
 
             // Defend against memory reuse bug: clear focus if this was the focused surface
             if (w->layer_surface && w->layer_surface->surface) {
@@ -1049,6 +1115,10 @@ private:
             if (w->commit.link.next)  { wl_list_remove(&w->commit.link);  w->commit.link.next  = nullptr; }
             if (w->unmap.link.next)   { wl_list_remove(&w->unmap.link);   w->unmap.link.next   = nullptr; }
             delete w;
+
+            if (b && out) {
+                b->rearrange_layers(out);
+            }
         };
         wl_signal_add(&layer_surface->events.destroy, &wrapper->destroy);
 
@@ -1062,6 +1132,9 @@ private:
                         FocusManager::instance().set_keyboard_focus(nullptr);
                     }
                 }
+                if (w->backend && w->layer_surface->output) {
+                    w->backend->rearrange_layers(w->layer_surface->output);
+                }
             }
         };
         wl_signal_add(&layer_surface->surface->events.unmap, &wrapper->unmap);
@@ -1073,13 +1146,8 @@ private:
                 if (!w->layer_surface->output) {
                     w->layer_surface->output = w->backend->resolve_output_for_layer_surface();
                 }
-                struct wlr_box full_area = {0, 0, 0, 0};
                 if (w->layer_surface->output) {
-                    wlr_output_effective_resolution(w->layer_surface->output, &full_area.width, &full_area.height);
-                }
-                struct wlr_box usable_area = full_area;
-                if (w->layer_surface->output && full_area.width > 0 && full_area.height > 0) {
-                    wlr_scene_layer_surface_v1_configure(w->scene_layer, &full_area, &usable_area);
+                    w->backend->rearrange_layers(w->layer_surface->output);
                 }
             }
 
@@ -1878,6 +1946,33 @@ private:
         if (ws_tree) {
             wlr_scene_node_reparent(&scene_tree->node, ws_tree);
         }
+    }
+
+    void rearrange_layers(struct wlr_output* out) {
+        if (!out) return;
+        struct wlr_box full_area = {0, 0, 0, 0};
+        wlr_output_effective_resolution(out, &full_area.width, &full_area.height);
+        if (full_area.width <= 0 || full_area.height <= 0) return;
+
+        struct wlr_box usable_area = full_area;
+
+        const enum zwlr_layer_shell_v1_layer order[] = {
+            ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
+            ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM,
+            ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+        };
+
+        for (auto layer : order) {
+            for (auto* item : m_layer_surfaces) {
+                if (!item || !item->layer_surface || !item->scene_layer) continue;
+                if (item->layer_surface->output == out && item->layer_surface->current.layer == layer) {
+                    wlr_scene_layer_surface_v1_configure(item->scene_layer, &full_area, &usable_area);
+                }
+            }
+        }
+
+        recalculate_output_work_area(out);
     }
 
     void recalculate_output_work_area(struct wlr_output* out) {
@@ -3351,8 +3446,8 @@ private:
         }
 
         if (!parent_tree) {
-            log::warn("[XDGShell] Could not determine popup parent scene tree; attaching to top layer");
-            parent_tree = self->m_scene_tree_top ? self->m_scene_tree_top : self->m_scene_tree_normal;
+            log::warn("[XDGShell] Could not determine popup parent scene tree; attaching to dedicated popup layer");
+            parent_tree = self->m_scene_tree_popup ? self->m_scene_tree_popup : (self->m_scene_tree_top ? self->m_scene_tree_top : self->m_scene_tree_normal);
         }
 
         struct wlr_scene_tree* scene_tree = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);

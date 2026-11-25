@@ -94,7 +94,8 @@ chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
     isc-dhcp-client procps libcap2-bin wget ca-certificates libssl-dev libwayland-dev libpixman-1-dev libfreetype-dev \
     libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev libpam0g-dev \
     systemd systemd-sysv libpam-systemd calamares calamares-settings-ubuntu-common \
-    linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin
+    linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin xdg-desktop-portal-wlr \
+    libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers libegl-mesa0 libgbm1
 
 [ -f /mnt/rootfs/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so ] || fatal "liblayer-shell.so missing after install!"
 [ -f /mnt/rootfs/sbin/dhclient ] || [ -f /mnt/rootfs/usr/sbin/dhclient ] || fatal "dhclient missing after install!"
@@ -374,10 +375,10 @@ chmod 0755 /mnt/rootfs/usr/bin/tinexus-settings
 info "Compiling tinexus-settings-ui..."
 rm -f /workspace/build/bin/tinexus-settings-ui
 BUILD_START_SETTINGS=$(date +%s)
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/qt/SettingsBridge.hpp -o /tmp/build_apps/moc_SettingsBridge.cpp
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/include/settings-ui/SettingsAdaptor.hpp -o /tmp/build_apps/moc_SettingsAdaptor.cpp
+chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/settings-ui/qt /workspace/src/settings-ui/qt/SettingsBridge.hpp -o /tmp/build_apps/moc_SettingsBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/settings-ui/include/settings-ui /workspace/src/settings-ui/include/settings-ui/SettingsAdaptor.hpp -o /tmp/build_apps/moc_SettingsAdaptor.cpp
 for ctl in DisplayController AudioController NetworkController PersonalizationController SystemController AboutController PrivacyController SearchController; do
-  chroot /mnt/rootfs "$MOC_BIN" /workspace/src/settings-ui/qt/controllers/${ctl}.hpp -o /tmp/build_apps/moc_${ctl}.cpp
+  chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/settings-ui/qt /workspace/src/settings-ui/qt/controllers/${ctl}.hpp -o /tmp/build_apps/moc_${ctl}.cpp
 done
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/guard/include -I/workspace/src/settings-ui -I/workspace/src/settings-ui/qt -I/workspace/src/settings-ui/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
@@ -440,7 +441,7 @@ info "Compiling tinexus-comp via compile_comp.sh..."
 info "Compiling tinexus-monitor..."
 rm -f /workspace/build/bin/tinexus-monitor
 BUILD_START_MON=$(date +%s)
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/monitor/MonitorBridge.hpp -o /tmp/build_apps/moc_MonitorBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/monitor /workspace/src/monitor/MonitorBridge.hpp -o /tmp/build_apps/moc_MonitorBridge.cpp
 MON_SRC="/workspace/src/monitor"
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/monitor -I/workspace/src/monitor/include \
@@ -467,12 +468,17 @@ strings /workspace/build/bin/tinexus-monitor | grep "libQt6Core" >/dev/null 2>&1
 info "Compiling tinexus-files..."
 rm -f /workspace/build/bin/tinexus-files
 BUILD_START_FILES=$(date +%s)
-chroot /mnt/rootfs "$MOC_BIN" /workspace/src/files/FilesBridge.hpp -o /tmp/build_apps/moc_FilesBridge.cpp
+chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/files /workspace/src/files/FilesBridge.hpp -o /tmp/build_apps/moc_FilesBridge.cpp
 FILES_SRC="/workspace/src/files"
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $QT6_INC $COMMON_INC -I/workspace/src/files -I/workspace/src/files/include \
   $FILES_SRC/main.cpp \
   $FILES_SRC/FilesBridge.cpp \
+  $FILES_SRC/TagManager.cpp \
+  $FILES_SRC/trash_manager.cpp \
+  $FILES_SRC/file_model.cpp \
+  $FILES_SRC/column_view_model.cpp \
+  $FILES_SRC/file_operations.cpp \
   -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network \
   -o /workspace/build/bin/tinexus-files
 [ -f /workspace/build/bin/tinexus-files ] || fatal "tinexus-files compilation FAILED!"
@@ -508,7 +514,7 @@ chroot /mnt/rootfs /usr/bin/dpkg -i --force-overwrite \
     /workspace/build/debs/tinexus-core_1.0.0_amd64.deb \
     /workspace/build/debs/tinexus-compositor_1.0.0_amd64.deb \
     /workspace/build/debs/tinexus-desktop_1.0.0_amd64.deb \
-    /workspace/build/debs/tinexus-apps_1.0.0_amd64.deb
+    /workspace/build/debs/tinexus-apps_1.0.0_amd64.deb || chroot /mnt/rootfs /usr/bin/apt-get install -y --fix-broken
 
 # Stage Calamares configuration & branding
 if [ -d "/workspace/data/calamares" ]; then

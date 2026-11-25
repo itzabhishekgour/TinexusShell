@@ -61,7 +61,7 @@ Description: Tinexus Platform Core Supervisor and IPC Broke
 EOF
 
 # Copy binaries
-for b in tinexus-serviced tinexus-ipcd tinexus-session tinexus-searchd tinexus-hardware-probe tinexus-wifi tx-appimage; do
+for b in tinexus-serviced tinexus-ipcd tinexus-session tinexus-searchd tinexus-settings tinexus-hardware-probe tinexus-wifi tx-appimage; do
     if [ -f "$BIN_DIR/$b" ]; then
         cp -L "$BIN_DIR/$b" "$CORE_DIR/usr/bin/"
         chmod 0755 "$CORE_DIR/usr/bin/$b"
@@ -208,7 +208,7 @@ Description: Tinexus Shell, Dock, Launcher, Lock, and Wallpaper Environment
 EOF
 
 # Copy binaries
-for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-wallpaper tinexus-notifications tinexus-terminal tinexus-files tinexus-settings-ui tinexus-monitor tinexus-app-installer; do
+for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-wallpaper tinexus-notifications tinexus-terminal tinexus-files tinexus-settings tinexus-settings-ui tinexus-monitor tinexus-app-installer; do
     if [ -f "$BIN_DIR/$b" ]; then
         cp -L "$BIN_DIR/$b" "$DESK_DIR/usr/bin/"
         chmod 0755 "$DESK_DIR/usr/bin/$b"
@@ -217,7 +217,6 @@ for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-wallpa
         chmod 0755 "$DESK_DIR/usr/bin/$b"
     fi
 done
-ln -sf tinexus-settings-ui "$DESK_DIR/usr/bin/tinexus-settings"
 
 # Copy QML components
 for comp in common dock shell launcher lock settings-ui; do
@@ -331,7 +330,7 @@ Description: Tinexus Core User Applications
  Terminal Emulator, and App Store.
 EOF
 
-for b in tinexus-settings tinexus-settings-ui tinexus-files tinexus-about tinexus-monitor tinexus-store tinexus-terminal; do
+for b in tinexus-settings-ui tinexus-files tinexus-about tinexus-monitor tinexus-store tinexus-terminal; do
     if [ -f "$BIN_DIR/$b" ]; then
         cp -L "$BIN_DIR/$b" "$APPS_DIR/usr/bin/"
         chmod 0755 "$APPS_DIR/usr/bin/$b"
@@ -340,7 +339,6 @@ for b in tinexus-settings tinexus-settings-ui tinexus-files tinexus-about tinexu
         chmod 0755 "$APPS_DIR/usr/bin/$b"
     fi
 done
-ln -sf tinexus-settings-ui "$APPS_DIR/usr/bin/tinexus-settings"
 
 # Copy app QML directories
 for app in settings-ui about monitor files; do

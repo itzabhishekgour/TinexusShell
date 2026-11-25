@@ -15,7 +15,18 @@ DrmBackend::DrmBackend(std::string device_path)
 bool DrmBackend::initialize() {
     if (m_device_path.empty()) {
         auto probe = tinexus::hardware::GraphicsProbe::evaluate();
-        m_device_path = probe.device.card_path.empty() ? "/dev/dri/card0" : probe.device.card_path;
+        if (!probe.device.card_path.empty() && std::filesystem::exists(probe.device.card_path)) {
+            m_device_path = probe.device.card_path;
+        } else {
+            // Dynamically scan for any existing DRM card node rather than hardcoding card0
+            for (int i = 0; i < 8; ++i) {
+                std::string candidate = "/dev/dri/card" + std::to_string(i);
+                if (std::filesystem::exists(candidate)) {
+                    m_device_path = candidate;
+                    break;
+                }
+            }
+        }
     }
 
     log::info("DrmBackend: Opening DRM/KMS device node '{}'...", m_device_path);

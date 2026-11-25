@@ -12,13 +12,13 @@ int main() {
     std::cout << "  Tinexus DRM/KMS Display Inspector\n";
     std::cout << "======================================================\n\n";
 
-    DrmBackend drm("/dev/dri/card0");
+    DrmBackend drm("");
     if (!drm.initialize()) {
-        log::error("Failed to initialize DRM backend on /dev/dri/card0");
+        log::error("Failed to initialize DRM backend on auto-detected KMS card");
         return 1;
     }
 
-    std::cout << "Card: /dev/dri/card0\n";
+    std::cout << "Card: Auto-detected primary KMS card node\n";
     std::cout << "Atomic Modesetting: " << (drm.is_atomic_supported() ? "SUPPORTED (ENABLED)" : "DISABLED") << "\n\n";
     std::cout << "Connectors:\n";
 

@@ -181,6 +181,7 @@ bool ProcessManager::start_all_services() {
         
         if (id == "comp") {
             log::info("Waiting for Wayland socket (wayland-0)...");
+            int retries = 0;
             std::string wayland_sock = common::RuntimePaths::get_user_runtime_dir() + "/wayland-0";
             while (!std::filesystem::exists(wayland_sock) && retries < 300) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));

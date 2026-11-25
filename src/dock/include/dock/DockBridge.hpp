@@ -202,6 +202,7 @@ private:
     void sendRaiseAndFocus(const QString& appId);
     void launchWithFiles(const QString& execLine, const QStringList& uris);
     void recomputeLayout();
+    void requestAnimation();
     void loadConfig();
     void saveConfig();
 

@@ -75,21 +75,33 @@ DockBridge::DockBridge(QObject* parent)
     updateTrashBadge();
 
     connect(&m_animTimer, &QTimer::timeout, this, &DockBridge::onAnimationTimer);
-    m_animTimer.start(16); // 60 FPS
+    // m_animTimer starts strictly on-demand (hover/bounce) and stops when static (0% idle CPU)
 }
 
 DockBridge::~DockBridge() = default;
+
+void DockBridge::requestAnimation() {
+    if (!m_reducedMotion && !m_animTimer.isActive()) {
+        m_animTimer.start(16);
+    }
+}
 
 void DockBridge::setReducedMotion(bool val) {
     if (m_reducedMotion != val) {
         m_reducedMotion = val;
         emit reducedMotionChanged();
         if (m_reducedMotion) {
+            if (m_animTimer.isActive()) {
+                m_animTimer.stop();
+            }
             for (auto& icon : m_icons) {
                 icon.scaleSpring.value = icon.scaleSpring.target;
+                icon.scaleSpring.velocity = 0.0;
                 icon.bounceSpring.value = icon.bounceSpring.target;
+                icon.bounceSpring.velocity = 0.0;
             }
             recomputeLayout();
+            emit layoutChanged();
             emit iconsChanged();
         }
     }
@@ -212,6 +224,8 @@ void DockBridge::handleHover(double mouseX) {
         recomputeLayout();
         emit layoutChanged();
         emit iconsChanged();
+    } else {
+        requestAnimation();
     }
 }
 
@@ -230,23 +244,34 @@ void DockBridge::resetHover() {
         recomputeLayout();
         emit layoutChanged();
         emit iconsChanged();
+    } else {
+        requestAnimation();
     }
 }
 
 void DockBridge::tickAnimations(double dt) {
-    bool animating = false;
-    for (auto& icon : m_icons) {
-        if (!m_reducedMotion) {
-            bool s = icon.scaleSpring.step(dt);
-            bool b = icon.bounceSpring.step(dt);
-            if (!s || !b) animating = true;
+    if (m_reducedMotion) {
+        if (m_animTimer.isActive()) {
+            m_animTimer.stop();
         }
+        return;
     }
 
-    if (animating || m_reducedMotion) {
+    bool animating = false;
+    for (auto& icon : m_icons) {
+        bool s = icon.scaleSpring.step(dt);
+        bool b = icon.bounceSpring.step(dt);
+        if (!s || !b) animating = true;
+    }
+
+    if (animating) {
         recomputeLayout();
         emit layoutChanged();
         emit iconsChanged();
+    } else {
+        if (m_animTimer.isActive()) {
+            m_animTimer.stop();
+        }
     }
 }
 
@@ -529,13 +554,13 @@ void DockBridge::activateApp(const QString& appId) {
         if (m_stacksPopup) {
             m_stacksPopup->togglePopup(icon.centerX, targetTopY, icon.exec, icon.label);
         }
-        if (!m_reducedMotion) icon.bounceSpring.reset(0.28, 0.0);
+        if (!m_reducedMotion) { icon.bounceSpring.reset(0.28, 0.0); requestAnimation(); }
         return;
     }
 
     if (icon.iconType == QStringLiteral("trash")) {
         spawnApp(QStringLiteral("tinexus-files trash://"));
-        if (!m_reducedMotion) icon.bounceSpring.reset(0.25, 0.0);
+        if (!m_reducedMotion) { icon.bounceSpring.reset(0.25, 0.0); requestAnimation(); }
         return;
     }
 
@@ -544,7 +569,7 @@ void DockBridge::activateApp(const QString& appId) {
         tinexus::log::info("[DockBridge] Single-instance app '{}' is already running — focusing", canonical);
         tinexus::common::SingleInstance::focus_app(canonical);
         if (m_model) m_model->activateApp(icon.appId);
-        if (!m_reducedMotion) icon.bounceSpring.reset(0.25, 0.0);
+        if (!m_reducedMotion) { icon.bounceSpring.reset(0.25, 0.0); requestAnimation(); }
         return;
     }
 
@@ -553,7 +578,7 @@ void DockBridge::activateApp(const QString& appId) {
             m_model->activateApp(icon.appId);
         }
         sendRaiseAndFocus(icon.appId);
-        if (!m_reducedMotion) icon.bounceSpring.reset(0.22, 0.0);
+        if (!m_reducedMotion) { icon.bounceSpring.reset(0.22, 0.0); requestAnimation(); }
         return;
     }
 
@@ -563,7 +588,7 @@ void DockBridge::activateApp(const QString& appId) {
     }
 
     spawnApp(icon.exec);
-    if (!m_reducedMotion) icon.bounceSpring.reset(0.40, 0.0);
+    if (!m_reducedMotion) { icon.bounceSpring.reset(0.40, 0.0); requestAnimation(); }
 }
 
 void DockBridge::requestContextMenu(int index) {
@@ -780,6 +805,7 @@ void DockBridge::requestAttention(const QString& appId) {
             icon.needsAttention = true;
             if (!m_reducedMotion) {
                 icon.bounceSpring.reset(0.50, 0.0);
+                requestAnimation();
             }
             break;
         }
