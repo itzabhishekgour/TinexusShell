@@ -7,6 +7,10 @@ import QtQuick
 Item {
     id: root
 
+    // Enable texture layer caching for hardware rasterization & smooth rendering
+    layer.enabled: true
+    layer.smooth: true
+
     // ── Semantic Material Preset Types ───────────────────────────
     property string materialType: "popover" // "popover" | "toolbar" | "sidebar" | "launcher"
 

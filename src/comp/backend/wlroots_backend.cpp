@@ -14,6 +14,7 @@ extern "C" {
 #include <wlr/util/log.h>
 #include <wlr/types/wlr_shm.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/render/egl.h>
 #include <wlr/render/gles2.h>
 #include <wlr/render/pixman.h>
 #include <wlr/render/allocator.h>
@@ -68,6 +69,7 @@ extern "C" {
 #include <unistd.h>
 #include <cstdlib>
 #include <cstdarg>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <sys/wait.h>
@@ -75,6 +77,8 @@ extern "C" {
 #include <sys/un.h>
 #include <systemd/sd-bus.h>
 #include <fcntl.h>
+#include <algorithm>
+#include <cctype>
 
 namespace tinexus::comp {
 
@@ -82,6 +86,8 @@ using tinexus::common::get_canonical_app_id;
 using tinexus::common::is_single_instance_app;
 
 namespace {
+static bool g_wlr_init_verbose = false;
+
 void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, va_list args) {
     char buf[1024];
     va_list args_copy;
@@ -106,7 +112,11 @@ void wlroots_log_callback(enum wlr_log_importance importance, const char *fmt, v
             break;
         case WLR_DEBUG:
         default:
-            tinexus::log::debug("[wlr] {}", buf);
+            if (g_wlr_init_verbose) {
+                tinexus::log::info("[wlr-init] {}", buf);
+            } else {
+                tinexus::log::debug("[wlr] {}", buf);
+            }
             break;
     }
 }
@@ -144,28 +154,54 @@ public:
             log::warn("[Backend] /sys/class/drm does not exist!");
         }
 
-        log::info("[Backend] Creating wlroots backend...");
+        log::info("[Backend] Initializing 4-tier wlroots backend + renderer pipeline (execv fallback enabled)...");
 
-        // 1. Create the wlroots backend
-        // In wlroots 0.18, the signature takes a wl_event_loop. Wait, actually wlr_backend_autocreate usually takes a wl_event_loop and a session.
-        // Let's use wl_display_get_event_loop(m_display).
-        m_wlr_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), nullptr);
-        if (!m_wlr_backend) {
-            log::error("[Backend] Failed to autocreate wlroots backend.");
-            return false;
-        }
+        const std::string user_tier_path = tinexus::common::RuntimePaths::get_runtime_dir() + "/fallback_tier";
+        const std::string sys_tier_path = "/run/tinexus/fallback_tier";
 
-        // 2. 3-TIER RENDERER & ALLOCATOR INITIALIZATION PIPELINE
-        // Tier 1: Full Hardware GLES2 / Vulkan + Atomic KMS
-        log::info("[Renderer] Attempting Tier-1: Hardware GLES2 / Vulkan + DRM Atomic KMS...");
-        m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
-        if (m_wlr_renderer) {
-            m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
-        }
+        auto clear_fallback_tier = [&]() {
+            std::error_code ec;
+            std::filesystem::remove(sys_tier_path, ec);
+            std::filesystem::remove(user_tier_path, ec);
+        };
 
-        // Tier 2: Hardware GLES2 Safe Mode (NO_ATOMIC=1, NO_HARDWARE_CURSORS=1 for VMs / quirky GPUs)
-        if (!m_wlr_renderer || !m_wlr_allocator) {
-            log::warn("[Renderer] Tier-1 Hardware acceleration failed. Attempting Tier-2: Hardware GLES2 Safe Mode (NO_ATOMIC=1, NO_HW_CURSORS=1)...");
+        auto read_fallback_tier = [&]() -> int {
+            for (const auto& path : {sys_tier_path, user_tier_path}) {
+                std::ifstream ifs(path);
+                if (ifs.is_open()) {
+                    int val = 1;
+                    if (ifs >> val && val >= 1 && val <= 4) {
+                        return val;
+                    }
+                }
+            }
+            return 1;
+        };
+
+        auto write_fallback_tier = [&](int next_tier) {
+            for (const auto& path : {sys_tier_path, user_tier_path}) {
+                try {
+                    std::filesystem::path p(path);
+                    std::filesystem::create_directories(p.parent_path());
+                    std::ofstream ofs(path, std::ios::trunc);
+                    if (ofs.is_open()) {
+                        ofs << next_tier << "\n";
+                        ofs.flush();
+                        ofs.close();
+                        int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+                        if (fd >= 0) {
+                            ::fsync(fd);
+                            ::close(fd);
+                        }
+                    }
+                } catch (...) {}
+            }
+        };
+
+        auto reexec_for_tier = [&](int next_tier) -> bool {
+            write_fallback_tier(next_tier);
+            log::warn("[Backend] Cleanly releasing session & re-execing into Tier-{}...", next_tier);
+
             if (m_wlr_allocator) {
                 wlr_allocator_destroy(m_wlr_allocator);
                 m_wlr_allocator = nullptr;
@@ -174,60 +210,303 @@ public:
                 wlr_renderer_destroy(m_wlr_renderer);
                 m_wlr_renderer = nullptr;
             }
+            if (m_wlr_backend) {
+                wlr_backend_destroy(m_wlr_backend);
+                m_wlr_backend = nullptr;
+            }
+            if (m_display) {
+                // Destroying wl_display invokes wl_event_loop destroy listeners -> wlr_session_destroy -> libseat_close_seat
+                wl_display_destroy(m_display);
+                m_display = nullptr;
+            }
 
+            std::vector<std::string> cmd_args;
+            {
+                std::ifstream cmdline("/proc/self/cmdline", std::ios::binary);
+                if (cmdline.is_open()) {
+                    std::string raw((std::istreambuf_iterator<char>(cmdline)), std::istreambuf_iterator<char>());
+                    size_t pos = 0;
+                    while (pos < raw.size()) {
+                        size_t nul = raw.find('\0', pos);
+                        if (nul == std::string::npos) nul = raw.size();
+                        if (nul > pos) {
+                            cmd_args.emplace_back(raw.substr(pos, nul - pos));
+                        }
+                        pos = nul + 1;
+                    }
+                }
+            }
+            if (cmd_args.empty()) {
+                cmd_args.emplace_back("/usr/bin/tinexus-comp");
+            }
+
+            std::vector<char*> c_argv;
+            c_argv.reserve(cmd_args.size() + 1);
+            for (auto& s : cmd_args) {
+                c_argv.push_back(s.data());
+            }
+            c_argv.push_back(nullptr);
+
+            for (int fd = 3; fd < 1024; ++fd) {
+                ::close(fd);
+            }
+
+            ::execv("/proc/self/exe", c_argv.data());
+            log::error("[Backend] CRITICAL: execv('/proc/self/exe') failed during Tier-{} fallback: {}",
+                       next_tier, std::strerror(errno));
+            clear_fallback_tier();
+            return false;
+        };
+
+        auto try_create_hw_renderer = [](struct wlr_backend* backend) -> struct wlr_renderer* {
+            if (!backend) return nullptr;
+            struct wlr_renderer* r = wlr_renderer_autocreate(backend);
+            if (r) {
+                if (!wlr_renderer_is_pixman(r)) {
+                    return r;
+                }
+                log::warn("[Renderer] wlr_renderer_autocreate() silently downgraded to Pixman — rejecting in hardware tier.");
+                wlr_renderer_destroy(r);
+                r = nullptr;
+            }
+
+            int drm_fd = wlr_backend_get_drm_fd(backend);
+            if (drm_fd >= 0) {
+                log::info("[Renderer] Attempting explicit wlr_gles2_renderer_create_with_drm_fd(fd={})...", drm_fd);
+                r = wlr_gles2_renderer_create_with_drm_fd(drm_fd);
+                if (r && wlr_renderer_is_pixman(r)) {
+                    wlr_renderer_destroy(r);
+                    r = nullptr;
+                }
+            } else {
+                log::warn("[Renderer] wlr_backend_get_drm_fd returned {} (no DRM fd available for explicit GLES2).", drm_fd);
+            }
+            return r;
+        };
+
+        auto to_lower_ascii = [](std::string s) -> std::string {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+
+        // Collect hardware Vulkan ICD JSON manifests while excluding Mesa Lavapipe (CPU Vulkan),
+        // so Tier-3 Zink never masquerades as GPU hardware acceleration over llvmpipe.
+        auto collect_hw_vulkan_icd_files = [&]() -> std::string {
+            std::string icd_list;
+            std::error_code ec;
+            for (const char* dir : {"/etc/vulkan/icd.d", "/usr/share/vulkan/icd.d"}) {
+                if (!std::filesystem::exists(dir, ec)) continue;
+                for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                    if (ec || !entry.is_regular_file(ec)) continue;
+                    const std::string fname = to_lower_ascii(entry.path().filename().string());
+                    if (entry.path().extension() != ".json") continue;
+                    if (fname.find("lvp") != std::string::npos || fname.find("lavapipe") != std::string::npos) {
+                        continue;
+                    }
+                    if (!icd_list.empty()) icd_list.push_back(':');
+                    icd_list += entry.path().string();
+                }
+            }
+            return icd_list;
+        };
+
+        // Inspect GL_RENDERER/GL_VENDOR from the active wlr_gles2_renderer EGL context
+        // to reject software rasterizers (llvmpipe / softpipe / lavapipe).
+        auto is_software_gles2_renderer = [&](struct wlr_renderer* renderer) -> bool {
+            if (!renderer || !wlr_renderer_is_gles2(renderer)) return false;
+            struct wlr_egl* egl = wlr_gles2_renderer_get_egl(renderer);
+            if (!egl) return false;
+            EGLDisplay dpy = wlr_egl_get_display(egl);
+            EGLContext ctx = wlr_egl_get_context(egl);
+            if (dpy == EGL_NO_DISPLAY || ctx == EGL_NO_CONTEXT) return false;
+
+            EGLDisplay prev_dpy = eglGetCurrentDisplay();
+            EGLContext prev_ctx = eglGetCurrentContext();
+            EGLSurface prev_draw = eglGetCurrentSurface(EGL_DRAW);
+            EGLSurface prev_read = eglGetCurrentSurface(EGL_READ);
+
+            bool is_sw = false;
+            if (eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+                const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+                const char* gl_ren = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+                std::string vendor_s = vendor ? vendor : "";
+                std::string ren_s = gl_ren ? gl_ren : "";
+                log::info("[Renderer] Active GL vendor='{}', renderer='{}'", vendor_s, ren_s);
+                std::string lower_ren = to_lower_ascii(ren_s);
+                if (lower_ren.find("llvmpipe") != std::string::npos ||
+                    lower_ren.find("softpipe") != std::string::npos ||
+                    lower_ren.find("lavapipe") != std::string::npos) {
+                    is_sw = true;
+                }
+                if (prev_dpy != EGL_NO_DISPLAY) {
+                    eglMakeCurrent(prev_dpy, prev_draw, prev_read, prev_ctx);
+                } else {
+                    eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                }
+            }
+            return is_sw;
+        };
+
+        const int active_tier = read_fallback_tier();
+        const char* env_backends = ::getenv("WLR_BACKENDS");
+        const bool is_headless_backend = (env_backends && std::strstr(env_backends, "headless") != nullptr);
+        const char* prev_egl_log = ::getenv("EGL_LOG_LEVEL");
+        const bool had_egl_log = (prev_egl_log != nullptr);
+        const std::string prev_egl_log_val = prev_egl_log ? prev_egl_log : "";
+
+        g_wlr_init_verbose = true;
+        ::setenv("EGL_LOG_LEVEL", "debug", 1);
+
+        if (active_tier == 1) {
+            // Tier 1: Full Hardware GLES2 + Atomic KMS
+            log::info("[Renderer] Tier-1: Native Hardware GLES2 + DRM Atomic KMS...");
+            if (!is_headless_backend) {
+                ::unsetenv("WLR_RENDERER");
+            }
+            ::unsetenv("MESA_LOADER_DRIVER_OVERRIDE");
+            ::unsetenv("VK_DRIVER_FILES");
+            ::unsetenv("VK_ICD_FILENAMES");
+            ::unsetenv("LIBGL_ALWAYS_SOFTWARE");
+            ::unsetenv("WLR_DRM_NO_ATOMIC");
+            ::unsetenv("WLR_NO_HARDWARE_CURSORS");
+
+            m_wlr_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), nullptr);
+            if (m_wlr_backend) {
+                m_wlr_renderer = is_headless_backend ? wlr_renderer_autocreate(m_wlr_backend)
+                                                     : try_create_hw_renderer(m_wlr_backend);
+                if (m_wlr_renderer) {
+                    m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+                }
+            }
+
+            if ((!m_wlr_backend || !m_wlr_renderer || !m_wlr_allocator) && !is_headless_backend) {
+                log::warn("[Renderer] Tier-1 Hardware acceleration failed (backend={}, renderer={}, allocator={}). Triggering clean execv to Tier-2...",
+                          static_cast<void*>(m_wlr_backend),
+                          static_cast<void*>(m_wlr_renderer),
+                          static_cast<void*>(m_wlr_allocator));
+                return reexec_for_tier(2);
+            }
+        } else if (active_tier == 2) {
+            // Tier 2: Native Hardware GLES2 Safe Mode (fresh process + WLR_DRM_NO_ATOMIC=1)
+            log::warn("[Renderer] Tier-2: Native Hardware GLES2 Safe Mode (WLR_DRM_NO_ATOMIC=1, WLR_NO_HARDWARE_CURSORS=1)...");
+            ::unsetenv("WLR_RENDERER");
+            ::unsetenv("MESA_LOADER_DRIVER_OVERRIDE");
+            ::unsetenv("VK_DRIVER_FILES");
+            ::unsetenv("VK_ICD_FILENAMES");
+            ::unsetenv("LIBGL_ALWAYS_SOFTWARE");
             ::setenv("WLR_DRM_NO_ATOMIC", "1", 1);
             ::setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
 
-            m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
-            if (m_wlr_renderer) {
-                m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+            m_wlr_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), nullptr);
+            if (m_wlr_backend) {
+                m_wlr_renderer = try_create_hw_renderer(m_wlr_backend);
+                if (m_wlr_renderer) {
+                    m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+                }
+            }
+
+            if (!m_wlr_backend || !m_wlr_renderer || !m_wlr_allocator) {
+                log::warn("[Renderer] Tier-2 Hardware Safe Mode failed (backend={}, renderer={}, allocator={}). Triggering clean execv to Tier-3 (Vulkan Zink)...",
+                          static_cast<void*>(m_wlr_backend),
+                          static_cast<void*>(m_wlr_renderer),
+                          static_cast<void*>(m_wlr_allocator));
+                return reexec_for_tier(3);
+            }
+        } else if (active_tier == 3) {
+            // Tier 3: Universal Hardware Vulkan-to-GLES2 (Zink, excluding CPU Lavapipe)
+            log::warn("[Renderer] Tier-3: Hardware Vulkan-to-GLES2 via Zink (excluding Lavapipe)...");
+            const std::string hw_icds = collect_hw_vulkan_icd_files();
+            if (hw_icds.empty()) {
+                log::warn("[Renderer] No hardware Vulkan ICD manifests found. Triggering clean execv to Tier-4 (Pixman)...");
+                return reexec_for_tier(4);
+            }
+            ::unsetenv("WLR_RENDERER");
+            ::unsetenv("LIBGL_ALWAYS_SOFTWARE");
+            ::setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
+            ::setenv("VK_DRIVER_FILES", hw_icds.c_str(), 1);
+            ::setenv("VK_ICD_FILENAMES", hw_icds.c_str(), 1);
+            ::setenv("WLR_DRM_NO_ATOMIC", "1", 1);
+            ::setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
+
+            m_wlr_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), nullptr);
+            if (m_wlr_backend) {
+                m_wlr_renderer = try_create_hw_renderer(m_wlr_backend);
+                if (m_wlr_renderer && is_software_gles2_renderer(m_wlr_renderer)) {
+                    log::warn("[Renderer] Tier-3 Zink resolved to a CPU software rasterizer; rejecting hardware claim.");
+                    wlr_renderer_destroy(m_wlr_renderer);
+                    m_wlr_renderer = nullptr;
+                }
+                if (m_wlr_renderer) {
+                    m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+                }
+            }
+
+            if (!m_wlr_backend || !m_wlr_renderer || !m_wlr_allocator) {
+                log::warn("[Renderer] Tier-3 Zink Vulkan acceleration failed (backend={}, renderer={}, allocator={}). Triggering clean execv to Tier-4 (Pixman)...",
+                          static_cast<void*>(m_wlr_backend),
+                          static_cast<void*>(m_wlr_renderer),
+                          static_cast<void*>(m_wlr_allocator));
+                return reexec_for_tier(4);
+            }
+        } else {
+            // Tier 4: Guaranteed Software Fallback (fresh process + Pixman + WLR_DRM_NO_ATOMIC=1)
+            log::warn("[Renderer] Tier-4: Guaranteed Software Mode (Pixman + WLR_DRM_NO_ATOMIC=1)...");
+            ::unsetenv("MESA_LOADER_DRIVER_OVERRIDE");
+            ::unsetenv("VK_DRIVER_FILES");
+            ::unsetenv("VK_ICD_FILENAMES");
+            ::setenv("WLR_RENDERER", "pixman", 1);
+            ::setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+            ::setenv("WLR_DRM_NO_ATOMIC", "1", 1);
+            ::setenv("WLR_NO_HARDWARE_CURSORS", "1", 1);
+
+            m_wlr_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), nullptr);
+            if (m_wlr_backend) {
+                m_wlr_renderer = wlr_pixman_renderer_create();
+                if (!m_wlr_renderer) {
+                    m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
+                }
+                if (m_wlr_renderer) {
+                    m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
+                }
             }
         }
 
-        // Tier 3: Guaranteed Software Fallback (Pixman CPU Rasterizer + SHM)
-        if (!m_wlr_renderer || !m_wlr_allocator) {
-            log::warn("[Renderer] Tier-2 Hardware Safe Mode failed. Falling back to Tier-3: Guaranteed Software Mode (Pixman CPU Rasterizer)...");
-            if (m_wlr_allocator) {
-                wlr_allocator_destroy(m_wlr_allocator);
-                m_wlr_allocator = nullptr;
-            }
-            if (m_wlr_renderer) {
-                wlr_renderer_destroy(m_wlr_renderer);
-                m_wlr_renderer = nullptr;
-            }
+        if (had_egl_log) {
+            ::setenv("EGL_LOG_LEVEL", prev_egl_log_val.c_str(), 1);
+        } else {
+            ::unsetenv("EGL_LOG_LEVEL");
+        }
+        g_wlr_init_verbose = false;
 
-            ::setenv("WLR_RENDERER", "pixman", 1);
-            ::setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+        // Clear fallback_tier once initialization finishes so future restarts probe Tier-1 cleanly
+        clear_fallback_tier();
 
-            m_wlr_renderer = wlr_pixman_renderer_create();
-            if (!m_wlr_renderer) {
-                m_wlr_renderer = wlr_renderer_autocreate(m_wlr_backend);
-            }
-            if (m_wlr_renderer) {
-                m_wlr_allocator = wlr_allocator_autocreate(m_wlr_backend, m_wlr_renderer);
-            }
+        if (!m_wlr_backend) {
+            log::error("[Backend] CRITICAL: Failed to autocreate wlroots backend across all 4 tiers.");
+            return false;
         }
 
         if (!m_wlr_renderer) {
-            log::error("[Renderer] CRITICAL: All 3 render tiers failed to initialize.");
+            log::error("[Renderer] CRITICAL: All 4 render tiers failed to initialize.");
             return false;
         }
 
         if (!m_wlr_allocator) {
-            log::error("[Backend] CRITICAL: Failed to autocreate wlroots allocator across all 3 tiers.");
+            log::error("[Backend] CRITICAL: Failed to autocreate wlroots allocator across all 4 tiers.");
             return false;
         }
 
         std::string active_renderer_str = "pixman";
-        if (wlr_renderer_is_gles2(m_wlr_renderer)) {
-            active_renderer_str = "gles2";
-            log::info("[Renderer] wlroots active renderer: OpenGL ES 2 (Hardware Accelerated)");
-        } else if (wlr_renderer_is_pixman(m_wlr_renderer)) {
+        if (wlr_renderer_is_pixman(m_wlr_renderer)) {
             active_renderer_str = "pixman";
             log::warn("[Renderer] wlroots active renderer: Pixman (Software Rasterizer) — Hardware acceleration not available or failed");
+        } else if (wlr_renderer_is_gles2(m_wlr_renderer)) {
+            active_renderer_str = "gles2";
+            log::info("[Renderer] wlroots active renderer: OpenGL ES 2 (Hardware Accelerated)");
         } else {
-            active_renderer_str = "custom";
-            log::info("[Renderer] wlroots active renderer: Custom / Autocreated");
+            active_renderer_str = "gles2";
+            log::info("[Renderer] wlroots active renderer: Hardware Autocreated (GLES2/Vulkan)");
         }
 
         // Publish live active renderer state to runtime dir and /run/tinexus/renderer so UI profilers
@@ -249,6 +528,10 @@ public:
                 if (sf.is_open()) {
                     sf << "1\n";
                 }
+            } else {
+                std::error_code ec;
+                std::filesystem::remove("/run/tinexus/safe_graphics_mode", ec);
+                std::filesystem::remove(tinexus::common::RuntimePaths::get_runtime_dir() + "/safe_graphics_mode", ec);
             }
         } catch (...) {}
 
@@ -754,6 +1037,7 @@ private:
         struct wl_listener request_move;
         struct wl_listener request_resize;
         struct wl_listener set_app_id;
+        struct wl_listener set_parent;
         WlrootsBackend* backend{nullptr};
         TinexusWindowFrame* frame{nullptr};
         uint32_t workspace_id{1};
@@ -1086,12 +1370,25 @@ private:
             LayerSurfaceWrapper* w = wl_container_of(l, w, destroy);
             WlrootsBackend* b = w->backend;
             struct wlr_output* out = (w->layer_surface) ? w->layer_surface->output : nullptr;
+            const char* destroyed_ns = (w->layer_surface && w->layer_surface->wl_namespace)
+                ? w->layer_surface->wl_namespace : "";
+            const bool is_lock_ns = (std::strcmp(destroyed_ns, "tinexus-lock") == 0 ||
+                                     std::strcmp(destroyed_ns, "lock") == 0 ||
+                                     std::strcmp(destroyed_ns, "lockscreen") == 0);
+            const bool was_lock_layer = b && (
+                is_lock_ns ||
+                (w->layer_surface && w->layer_surface->surface && w->layer_surface->surface == b->m_lock_surface) ||
+                (w->layer_surface && w->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY &&
+                 b->m_is_locked && b->m_current_lock == nullptr)
+            );
 
             // Defend against memory reuse bug: clear focus if this was the focused surface
+            bool had_kb_focus = false;
             if (w->layer_surface && w->layer_surface->surface) {
                 BlurManager::instance().unregister_surface_blur(w->layer_surface->surface);
                 if (FocusManager::instance().keyboard_focus() == w->layer_surface->surface) {
                     FocusManager::instance().set_keyboard_focus(nullptr);
+                    had_kb_focus = true;
                 }
             }
 
@@ -1115,6 +1412,21 @@ private:
             if (w->commit.link.next)  { wl_list_remove(&w->commit.link);  w->commit.link.next  = nullptr; }
             if (w->unmap.link.next)   { wl_list_remove(&w->unmap.link);   w->unmap.link.next   = nullptr; }
             delete w;
+
+            if (was_lock_layer && b && b->m_is_locked) {
+                log::info("[LayerShell] Lock screen layer destroyed — marking session UNLOCKED atomically");
+                b->m_is_locked = false;
+                b->m_lock_surface = nullptr;
+                b->set_layer_surfaces_enabled(true);
+            }
+
+            if (b && (was_lock_layer || had_kb_focus) && !b->m_is_locked) {
+                if (b->m_active_toplevel) {
+                    b->focus_toplevel(b->m_active_toplevel);
+                } else if (b->m_active_xwayland) {
+                    b->focus_xwayland(b->m_active_xwayland);
+                }
+            }
 
             if (b && out) {
                 b->rearrange_layers(out);
@@ -1430,15 +1742,28 @@ private:
     }
 
     void focus_toplevel(ToplevelWrapper* wrapper) {
+        if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->surface) {
+            if (m_active_toplevel != nullptr) {
+                if (m_active_toplevel->toplevel) {
+                    wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
+                }
+                m_active_toplevel = nullptr;
+            }
+            FocusManager::instance().set_keyboard_focus(nullptr);
+            return;
+        }
+
         if (m_is_locked && m_lock_surface != nullptr) {
             // When locked, ONLY the lock surface pointer is permitted to receive focus
-            if (wrapper != nullptr && wrapper->toplevel->base->surface != m_lock_surface) {
+            if (wrapper->toplevel->base->surface != m_lock_surface) {
                 return;
             }
         }
-        if (wrapper != nullptr && wrapper->state_machine.state() == WindowState::Minimized) {
+        if (wrapper->state_machine.state() == WindowState::Minimized) {
             wrapper->state_machine.request_restore();
-            wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+            if (wrapper->scene_tree) {
+                wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
+            }
             log::info("[Window] Restored minimized window upon focus");
             std::string app_id_str = (wrapper->toplevel && wrapper->toplevel->app_id) ? wrapper->toplevel->app_id : "";
             if (TinexusServer::instance()) TinexusServer::instance()->notify_window_restored(app_id_str);
@@ -1447,9 +1772,11 @@ private:
             if (m_active_toplevel->foreign_handle) {
                 wlr_foreign_toplevel_handle_v1_set_activated(m_active_toplevel->foreign_handle, false);
             }
-            wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
-            if (m_active_toplevel->frame && m_active_toplevel->toplevel) {
-                TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
+            if (m_active_toplevel->toplevel) {
+                wlr_xdg_toplevel_set_activated(m_active_toplevel->toplevel, false);
+                if (m_active_toplevel->frame) {
+                    TinexusDecorationManager::instance().set_toplevel_active(m_active_toplevel->toplevel, false);
+                }
             }
         }
         if (m_active_xwayland != nullptr) {
@@ -1465,27 +1792,25 @@ private:
             m_active_xwayland = nullptr;
         }
         m_active_toplevel = wrapper;
-        if (wrapper != nullptr) {
-            log::info("[Window] Focus window app_id='{}' title='{}'",
-                      wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown",
-                      wrapper->toplevel->title ? wrapper->toplevel->title : "untitled");
+        log::info("[Window] Focus window app_id='{}' title='{}'",
+                  wrapper->toplevel->app_id ? wrapper->toplevel->app_id : "unknown",
+                  wrapper->toplevel->title ? wrapper->toplevel->title : "untitled");
+        if (wrapper->scene_tree) {
             wlr_scene_node_set_enabled(&wrapper->scene_tree->node, true);
             wlr_scene_node_raise_to_top(&wrapper->scene_tree->node);
-            wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
-            if (wrapper->frame && wrapper->toplevel) {
-                TinexusDecorationManager::instance().set_toplevel_active(wrapper->toplevel, true);
-            }
-            if (wrapper->foreign_handle) {
-                wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, true);
-            }
-            FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
+        }
+        wlr_xdg_toplevel_set_activated(wrapper->toplevel, true);
+        if (wrapper->frame && wrapper->toplevel) {
+            TinexusDecorationManager::instance().set_toplevel_active(wrapper->toplevel, true);
+        }
+        if (wrapper->foreign_handle) {
+            wlr_foreign_toplevel_handle_v1_set_activated(wrapper->foreign_handle, true);
+        }
+        FocusManager::instance().set_keyboard_focus(wrapper->toplevel->base->surface);
 
-            std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
-            if (!app_id_str.empty() && TinexusServer::instance()) {
-                TinexusServer::instance()->notify_app_focus_changed(app_id_str, 1);
-            }
-        } else {
-            FocusManager::instance().set_keyboard_focus(nullptr);
+        std::string app_id_str = wrapper->toplevel->app_id ? get_canonical_app_id(wrapper->toplevel->app_id) : "";
+        if (!app_id_str.empty() && TinexusServer::instance()) {
+            TinexusServer::instance()->notify_app_focus_changed(app_id_str, 1);
         }
     }
 
@@ -3345,6 +3670,10 @@ private:
         wrapper->set_app_id.notify = handle_toplevel_set_app_id;
         wl_signal_add(&xdg_toplevel->events.set_app_id, &wrapper->set_app_id);
 
+        // set_parent fires when toplevel updates or links to parent window
+        wrapper->set_parent.notify = handle_toplevel_set_parent;
+        wl_signal_add(&xdg_toplevel->events.set_parent, &wrapper->set_parent);
+
         // destroy — clean up our wrapper
         wrapper->destroy.notify = handle_toplevel_destroy;
         wl_signal_add(&xdg_toplevel->events.destroy, &wrapper->destroy);
@@ -3427,6 +3756,16 @@ private:
     static void handle_new_xdg_popup(struct wl_listener* listener, void* data) {
         WlrootsBackend* self = wl_container_of(listener, self, m_new_xdg_popup_listener);
         auto* xdg_popup = static_cast<struct wlr_xdg_popup*>(data);
+        if (!xdg_popup || !xdg_popup->base || !xdg_popup->base->surface) {
+            log::warn("[XDGShell] Received invalid or null xdg_popup; ignoring");
+            return;
+        }
+
+        // Circular parentage / self-parenting guard
+        if (xdg_popup->parent == xdg_popup->base->surface) {
+            log::error("[XDGShell] Circular popup hierarchy detected: popup is its own parent!");
+            return;
+        }
 
         log::info("[XDGShell] New XDG popup created: popup={} parent_surface={} base_surface={}",
                   static_cast<void*>(xdg_popup),
@@ -3608,6 +3947,22 @@ private:
         }
     }
 
+    static void handle_toplevel_set_parent(struct wl_listener* listener, void* /*data*/) {
+        ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, set_parent);
+        if (!wrapper || !wrapper->toplevel) return;
+        struct wlr_xdg_toplevel* parent = wrapper->toplevel->parent;
+        // Check for self-parenting or circular ancestry
+        struct wlr_xdg_toplevel* cur = parent;
+        while (cur) {
+            if (cur == wrapper->toplevel) {
+                log::warn("[XDGShell] Circular toplevel parentage detected! Breaking cycle.");
+                wrapper->toplevel->parent = nullptr;
+                break;
+            }
+            cur = cur->parent;
+        }
+    }
+
     static void handle_toplevel_request_maximize(struct wl_listener* listener, void* /*data*/) {
         ToplevelWrapper* wrapper = wl_container_of(listener, wrapper, request_maximize);
         struct wlr_xdg_toplevel* toplevel = wrapper->toplevel;
@@ -3716,6 +4071,7 @@ private:
         if (wrapper->map.link.next != nullptr) { wl_list_remove(&wrapper->map.link); wrapper->map.link.next = nullptr; }
         if (wrapper->commit.link.next != nullptr) { wl_list_remove(&wrapper->commit.link); wrapper->commit.link.next = nullptr; }
         if (wrapper->set_app_id.link.next != nullptr) { wl_list_remove(&wrapper->set_app_id.link); wrapper->set_app_id.link.next = nullptr; }
+        if (wrapper->set_parent.link.next != nullptr) { wl_list_remove(&wrapper->set_parent.link); wrapper->set_parent.link.next = nullptr; }
         if (wrapper->destroy.link.next != nullptr) { wl_list_remove(&wrapper->destroy.link); wrapper->destroy.link.next = nullptr; }
         if (wrapper->request_maximize.link.next != nullptr) { wl_list_remove(&wrapper->request_maximize.link); wrapper->request_maximize.link.next = nullptr; }
         if (wrapper->request_fullscreen.link.next != nullptr) { wl_list_remove(&wrapper->request_fullscreen.link); wrapper->request_fullscreen.link.next = nullptr; }

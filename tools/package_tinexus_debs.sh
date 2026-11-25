@@ -175,9 +175,10 @@ if [ -f "$PROJECT_DIR/assets/portals/tinexus-portals.conf" ]; then
     chmod 0644 "$COMP_DIR/usr/share/xdg-desktop-portal/tinexus-portals.conf"
 fi
 
-cat << 'EOF' > "$COMP_DIR/etc/udev/rules.d/99-tinexus-seat.rules"
+cat << 'EOF' > "$COMP_DIR/etc/udev/rules.d/72-tinexus-seat.rules"
 SUBSYSTEM=="input", ENV{ID_INPUT}=="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
-SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="master-of-seat", TAG+="uaccess"
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", GROUP="video", MODE="0660", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="master-of-seat", TAG+="uaccess"
+SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", GROUP="render", MODE="0660", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
 EOF
 
 dpkg-deb --build "$COMP_DIR" "$OUT_DEB_DIR/tinexus-compositor_${VERSION}_amd64.deb"
@@ -219,7 +220,7 @@ for b in tinexus-shell tinexus-dock tinexus-launcher tinexus-lock tinexus-wallpa
 done
 
 # Copy QML components
-for comp in common dock shell launcher lock settings-ui; do
+for comp in common dock shell launcher lock settings-ui terminal monitor; do
     if [ -d "$PROJECT_DIR/src/$comp/qml" ]; then
         mkdir -p "$DESK_DIR/usr/share/tinexus/$comp/qml"
         cp -r "$PROJECT_DIR/src/$comp/qml/"* "$DESK_DIR/usr/share/tinexus/$comp/qml/"
@@ -230,6 +231,13 @@ for comp in common dock shell launcher lock settings-ui; do
             cp -r "$PROJECT_DIR/src/$comp/qml/"* "$DESK_DIR/usr/share/tinexus-settings/qml/"
         fi
     fi
+    # Also copy any fonts or assets folders if present in component
+    for asset_dir in fonts icons assets; do
+        if [ -d "$PROJECT_DIR/src/$comp/$asset_dir" ]; then
+            mkdir -p "$DESK_DIR/usr/share/tinexus/$comp/$asset_dir"
+            cp -r "$PROJECT_DIR/src/$comp/$asset_dir/"* "$DESK_DIR/usr/share/tinexus/$comp/$asset_dir/" 2>/dev/null || true
+        fi
+    done
 done
 
 # Stage udev rules (backlight permissions & rfkill)
@@ -341,7 +349,7 @@ for b in tinexus-settings-ui tinexus-files tinexus-about tinexus-monitor tinexus
 done
 
 # Copy app QML directories
-for app in settings-ui about monitor files; do
+for app in settings-ui about monitor files terminal; do
     if [ -d "$PROJECT_DIR/src/$app/qml" ]; then
         target_name="tinexus-$app"
         [ "$app" = "settings-ui" ] && target_name="tinexus-settings"
@@ -354,6 +362,12 @@ for app in settings-ui about monitor files; do
             cp -r "$PROJECT_DIR/src/$app/qml/"* "$APPS_DIR/usr/share/tinexus-settings-ui/qml/"
         fi
     fi
+    for asset_dir in fonts icons assets; do
+        if [ -d "$PROJECT_DIR/src/$app/$asset_dir" ]; then
+            mkdir -p "$APPS_DIR/usr/share/tinexus/$app/$asset_dir"
+            cp -r "$PROJECT_DIR/src/$app/$asset_dir/"* "$APPS_DIR/usr/share/tinexus/$app/$asset_dir/" 2>/dev/null || true
+        fi
+    done
 done
 
 # Generate .desktop application launcher entries

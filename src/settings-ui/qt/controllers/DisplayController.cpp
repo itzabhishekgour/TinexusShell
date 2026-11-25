@@ -26,10 +26,10 @@ void DisplayController::refreshHardware() {
             m_displaySubtitle = QStringLiteral("%1  •  %2").arg(m_connectorName, m_refreshRate);
         }
     } else {
-        m_resolution = QStringLiteral("1920 × 1080");
-        m_refreshRate = QStringLiteral("60 Hz");
+        m_resolution = QStringLiteral("Native Display");
+        m_refreshRate = QStringLiteral("Auto");
         m_connectorName = QStringLiteral("Primary Display");
-        m_displaySubtitle = QStringLiteral("Primary Display  •  60 Hz");
+        m_displaySubtitle = QStringLiteral("Primary Display  •  Active Mode");
     }
     m_compositorInfo = QString::fromStdString(hardware::DisplayUtils::get_compositor_version_string());
 

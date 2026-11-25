@@ -9,6 +9,10 @@
 #include <cstring>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <cerrno>
 #include <cstdio>
 #include <memory>
 #include <array>
@@ -23,18 +27,93 @@ static bool s_cached_muted = false;
 static std::string s_detected_control{};
 static std::chrono::steady_clock::time_point s_last_audio_write{};
 
-struct PipeDeleter {
-    void operator()(FILE* fp) const { if (fp) pclose(fp); }
-};
-
-std::string run_cmd_output(const std::string& cmd) {
-    std::array<char, 256> buffer;
-    std::string result;
-    std::unique_ptr<FILE, PipeDeleter> pipe(popen(cmd.c_str(), "r"));
-    if (!pipe) return "";
-    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
-        result += buffer.data();
+// Safe non-shell subprocess stdout capture with bounded timeout (no popen() / /bin/sh)
+std::string run_cmd_output(const char* bin, const std::vector<std::string>& args, int timeout_ms = 250) {
+    if (!bin || !fs::exists(bin)) return "";
+    int pipefd[2]{-1, -1};
+    if (::pipe2(pipefd, O_CLOEXEC) != 0) {
+        return "";
     }
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        return "";
+    }
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        int devnull = ::open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDIN_FILENO);
+            ::dup2(devnull, STDERR_FILENO);
+            if (devnull > 2) ::close(devnull);
+        }
+        if (pipefd[1] > 2) ::close(pipefd[1]);
+
+        std::vector<char*> c_args;
+        c_args.reserve(args.size() + 2);
+        c_args.push_back(const_cast<char*>(bin));
+        for (const auto& a : args) {
+            c_args.push_back(const_cast<char*>(a.c_str()));
+        }
+        c_args.push_back(nullptr);
+        ::execv(bin, c_args.data());
+        _exit(127);
+    }
+
+    ::close(pipefd[1]);
+    int flags = ::fcntl(pipefd[0], F_GETFL, 0);
+    if (flags >= 0) {
+        ::fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+    }
+
+    std::string result;
+    std::array<char, 256> buffer{};
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    bool eof = false;
+
+    while (!eof) {
+        auto now = std::chrono::steady_clock::now();
+        int remaining = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+        if (remaining <= 0) {
+            ::kill(pid, SIGKILL);
+            break;
+        }
+        struct pollfd pfd{};
+        pfd.fd = pipefd[0];
+        pfd.events = POLLIN;
+        int pr = ::poll(&pfd, 1, remaining);
+        if (pr > 0) {
+            while (true) {
+                ssize_t n = ::read(pipefd[0], buffer.data(), buffer.size());
+                if (n > 0) {
+                    result.append(buffer.data(), static_cast<size_t>(n));
+                } else if (n == 0) {
+                    eof = true;
+                    break;
+                } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                } else if (errno == EINTR) {
+                    continue;
+                } else {
+                    eof = true;
+                    break;
+                }
+            }
+        } else if (pr == 0) {
+            ::kill(pid, SIGKILL);
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+
+    ::close(pipefd[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     return result;
 }
 
@@ -119,7 +198,7 @@ std::string AudioUtils::detect_primary_control(const std::string& base_proc_asou
     }
 
     int card_id = detect_primary_card_id(base_proc_asound);
-    std::string scontrols = run_cmd_output("/usr/bin/amixer -c " + std::to_string(card_id) + " scontrols 2>/dev/null");
+    std::string scontrols = run_cmd_output("/usr/bin/amixer", {"-c", std::to_string(card_id), "scontrols"});
     // Priority order: Master -> Speaker -> Headphone -> PCM -> Front
     for (const char* candidate : {"'Master'", "'Speaker'", "'Headphone'", "'PCM'", "'Front'"}) {
         if (scontrols.find(candidate) != std::string::npos) {
@@ -137,7 +216,7 @@ std::string AudioUtils::detect_primary_control(const std::string& base_proc_asou
 int AudioUtils::get_volume_percent(const std::string& base_proc_asound) {
     // 1. Query PipeWire (wpctl) if active (hardware-agnostic sink status)
     if (fs::exists("/usr/bin/wpctl")) {
-        std::string wp_out = run_cmd_output("/usr/bin/wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null");
+        std::string wp_out = run_cmd_output("/usr/bin/wpctl", {"get-volume", "@DEFAULT_AUDIO_SINK@"});
         if (!wp_out.empty() && wp_out.find("Volume:") != std::string::npos) {
             std::istringstream iss(wp_out);
             std::string tag;
@@ -154,8 +233,7 @@ int AudioUtils::get_volume_percent(const std::string& base_proc_asound) {
     int card_id = detect_primary_card_id(base_proc_asound);
 
     if (fs::exists("/usr/bin/amixer")) {
-        std::string cmd = "/usr/bin/amixer -c " + std::to_string(card_id) + " sget " + ctrl + " 2>/dev/null";
-        std::string out = run_cmd_output(cmd);
+        std::string out = run_cmd_output("/usr/bin/amixer", {"-c", std::to_string(card_id), "sget", ctrl});
 
         if (!out.empty()) {
             bool found_on = false;
@@ -369,7 +447,7 @@ std::vector<std::string> AudioUtils::get_output_devices(const std::string& base_
 
     // 1. Query runtime PipeWire / PulseAudio sinks if pactl is available
     if (fs::exists("/usr/bin/pactl")) {
-        std::string out = run_cmd_output("/usr/bin/pactl list short sinks 2>/dev/null");
+        std::string out = run_cmd_output("/usr/bin/pactl", {"list", "short", "sinks"});
         if (!out.empty()) {
             std::istringstream iss(out);
             std::string line;
@@ -425,7 +503,7 @@ bool AudioUtils::set_output_device_by_index(int index) {
 
     // PipeWire / PulseAudio default sink switch
     if (fs::exists("/usr/bin/pactl")) {
-        std::string out = run_cmd_output("/usr/bin/pactl list short sinks 2>/dev/null");
+        std::string out = run_cmd_output("/usr/bin/pactl", {"list", "short", "sinks"});
         std::istringstream iss(out);
         std::string line;
         int i = 0;

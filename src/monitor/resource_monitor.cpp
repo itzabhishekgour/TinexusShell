@@ -11,7 +11,7 @@ ResourceMonitor& ResourceMonitor::instance() noexcept {
     return s_instance;
 }
 
-SystemSnapshot ResourceMonitor::collect_snapshot() {
+SystemSnapshot ResourceMonitor::collect_snapshot(bool include_processes) {
     SystemSnapshot snap;
     snap.cpu_cores = m_cpu_parser.parse_cpu_usage(snap.cpu_aggregate_usage_percent);
     snap.memory = MemoryParser::parse_memory();
@@ -19,7 +19,9 @@ SystemSnapshot ResourceMonitor::collect_snapshot() {
     snap.network = m_network_parser.parse_network();
     snap.power = PowerParser::parse_power();
     snap.gpu = GpuParser::parse_gpu();
-    snap.processes = m_process_tree.discover_processes();
+    if (include_processes) {
+        snap.processes = m_process_tree.discover_processes();
+    }
     snap.cpu_temperature_c = 42.5f;
 
     std::lock_guard<std::mutex> lock(m_mutex);

@@ -85,6 +85,61 @@ int main(int argc, char* argv[]) {
     app.setApplicationName(QStringLiteral("tinexus-launcher"));
     app.setDesktopFileName(QStringLiteral("tinexus-launcher"));
 
+    bool isDaemon = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--daemon" || std::string_view(argv[i]) == "--preheat") {
+            isDaemon = true;
+            break;
+        }
+    }
+
+    QQuickWindow* window = nullptr;
+    bool pendingToggle = false;
+
+    // Bind single-instance control socket immediately after acquiring flock so early Ctrl+K
+    // triggers during QML/desktop startup are queued cleanly instead of silently dropped.
+    QLocalServer server;
+    QLocalServer::removeServer(socketName);
+    if (server.listen(socketName)) {
+        std::string full_path = server.fullServerName().toStdString();
+        ::chmod(full_path.c_str(), 0666);
+        if (full_path != "/tmp/tinexus-launcher-single") {
+            ::unlink("/tmp/tinexus-launcher-single");
+            if (::symlink(full_path.c_str(), "/tmp/tinexus-launcher-single") != 0) {
+                tinexus::log::warn("[Launcher] Failed to create /tmp/tinexus-launcher-single symlink: {}", std::strerror(errno));
+            }
+        }
+        tinexus::log::info("[Launcher] Listening early on socket '{}' (mode 0666)", full_path);
+
+        QObject::connect(&server, &QLocalServer::newConnection, [&server, &window, &pendingToggle]() {
+            while (auto* client = server.nextPendingConnection()) {
+                auto processMessage = [client, &window, &pendingToggle]() {
+                    QByteArray data = client->readAll();
+                    if (data.contains("toggle")) {
+                        if (!window) {
+                            pendingToggle = !pendingToggle;
+                            tinexus::log::info("[Launcher] Queued early toggle while QML initializes (pending={})", pendingToggle);
+                        } else if (window->isVisible()) {
+                            window->hide();
+                        } else {
+                            window->show();
+                            window->raise();
+                            window->requestActivate();
+                        }
+                    }
+                    client->disconnectFromServer();
+                };
+
+                if (client->bytesAvailable() > 0 || client->state() == QLocalSocket::UnconnectedState) {
+                    processMessage();
+                } else {
+                    QObject::connect(client, &QLocalSocket::readyRead, processMessage);
+                    QObject::connect(client, &QLocalSocket::disconnected, processMessage);
+                }
+            }
+        });
+    }
+
     tinexus::launcher::LauncherBridge bridge;
 
     QQmlApplicationEngine engine;
@@ -117,7 +172,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
     if (!window) {
         return 1;
     }
@@ -141,54 +196,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     // Note: window hide is gracefully performed by QML dismissTimer at the end of the spring animation.
-
-    QLocalServer server;
-    QLocalServer::removeServer(socketName);
-    if (server.listen(socketName)) {
-        std::string full_path = server.fullServerName().toStdString();
-        ::chmod(full_path.c_str(), 0666);
-        if (full_path != "/tmp/tinexus-launcher-single") {
-            ::unlink("/tmp/tinexus-launcher-single");
-            ::symlink(full_path.c_str(), "/tmp/tinexus-launcher-single");
-        }
-        tinexus::log::info("[Launcher] Listening on socket '{}' (mode 0666)", full_path);
-
-        QObject::connect(&server, &QLocalServer::newConnection, [&server, window]() {
-            while (auto* client = server.nextPendingConnection()) {
-                auto processMessage = [client, window]() {
-                    QByteArray data = client->readAll();
-                    if (data.contains("toggle")) {
-                        if (window) {
-                            if (window->isVisible()) {
-                                window->hide();
-                            } else {
-                                window->show();
-                                window->raise();
-                                window->requestActivate();
-                            }
-                        }
-                    }
-                    client->disconnectFromServer();
-                };
-
-                if (client->bytesAvailable() > 0 || client->state() == QLocalSocket::UnconnectedState) {
-                    processMessage();
-                } else {
-                    QObject::connect(client, &QLocalSocket::readyRead, processMessage);
-                    QObject::connect(client, &QLocalSocket::disconnected, processMessage);
-                }
-            }
-        });
-    }
-
-    bool isDaemon = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--daemon" || std::string_view(argv[i]) == "--preheat") {
-            isDaemon = true;
-            break;
-        }
-    }
-    if (!isDaemon) {
+    if (!isDaemon || pendingToggle) {
         window->show();
         window->raise();
         window->requestActivate();

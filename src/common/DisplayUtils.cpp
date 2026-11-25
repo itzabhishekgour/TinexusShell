@@ -61,11 +61,38 @@ std::string resolve_active_renderer() {
 
     return "Pixman";
 }
+
+std::string resolve_active_gpu_name() {
+    std::error_code ec;
+    std::string dyn_gpu = tinexus::common::RuntimePaths::get_runtime_dir() + "/gpu";
+    std::string path_to_check;
+    if (fs::exists(dyn_gpu, ec)) {
+        path_to_check = dyn_gpu;
+    } else if (fs::exists("/run/tinexus/gpu", ec)) {
+        path_to_check = "/run/tinexus/gpu";
+    }
+
+    if (!path_to_check.empty()) {
+        std::ifstream f(path_to_check);
+        std::string line;
+        if (std::getline(f, line) && !line.empty()) {
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ')) {
+                line.pop_back();
+            }
+            if (!line.empty()) return line;
+        }
+    }
+    return "Hardware GPU";
+}
 } // namespace
 
 std::string DisplayUtils::get_renderer_backend_string() {
     std::string renderer = resolve_active_renderer();
-    return renderer + " Direct Scanout (wlroots " + std::string(TINEXUS_WLROOTS_VERSION) + ")";
+    if (renderer == "Pixman") {
+        return "Pixman Software Rasterizer (wlroots " + std::string(TINEXUS_WLROOTS_VERSION) + ")";
+    }
+    std::string gpu = resolve_active_gpu_name();
+    return gpu + " • " + renderer + " Direct Scanout (wlroots " + std::string(TINEXUS_WLROOTS_VERSION) + ")";
 }
 
 std::string DisplayUtils::get_compositor_version_string() {

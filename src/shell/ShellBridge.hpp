@@ -10,6 +10,8 @@
 #include <QtCore/QVariantMap>
 #include <QtCore/QTimer>
 #include <QtCore/QDateTime>
+#include <atomic>
+#include <memory>
 
 namespace tinexus::shell {
 
@@ -201,6 +203,10 @@ private:
     QVariantList m_notifications;
     QVariantList m_applicationsList;
     QTimer       m_clockTimer;
+    QTimer       m_batteryTimer;
+    QTimer       m_audioTimer;
+    std::shared_ptr<std::atomic<bool>> m_audioPolling{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<bool>> m_appsScanning{std::make_shared<std::atomic<bool>>(false)};
 };
 
 } // namespace tinexus::shell

@@ -26,24 +26,6 @@ struct ComponentState {
 
 static std::unordered_map<pid_t, ComponentState> g_managed_components;
 
-static bool is_live_boot() {
-    if (const char* env = std::getenv("TINEXUS_LIVE"); env && std::string_view(env) == "1") {
-        return true;
-    }
-    if (fs::exists("/proc/cmdline")) {
-        std::ifstream ifs("/proc/cmdline");
-        std::string cmdline;
-        if (std::getline(ifs, cmdline)) {
-            if (cmdline.find("boot=live") != std::string::npos ||
-                cmdline.find("rd.live.image") != std::string::npos ||
-                cmdline.find("tinexus.live") != std::string::npos) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 static pid_t launch_component(const std::string& name) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -62,6 +44,21 @@ static pid_t launch_component(const std::string& name) {
         setenv("QT_PLUGIN_PATH", "/usr/lib/x86_64-linux-gnu/qt6/plugins", 0);
         setenv("QML_IMPORT_PATH", "/usr/lib/x86_64-linux-gnu/qt6/qml:/usr/share/tinexus", 0);
         setenv("QML2_IMPORT_PATH", "/usr/lib/x86_64-linux-gnu/qt6/qml:/usr/share/tinexus", 0);
+
+        // Hardware GPU acceleration configuration based on active compositor renderer
+        std::string rend_path = "/run/tinexus/renderer";
+        std::string active_renderer;
+        if (fs::exists(rend_path)) {
+            std::ifstream rf(rend_path);
+            rf >> active_renderer;
+        }
+        if (active_renderer == "pixman") {
+            setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+            setenv("QSG_RHI_BACKEND", "software", 1);
+        } else {
+            unsetenv("LIBGL_ALWAYS_SOFTWARE");
+            setenv("QSG_RHI_BACKEND", "opengl", 1);
+        }
 
         std::vector<std::string> search_paths = {
             "/usr/bin/tinexus-" + name,
@@ -130,6 +127,25 @@ static bool wait_for_socket_ready(const fs::path& socket_path, int timeout_ms = 
     }
 }
 
+static bool wait_for_display_ready(const fs::path& runtime_dir, int timeout_ms = 5000) {
+    auto start = std::chrono::steady_clock::now();
+    const fs::path sys_display = "/run/tinexus/display";
+    const fs::path user_display = runtime_dir / "tinexus" / "display";
+    while (true) {
+        std::error_code ec;
+        if ((fs::exists(sys_display, ec) && fs::file_size(sys_display, ec) > 0) ||
+            (fs::exists(user_display, ec) && fs::file_size(user_display, ec) > 0)) {
+            return true;
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;
     log::set_component_name("session");
@@ -154,6 +170,13 @@ int main(int argc, char* argv[]) {
         log::info("[Session] Wayland display socket '{}' is ready!", socket_path.string());
     } else {
         log::error("[Session] Timeout waiting for Wayland socket '{}'!", socket_path.string());
+    }
+
+    // 1b. Wait for TinexusOutput mode/renderer initialization before mapping fullscreen lock overlay
+    if (wait_for_display_ready(runtime_dir, 5000)) {
+        log::info("[Session] Compositor output mode is ready (/run/tinexus/display).");
+    } else {
+        log::warn("[Session] Timeout waiting for /run/tinexus/display; proceeding with session startup.");
     }
 
     // 2. Launch background infrastructure daemons
@@ -229,7 +252,10 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 3. Present lock screen on startup (with 3-attempt exponential backoff retry loop)
+    // 3. Pre-warm hidden launcher daemon so Ctrl+K is ready immediately upon unlock
+    launch_component("launcher");
+
+    // 4. Present lock screen on startup
     log::info("[Session] Presenting tinexus-lock...");
     pid_t lock_pid = launch_component("lock");
 
@@ -239,56 +265,55 @@ int main(int argc, char* argv[]) {
     int backoff_ms = 500;
 
     while (lock_retries < kMaxLockRetries) {
-            int status = 0;
-            pid_t p = waitpid(lock_pid, &status, 0);
-            if (p == lock_pid) {
-                if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-                    log::info("[Session] Component 'lock' exited cleanly (session unlocked). Not restarting.");
-                    g_managed_components.erase(lock_pid);
-                    break;
-                } else {
-                    lock_retries++;
-                    g_managed_components.erase(lock_pid);
-
-                    if (WIFSIGNALED(status)) {
-                        log::warn("[Session] Component 'lock' killed by signal {} (attempt {}/{})",
-                                  WTERMSIG(status), lock_retries, kMaxLockRetries);
-                    } else {
-                        log::warn("[Session] Component 'lock' exited abnormally with code {} (attempt {}/{})",
-                                  WEXITSTATUS(status), lock_retries, kMaxLockRetries);
-                    }
-
-                    if (lock_retries >= kMaxLockRetries) {
-                        log::error("[Session] CRITICAL: tinexus-lock failed {} consecutive times. "
-                                   "Bypassing lock screen to prevent session lockout. Falling back to unlocked desktop.",
-                                   lock_retries);
-                        try {
-                            fs::create_directories(runtime_dir / "tinexus");
-                            std::ofstream warn_file(runtime_dir / "tinexus" / "lock_failure.warning");
-                            warn_file << "Lock screen failed to start after 3 attempts. Session started unlocked.\n";
-                        } catch (...) {}
-                        break;
-                    }
-
-                    log::info("[Session] Waiting {} ms before respawning lock (attempt {}/{})...",
-                              backoff_ms, lock_retries + 1, kMaxLockRetries);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
-                    backoff_ms *= 2;
-                    lock_pid = launch_component("lock");
-                }
-            } else if (p == -1 && errno == ECHILD) {
-                log::warn("[Session] Lock process already reaped or missing.");
+        int status = 0;
+        pid_t p = waitpid(lock_pid, &status, 0);
+        if (p == lock_pid) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                log::info("[Session] Component 'lock' exited cleanly (session unlocked). Not restarting.");
+                g_managed_components.erase(lock_pid);
                 break;
-            }
-        }
+            } else {
+                lock_retries++;
+                g_managed_components.erase(lock_pid);
 
-    // 4. Spawn desktop UI components without delay
+                if (WIFSIGNALED(status)) {
+                    log::warn("[Session] Component 'lock' killed by signal {} (attempt {}/{})",
+                              WTERMSIG(status), lock_retries, kMaxLockRetries);
+                } else {
+                    log::warn("[Session] Component 'lock' exited abnormally with code {} (attempt {}/{})",
+                              WEXITSTATUS(status), lock_retries, kMaxLockRetries);
+                }
+
+                if (lock_retries >= kMaxLockRetries) {
+                    log::error("[Session] CRITICAL: tinexus-lock failed {} consecutive times. "
+                               "Bypassing lock screen to prevent session lockout. Falling back to unlocked desktop.",
+                               lock_retries);
+                    try {
+                        fs::create_directories(runtime_dir / "tinexus");
+                        std::ofstream warn_file(runtime_dir / "tinexus" / "lock_failure.warning");
+                        warn_file << "Lock screen failed to start after 3 attempts. Session started unlocked.\n";
+                    } catch (...) {}
+                    break;
+                }
+
+                log::info("[Session] Waiting {} ms before respawning lock (attempt {}/{})...",
+                          backoff_ms, lock_retries + 1, kMaxLockRetries);
+                std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+                backoff_ms *= 2;
+                lock_pid = launch_component("lock");
+            }
+        } else if (p == -1 && errno == ECHILD) {
+            log::warn("[Session] Lock process already reaped or missing.");
+            break;
+        }
+    }
+
+    // 5. Spawn desktop UI components without delay (top bar shell prioritized right after wallpaper)
     log::info("[Session] Spawning desktop components...");
     launch_component("wallpaper");
-    launch_component("dock");
     launch_component("shell");
+    launch_component("dock");
     launch_component("notifications");
-    launch_component("launcher");
 
     log::info("[Session] All desktop shell components launched.");
 

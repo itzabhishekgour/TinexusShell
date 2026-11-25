@@ -95,7 +95,8 @@ chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
     libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev libpam0g-dev \
     systemd systemd-sysv libpam-systemd calamares calamares-settings-ubuntu-common \
     linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin xdg-desktop-portal-wlr \
-    libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers libegl-mesa0 libgbm1
+    libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers libegl-mesa0 libgbm1 zstd initramfs-tools \
+    fonts-inter fonts-jetbrains-mono fonts-dejavu-core libqt6opengl6 qml6-module-qtquick-effects
 
 [ -f /mnt/rootfs/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so ] || fatal "liblayer-shell.so missing after install!"
 [ -f /mnt/rootfs/sbin/dhclient ] || [ -f /mnt/rootfs/usr/sbin/dhclient ] || fatal "dhclient missing after install!"
@@ -570,8 +571,15 @@ EOF_TTYS0
     cp -rf /workspace/src/settings-ui/qml/* /mnt/rootfs/usr/share/tinexus/settings-ui/qml/ 2>/dev/null || true
     mkdir -p /mnt/rootfs/usr/share/tinexus/common/qml
     cp -rf /workspace/src/common/qml/* /mnt/rootfs/usr/share/tinexus/common/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus/terminal/qml /mnt/rootfs/usr/share/tinexus-terminal/qml
+    cp -rf /workspace/src/terminal/qml/* /mnt/rootfs/usr/share/tinexus/terminal/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/terminal/qml/* /mnt/rootfs/usr/share/tinexus-terminal/qml/ 2>/dev/null || true
+    mkdir -p /mnt/rootfs/usr/share/tinexus/monitor/qml /mnt/rootfs/usr/share/tinexus-monitor/qml
+    cp -rf /workspace/src/monitor/qml/* /mnt/rootfs/usr/share/tinexus/monitor/qml/ 2>/dev/null || true
+    cp -rf /workspace/src/monitor/qml/* /mnt/rootfs/usr/share/tinexus-monitor/qml/ 2>/dev/null || true
 
     mkdir -p /mnt/rootfs/etc/udev/rules.d /mnt/rootfs/etc/polkit-1/rules.d
+    rm -f /mnt/rootfs/etc/udev/rules.d/99-tinexus-seat.rules
     if [ -d "/workspace/data/udev" ]; then
         cp -rf /workspace/data/udev/*.rules /mnt/rootfs/etc/udev/rules.d/ 2>/dev/null || true
         chmod 0644 /mnt/rootfs/etc/udev/rules.d/*.rules 2>/dev/null || true
@@ -762,6 +770,27 @@ if [ "$missing_files" -gt 0 ]; then
 fi
 success "Automated rootfs assertion PASSED: 100% of files across all .deb packages are confirmed present in rootfs."
 
+# ── 12b. Refresh Installed Initramfs, Verify GPU Firmware & Build Live Initramfs ──
+info "Verifying full GPU firmware preservation in /mnt/rootfs/lib/firmware..."
+for fw_req in i915 amdgpu nvidia radeon xe; do
+    if [ ! -d "/mnt/rootfs/lib/firmware/$fw_req" ]; then
+        fatal "CRITICAL: /mnt/rootfs/lib/firmware/$fw_req is missing! Universal GPU support broken."
+    fi
+done
+ls -lh /mnt/rootfs/lib/firmware/i915/adlp_guc_70.bin* /mnt/rootfs/lib/firmware/i915/adlp_dmc.bin*
+
+info "Regenerating chroot initrd (/boot/initrd.img-*) with linux-firmware before squashfs..."
+chroot /mnt/rootfs /usr/sbin/update-initramfs -u -k all || warn "update-initramfs reported non-fatal warning"
+
+info "Rebuilding live ISO initramfs (/boot/initramfs.img) with full GPU firmware while rootfs is mounted..."
+bash /workspace/tools/rebuild_initramfs.sh
+NEW_INITRAMFS="/workspace/build/kernel/initramfs.img"
+[ -f "$NEW_INITRAMFS" ] || fatal "Updated initramfs not found at $NEW_INITRAMFS"
+info "Verifying GPU firmware inside $NEW_INITRAMFS via lsinitramfs..."
+chroot /mnt/rootfs lsinitramfs /workspace/build/kernel/initramfs.img | grep -E "lib/firmware/i915/adlp_(guc_70|dmc)\.bin" || fatal "adlp firmware missing from rebuilt initramfs.img!"
+chroot /mnt/rootfs lsinitramfs /workspace/build/kernel/initramfs.img | grep -q "lib/firmware/amdgpu/" || fatal "amdgpu firmware missing from rebuilt initramfs.img!"
+success "Verified i915/adlp_guc_70.bin, i915/adlp_dmc.bin, and amdgpu/ firmware inside initramfs.img."
+
 # ── 13. Clean Up Rootfs Temporary Files ───────────────────────────────────────
 info "Cleaning apt caches in rootfs..."
 chroot /mnt/rootfs /usr/bin/apt-get clean
@@ -834,9 +863,7 @@ if [ -n "$leaked_files" ]; then
 fi
 success "SquashFS content verification PASSED: Zero leaked runtime files detected."
 
-# ── 16. Rebuild Initramfs & Replay ISO Boot Configuration ───────────────────
-info "Rebuilding initramfs with /sbin/init systemd target..."
-bash /workspace/tools/rebuild_initramfs.sh
+# ── 16. Verify Rebuilt Initramfs & Replay ISO Boot Configuration ───────────────
 NEW_INITRAMFS="/workspace/build/kernel/initramfs.img"
 [ -f "$NEW_INITRAMFS" ] || fatal "Updated initramfs not found at $NEW_INITRAMFS"
 info "Verified updated initramfs: $(ls -lh "$NEW_INITRAMFS" | awk '{print $5}')"

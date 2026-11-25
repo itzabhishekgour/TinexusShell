@@ -106,7 +106,7 @@ void AboutController::refreshSystemInfo() {
     } else if (!disp.resolution.empty() && disp.resolution != "unknown") {
         m_displayInfo = QStringLiteral("%1 @ %2Hz").arg(QString::fromStdString(disp.resolution), QString::fromStdString(disp.refresh_rate));
     } else {
-        m_displayInfo = QStringLiteral("Primary Display (1920x1080 @ 60Hz)");
+        m_displayInfo = QStringLiteral("Primary Display (Native Output)");
     }
 
     m_graphicsEngine = QString::fromStdString(hardware::DisplayUtils::get_renderer_backend_string());

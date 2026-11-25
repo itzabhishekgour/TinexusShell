@@ -29,6 +29,7 @@ struct GraphicsProbeResult {
     std::string selected_card_node; // Set ONLY if Intel is verified with connected display; otherwise empty
     std::string reason;
     std::string egl_version;
+    std::string gpu_name{"Software Rasterizer"};
     GpuDeviceInfo device;
     bool hardware_available{false};
 };
@@ -51,6 +52,7 @@ public:
      * @return True if hardware acceleration is verified functional, false otherwise.
      */
     static bool probe_egl_gbm(const std::string& node_path, std::string& out_egl_version, std::string& out_error);
+    static bool probe_egl_gbm(const std::string& node_path, std::string& out_egl_version, std::string& out_gpu_name, std::string& out_error);
 
     /**
      * @brief Executes the full conservative graphics capability decision pipeline.

@@ -32,6 +32,9 @@ Window {
     readonly property int colSpacing: 8
 
     onActiveTabChanged: {
+        if (typeof monitorBridge !== "undefined") {
+            monitorBridge.activeTab = activeTab
+        }
         if (activeTab === 1) {
             Qt.callLater(function() {
                 if (typeof cpuCanvas !== "undefined") cpuCanvas.requestPaint();
@@ -42,10 +45,19 @@ Window {
         }
     }
 
-    // Live auto-refresh timer (1.5s interval)
+    onVisibleChanged: {
+        if (typeof monitorBridge !== "undefined") {
+            monitorBridge.isVisible = visible
+            if (visible) {
+                monitorBridge.refresh()
+            }
+        }
+    }
+
+    // Live auto-refresh timer (3.0s interval, paused when minimized/hidden)
     Timer {
-        interval: 1500
-        running: true
+        interval: 3000
+        running: rootWindow.visible
         repeat: true
         onTriggered: monitorBridge.refresh()
     }

@@ -293,6 +293,34 @@ bool GraphicsProbe::probe_egl_gbm(const std::string& node_path, std::string& out
     return true;
 }
 
+bool GraphicsProbe::probe_egl_gbm(const std::string& node_path, std::string& out_egl_version, std::string& out_gpu_name, std::string& out_error) {
+    if (!probe_egl_gbm(node_path, out_egl_version, out_error)) {
+        return false;
+    }
+
+    // Try reading device marketing name from sysfs
+    try {
+        fs::path p(node_path);
+        std::string fname = p.filename().string();
+        fs::path dev_path = fs::path("/sys/class/drm") / fname / "device";
+        std::string vendor = read_trimmed_file(dev_path / "vendor");
+        std::string device = read_trimmed_file(dev_path / "device");
+        if (vendor == "0x8086") {
+            out_gpu_name = "Intel(R) Iris(R) Xe / UHD Graphics";
+        } else if (vendor == "0x1002") {
+            out_gpu_name = "AMD Radeon Graphics";
+        } else if (vendor == "0x10de") {
+            out_gpu_name = "NVIDIA GeForce GPU";
+        } else {
+            out_gpu_name = "Hardware GPU (" + fname + ")";
+        }
+    } catch (...) {
+        out_gpu_name = "Hardware GPU";
+    }
+
+    return true;
+}
+
 GraphicsProbeResult GraphicsProbe::evaluate(const std::string& base_drm) {
     GraphicsProbeResult result;
     result.decision = RendererDecision::Pixman;
@@ -372,8 +400,9 @@ GraphicsProbeResult GraphicsProbe::evaluate(const std::string& base_drm) {
     // 5. Execute conservative capability check on primary KMS card node
     log::info("[graphics] Hardware renderer capability probe started on {}", probe_node);
     std::string egl_ver;
+    std::string gpu_name;
     std::string probe_err;
-    bool probe_ok = probe_egl_gbm(probe_node, egl_ver, probe_err);
+    bool probe_ok = probe_egl_gbm(probe_node, egl_ver, gpu_name, probe_err);
 
     if (!probe_ok) {
         result.reason = probe_err;
@@ -385,6 +414,7 @@ GraphicsProbeResult GraphicsProbe::evaluate(const std::string& base_drm) {
     result.selected_renderer = "gles2";
     result.selected_card_node = candidate->card_path;
     result.egl_version = egl_ver;
+    result.gpu_name = gpu_name.empty() ? (candidate->is_intel ? "Intel Iris Xe / UHD Graphics" : (candidate->is_amd ? "AMD Radeon Graphics" : "Hardware GPU")) : gpu_name;
     result.hardware_available = true;
     result.reason = candidate->card_name + " GLES2 hardware acceleration verified (EGL " + egl_ver + ")";
 

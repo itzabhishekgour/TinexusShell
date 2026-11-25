@@ -40,10 +40,20 @@ MonitorBridge::MonitorBridge(QObject* parent)
 }
 
 void MonitorBridge::refresh() {
-    SystemSnapshot snap = ResourceMonitor::instance().collect_snapshot();
+    if (!m_isVisible) {
+        return; // Zero CPU polling while window is hidden or minimized
+    }
+
+    bool need_procs = (m_activeTab == 0);
+    SystemSnapshot snap = ResourceMonitor::instance().collect_snapshot(need_procs);
     updateTelemetry(snap);
-    updateProcessesList();
-    updateServicesList();
+
+    // Strictly tab-aware execution to eliminate background polling churn
+    if (m_activeTab == 0) {
+        updateProcessesList();
+    } else if (m_activeTab == 2) {
+        updateServicesList();
+    }
 }
 
 void MonitorBridge::updateTelemetry(const SystemSnapshot& snap) {
@@ -155,22 +165,54 @@ void MonitorBridge::updateProcessesList() {
         }
     });
 
-    m_displayProcesses.clear();
-    for (const auto& proc : filtered) {
-        QVariantMap map;
-        map[QStringLiteral("pid")] = proc.pid;
-        map[QStringLiteral("ppid")] = proc.ppid;
-        map[QStringLiteral("name")] = QString::fromStdString(proc.name);
-        map[QStringLiteral("user")] = QString::fromStdString(proc.user);
-        map[QStringLiteral("cpu")] = proc.cpu_percent;
-        map[QStringLiteral("cpuStr")] = QString::asprintf("%.1f%%", static_cast<double>(proc.cpu_percent));
-        map[QStringLiteral("rss")] = static_cast<qulonglong>(proc.rss_bytes);
-        map[QStringLiteral("rssStr")] = formatBytes(proc.rss_bytes);
-        map[QStringLiteral("diskStr")] = formatRate(proc.read_bytes_sec + proc.write_bytes_sec);
-        map[QStringLiteral("state")] = QString::fromStdString(proc.state_str);
-        map[QStringLiteral("isSystem")] = proc.is_system_daemon;
-        map[QStringLiteral("isProtected")] = (proc.pid == 1) || tinexus::platform::PlatformServices::is_protected_pid(proc.pid);
-        m_displayProcesses.append(map);
+    // In-place incremental update (preserves scroll and selection)
+    const int newCount = static_cast<int>(filtered.size());
+    const int oldCount = m_displayProcesses.size();
+    bool pids_match = (newCount == oldCount);
+
+    if (pids_match) {
+        for (int i = 0; i < newCount; ++i) {
+            QVariantMap existingMap = m_displayProcesses.at(i).toMap();
+            if (existingMap.value(QStringLiteral("pid")).toInt() != filtered[i].pid) {
+                pids_match = false;
+                break;
+            }
+        }
+    }
+
+    if (pids_match) {
+        // Fast path: In-place update of dynamic metrics without destroying map identity
+        for (int i = 0; i < newCount; ++i) {
+            const auto& proc = filtered[i];
+            QVariantMap map = m_displayProcesses.at(i).toMap();
+            map[QStringLiteral("cpu")] = proc.cpu_percent;
+            map[QStringLiteral("cpuStr")] = QString::asprintf("%.1f%%", static_cast<double>(proc.cpu_percent));
+            map[QStringLiteral("rss")] = static_cast<qulonglong>(proc.rss_bytes);
+            map[QStringLiteral("rssStr")] = formatBytes(proc.rss_bytes);
+            map[QStringLiteral("diskStr")] = formatRate(proc.read_bytes_sec + proc.write_bytes_sec);
+            map[QStringLiteral("state")] = QString::fromStdString(proc.state_str);
+            m_displayProcesses[i] = map;
+        }
+    } else {
+        // Rebuild path when process count or PIDs change
+        m_displayProcesses.clear();
+        m_displayProcesses.reserve(newCount);
+        for (const auto& proc : filtered) {
+            QVariantMap map;
+            map[QStringLiteral("pid")] = proc.pid;
+            map[QStringLiteral("ppid")] = proc.ppid;
+            map[QStringLiteral("name")] = QString::fromStdString(proc.name);
+            map[QStringLiteral("user")] = QString::fromStdString(proc.user);
+            map[QStringLiteral("cpu")] = proc.cpu_percent;
+            map[QStringLiteral("cpuStr")] = QString::asprintf("%.1f%%", static_cast<double>(proc.cpu_percent));
+            map[QStringLiteral("rss")] = static_cast<qulonglong>(proc.rss_bytes);
+            map[QStringLiteral("rssStr")] = formatBytes(proc.rss_bytes);
+            map[QStringLiteral("diskStr")] = formatRate(proc.read_bytes_sec + proc.write_bytes_sec);
+            map[QStringLiteral("state")] = QString::fromStdString(proc.state_str);
+            map[QStringLiteral("isSystem")] = proc.is_system_daemon;
+            map[QStringLiteral("isProtected")] = (proc.pid == 1) || tinexus::platform::PlatformServices::is_protected_pid(proc.pid);
+            m_displayProcesses.append(map);
+        }
     }
 
     emit processesChanged();

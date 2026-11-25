@@ -57,9 +57,18 @@ class MonitorBridge : public QObject {
 
     Q_PROPERTY(QVariantList services READ services NOTIFY servicesChanged)
 
+    Q_PROPERTY(int activeTab READ activeTab WRITE setActiveTab NOTIFY activeTabChanged)
+    Q_PROPERTY(bool isVisible READ isVisible WRITE setIsVisible NOTIFY isVisibleChanged)
+
 public:
     explicit MonitorBridge(QObject* parent = nullptr);
     ~MonitorBridge() override = default;
+
+    int activeTab() const { return m_activeTab; }
+    void setActiveTab(int tab) { if (m_activeTab != tab) { m_activeTab = tab; emit activeTabChanged(); } }
+
+    bool isVisible() const { return m_isVisible; }
+    void setIsVisible(bool v) { if (m_isVisible != v) { m_isVisible = v; emit isVisibleChanged(); } }
 
     qreal cpuUsage() const { return m_cpuUsage; }
     qreal cpuTemperature() const { return m_cpuTemperature; }
@@ -126,6 +135,8 @@ signals:
     void selectionChanged();
     void killModalChanged();
     void servicesChanged();
+    void activeTabChanged();
+    void isVisibleChanged();
 
 private:
     void updateTelemetry(const SystemSnapshot& snap);
@@ -175,6 +186,9 @@ private:
     bool m_killModalForce{false};
 
     QVariantList m_services;
+
+    int m_activeTab{0};
+    bool m_isVisible{true};
 
     uid_t m_currentUid{0};
     std::vector<tinexus::platform::ServiceInfo> m_cachedServices;

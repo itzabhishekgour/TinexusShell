@@ -52,84 +52,140 @@ Window {
             anchors.right: parent.right
         }
 
-        // ── Logo Menu Flyout ────────────────────────────────────────
-        LogoMenuFlyout {
-            id: logoFlyout
-            objectName: "logoFlyout"
+        // ── Logo Menu Flyout (Lazy-loaded on open) ──────────────────
+        Loader {
+            id: logoFlyoutLoader
             x: topBar.logoTriggerItem ? Math.max(8, Math.round(topBar.logoTriggerItem.mapToItem(container, 0, 0).x)) : 8
             y: topBar.height + 4
-            visible: typeof bridge !== "undefined" && bridge.logoMenuOpen
+            active: typeof bridge !== "undefined" && bridge.logoMenuOpen
+            visible: active
+            sourceComponent: Component {
+                LogoMenuFlyout {
+                    id: logoFlyout
+                    objectName: "logoFlyout"
+                    visible: true
+                }
+            }
         }
 
-        // ── Applications Dropdown Flyout ────────────────────────────
-        ApplicationsFlyout {
-            id: appsFlyout
-            objectName: "appsFlyout"
+        // ── Applications Dropdown Flyout (Lazy-loaded on open) ──────
+        Loader {
+            id: appsFlyoutLoader
             x: topBar.appTriggerItem ? Math.max(8, Math.round(topBar.appTriggerItem.mapToItem(container, 0, 0).x)) : 48
             y: topBar.height + 4
-            visible: typeof bridge !== "undefined" && bridge.appMenuOpen
+            active: typeof bridge !== "undefined" && bridge.appMenuOpen
+            visible: active
+            sourceComponent: Component {
+                ApplicationsFlyout {
+                    id: appsFlyout
+                    objectName: "appsFlyout"
+                    visible: true
+                }
+            }
         }
 
-        // ── Calendar Flyout (Directly under Aura Notch Date Pill) ──
-        CalendarFlyout {
-            id: calFlyout
-            objectName: "calFlyout"
+        // ── Calendar Flyout (Lazy-loaded on open) ───────────────────
+        Loader {
+            id: calFlyoutLoader
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.horizontalCenterOffset: 60
             y: 48
-            visible: typeof bridge !== "undefined" && bridge.calendarOpen
+            active: typeof bridge !== "undefined" && bridge.calendarOpen
+            visible: active
+            sourceComponent: Component {
+                CalendarFlyout {
+                    id: calFlyout
+                    objectName: "calFlyout"
+                    visible: true
+                }
+            }
         }
 
-        // ── Notifications Flyout (Dynamically Centered Under Bell Icon) ──
-        NotificationFlyout {
-            id: notifFlyout
-            objectName: "notifFlyout"
+        // ── Notifications Flyout (Lazy-loaded on open) ──────────────
+        Loader {
+            id: notifFlyoutLoader
             x: topBar.notifTriggerItem
                ? Math.min(container.width - width - 8, Math.max(8, Math.round(topBar.notifTriggerItem.mapToItem(container, 0, 0).x + (topBar.notifTriggerItem.width / 2) - (width / 2))))
                : (container.width - width - 8)
             y: topBar.height + 4
-            visible: typeof bridge !== "undefined" && bridge.notificationsOpen
+            active: typeof bridge !== "undefined" && bridge.notificationsOpen
+            visible: active
+            sourceComponent: Component {
+                NotificationFlyout {
+                    id: notifFlyout
+                    objectName: "notifFlyout"
+                    visible: true
+                }
+            }
         }
 
-        // ── Volume Flyout (Dynamically Centered Under Volume Tray Icon) ──
-        VolumeFlyout {
-            id: volFlyout
-            objectName: "volFlyout"
+        // ── Volume Flyout (Lazy-loaded on open) ─────────────────────
+        Loader {
+            id: volFlyoutLoader
             x: topBar.volTriggerItem
                ? Math.min(container.width - width - 8, Math.max(8, Math.round(topBar.volTriggerItem.mapToItem(container, 0, 0).x + (topBar.volTriggerItem.width / 2) - (width / 2))))
                : (container.width - width - 40)
             y: topBar.height + 4
-            visible: typeof bridge !== "undefined" && bridge.volumeFlyoutOpen
+            active: typeof bridge !== "undefined" && bridge.volumeFlyoutOpen
+            visible: active
+            sourceComponent: Component {
+                VolumeFlyout {
+                    id: volFlyout
+                    objectName: "volFlyout"
+                    visible: true
+                }
+            }
         }
 
-        // ── Brightness Flyout (Dynamically Centered Under Brightness Icon) ─
-        BrightnessFlyout {
-            id: briFlyout
-            objectName: "briFlyout"
+        // ── Brightness Flyout (Lazy-loaded on open) ─────────────────
+        Loader {
+            id: briFlyoutLoader
             x: topBar.briTriggerItem
                ? Math.min(container.width - width - 8, Math.max(8, Math.round(topBar.briTriggerItem.mapToItem(container, 0, 0).x + (topBar.briTriggerItem.width / 2) - (width / 2))))
                : (container.width - width - 70)
             y: topBar.height + 4
-            visible: typeof bridge !== "undefined" && bridge.brightnessFlyoutOpen
+            active: typeof bridge !== "undefined" && bridge.brightnessFlyoutOpen
+            visible: active
+            sourceComponent: Component {
+                BrightnessFlyout {
+                    id: briFlyout
+                    objectName: "briFlyout"
+                    visible: true
+                }
+            }
         }
 
-        // ── Power Confirmation Modal ────────────────────────────────
-        PowerConfirmationDialog {
-            id: powerDialog
-            objectName: "powerDialog"
+        // ── Power Confirmation Modal (Lazy-loaded on open) ──────────
+        Loader {
+            id: powerDialogLoader
             anchors.horizontalCenter: parent.horizontalCenter
             y: 60
-            visible: typeof bridge !== "undefined" && (bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen)
+            active: typeof bridge !== "undefined" && (bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen)
+            visible: active
+            sourceComponent: Component {
+                PowerConfirmationDialog {
+                    id: powerDialog
+                    objectName: "powerDialog"
+                    visible: true
+                }
+            }
         }
 
-        // ── Notification Toast Overlay (Top Right below TopBar) ─────
-        NotificationToast {
-            id: notifToast
-            objectName: "notifToast"
+        // ── Notification Toast Overlay (Lazy-loaded when visible) ───
+        Loader {
+            id: notifToastLoader
             anchors.right: parent.right
             anchors.rightMargin: 12
             y: 40
-            visible: typeof bridge !== "undefined" && bridge.toastVisible
+            active: typeof bridge !== "undefined" && bridge.toastVisible
+            visible: active
+            sourceComponent: Component {
+                NotificationToast {
+                    id: notifToast
+                    objectName: "notifToast"
+                    visible: true
+                }
+            }
         }
     }
 }

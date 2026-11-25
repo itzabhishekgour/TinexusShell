@@ -85,6 +85,7 @@ int main(int argc, char* argv[]) {
                                                                     LayerShellQt::Window::AnchorLeft |
                                                                     LayerShellQt::Window::AnchorRight));
             lsWin->setExclusiveZone(-1);
+            lsWin->setScope(QStringLiteral("tinexus-lock"));
             lsWin->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityExclusive);
             std::cout << "[tinexus-lock] LayerShellQt configured: Layer=Overlay, Fullscreen, Exclusive Keyboard" << std::endl;
         }

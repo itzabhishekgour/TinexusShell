@@ -13,6 +13,8 @@
 #include <QtCore/QDir>
 #include <QtCore/QUrl>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QMetaObject>
+#include <QtCore/QPointer>
 #include <QtNetwork/QLocalSocket>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusConnection>
@@ -23,6 +25,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -31,14 +34,48 @@ namespace tinexus::shell {
 ShellBridge::ShellBridge(QObject* parent)
     : QObject(parent)
 {
-    // Initialize hardware values from ALSA and sysfs
-    m_volume = hardware::AudioUtils::get_volume_percent();
-    m_soundMuted = hardware::AudioUtils::is_muted() || (m_volume == 0);
-    m_brightness = hardware::BacklightUtils::get_brightness_percent();
+    // Initialize fast lightweight defaults for immediate zero-lag mapping
+    m_volume = 75;
+    m_soundMuted = false;
+    m_brightness = 80;
 
     resolveLogoUrl();
-    scanApplications();
-    pollBattery();
+
+    // Defer all I/O, subprocess audio probing, .desktop scanning, and D-Bus subscription
+    // until immediately after the TopBar maps cleanly onto the compositor output.
+    QTimer::singleShot(0, this, [this]() {
+        // Subscribe to notification signals from tinexus-notifications daemon
+        bool connected = QDBusConnection::sessionBus().connect(
+            QString(),
+            QStringLiteral("/org/freedesktop/Notifications"),
+            QStringLiteral("org.freedesktop.Notifications"),
+            QStringLiteral("NotificationAdded"),
+            this,
+            SLOT(onNotificationAdded(uint,QString,QString,QString,QString,int))
+        );
+        if (!connected) {
+            tinexus::log::warn("[Shell] Failed to connect to org.freedesktop.Notifications NotificationAdded signal");
+        } else {
+            tinexus::log::info("[Shell] Connected to org.freedesktop.Notifications NotificationAdded signal");
+        }
+
+        pollBattery();
+        syncAudioState();
+        scanApplications();
+
+        QPointer<ShellBridge> self(this);
+        std::thread([self]() {
+            int bri = hardware::BacklightUtils::get_brightness_percent();
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, bri]() {
+                if (!self) return;
+                if (self->m_brightness != bri) {
+                    self->m_brightness = bri;
+                    emit self->brightnessChanged();
+                }
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
 
     // Populate standard notifications for desktop notification flyout
     QVariantMap n1;
@@ -68,25 +105,16 @@ ShellBridge::ShellBridge(QObject* parent)
 
     updateClock();
     connect(&m_clockTimer, &QTimer::timeout, this, &ShellBridge::updateClock);
-    m_clockTimer.start(1000);
+    m_clockTimer.start(5000);
+
+    connect(&m_batteryTimer, &QTimer::timeout, this, &ShellBridge::pollBattery);
+    m_batteryTimer.start(30000);
+
+    connect(&m_audioTimer, &QTimer::timeout, this, &ShellBridge::syncAudioState);
+    m_audioTimer.start(8000);
 
     m_toastTimer.setSingleShot(true);
     connect(&m_toastTimer, &QTimer::timeout, this, &ShellBridge::dismissToast);
-
-    // Subscribe to notification signals from tinexus-notifications daemon
-    bool connected = QDBusConnection::sessionBus().connect(
-        QString(),
-        QStringLiteral("/org/freedesktop/Notifications"),
-        QStringLiteral("org.freedesktop.Notifications"),
-        QStringLiteral("NotificationAdded"),
-        this,
-        SLOT(onNotificationAdded(uint,QString,QString,QString,QString,int))
-    );
-    if (!connected) {
-        tinexus::log::warn("[Shell] Failed to connect to org.freedesktop.Notifications NotificationAdded signal");
-    } else {
-        tinexus::log::info("[Shell] Connected to org.freedesktop.Notifications NotificationAdded signal");
-    }
 }
 
 void ShellBridge::resolveLogoUrl() {
@@ -112,106 +140,137 @@ void ShellBridge::resolveLogoUrl() {
 }
 
 void ShellBridge::scanApplications() {
-    m_applicationsList.clear();
-    const std::vector<std::string> dirs = {
-        "/usr/share/applications",
-        "/usr/local/share/applications"
+    if (m_appsScanning->exchange(true)) {
+        return;
+    }
+
+    struct DesktopEntryRaw {
+        std::string name;
+        std::string exec;
+        std::string icon;
+        std::string comment;
     };
 
-    for (const auto& d : dirs) {
-        std::error_code ec;
-        if (!fs::exists(d, ec)) continue;
-        try {
-            for (const auto& entry : fs::directory_iterator(d, ec)) {
-                if (!entry.is_regular_file() || entry.path().extension() != ".desktop") continue;
-                std::ifstream f(entry.path());
-                if (!f.is_open()) continue;
+    QPointer<ShellBridge> self(this);
+    auto scanningFlag = m_appsScanning;
 
-                std::string line;
-                std::string name;
-                std::string exec;
-                std::string icon;
-                std::string comment;
-                bool no_display = false;
-                bool is_desktop_entry = false;
+    std::thread([self, scanningFlag]() {
+        std::vector<DesktopEntryRaw> scanned;
+        const std::vector<std::string> dirs = {
+            "/usr/share/applications",
+            "/usr/local/share/applications"
+        };
 
-                while (std::getline(f, line)) {
-                    if (!line.empty() && line.back() == '\r') line.pop_back();
-                    if (line == "[Desktop Entry]") { is_desktop_entry = true; continue; }
-                    if (!line.empty() && line[0] == '[' && is_desktop_entry) break;
-                    if (!is_desktop_entry) continue;
-
-                    if (line.rfind("Name=", 0) == 0 && name.empty()) {
-                        name = line.substr(5);
-                    } else if (line.rfind("Exec=", 0) == 0 && exec.empty()) {
-                        exec = line.substr(5);
-                    } else if (line.rfind("Icon=", 0) == 0 && icon.empty()) {
-                        icon = line.substr(5);
-                    } else if (line.rfind("Comment=", 0) == 0 && comment.empty()) {
-                        comment = line.substr(8);
-                    } else if (line == "NoDisplay=true") {
-                        no_display = true;
-                    }
-                }
-
-                if (no_display || name.empty() || exec.empty()) continue;
-
-                // Clean exec arguments (%u, %U, %f, %F, etc.)
-                size_t pct = exec.find('%');
-                while (pct != std::string::npos) {
-                    if (pct + 1 < exec.size()) {
-                        exec.erase(pct, 2);
-                    } else {
-                        exec.erase(pct, 1);
-                    }
-                    pct = exec.find('%');
-                }
-                while (!exec.empty() && exec.back() == ' ') exec.pop_back();
-
-                // Avoid duplicate names
-                bool duplicate = false;
-                for (const auto& existing : m_applicationsList) {
-                    if (existing.toMap().value(QStringLiteral("name")).toString() == QString::fromStdString(name)) {
-                        duplicate = true;
-                        break;
-                    }
-                }
-                if (duplicate) continue;
-
-                QVariantMap item;
-                item[QStringLiteral("name")] = QString::fromStdString(name);
-                item[QStringLiteral("exec")] = QString::fromStdString(exec);
-                item[QStringLiteral("icon")] = QString::fromStdString(icon);
-                item[QStringLiteral("comment")] = QString::fromStdString(comment);
-                m_applicationsList.append(item);
+        auto isDupName = [&scanned](const std::string& name) {
+            for (const auto& existing : scanned) {
+                if (existing.name == name) return true;
             }
-        } catch (...) {}
-    }
+            return false;
+        };
 
-    // Ensure Firefox is always present if installed
-    bool has_firefox = false;
-    for (const auto& existing : m_applicationsList) {
-        if (existing.toMap().value(QStringLiteral("name")).toString().contains(QStringLiteral("Firefox"), Qt::CaseInsensitive)) {
-            has_firefox = true;
-            break;
+        for (const auto& d : dirs) {
+            std::error_code ec;
+            if (!fs::exists(d, ec)) continue;
+            try {
+                for (const auto& entry : fs::directory_iterator(d, ec)) {
+                    if (!entry.is_regular_file() || entry.path().extension() != ".desktop") continue;
+                    std::ifstream f(entry.path());
+                    if (!f.is_open()) continue;
+
+                    std::string line;
+                    std::string name;
+                    std::string exec;
+                    std::string icon;
+                    std::string comment;
+                    bool no_display = false;
+                    bool is_desktop_entry = false;
+
+                    while (std::getline(f, line)) {
+                        if (!line.empty() && line.back() == '\r') line.pop_back();
+                        if (line == "[Desktop Entry]") { is_desktop_entry = true; continue; }
+                        if (!line.empty() && line[0] == '[' && is_desktop_entry) break;
+                        if (!is_desktop_entry) continue;
+
+                        if (line.rfind("Name=", 0) == 0 && name.empty()) {
+                            name = line.substr(5);
+                        } else if (line.rfind("Exec=", 0) == 0 && exec.empty()) {
+                            exec = line.substr(5);
+                        } else if (line.rfind("Icon=", 0) == 0 && icon.empty()) {
+                            icon = line.substr(5);
+                        } else if (line.rfind("Comment=", 0) == 0 && comment.empty()) {
+                            comment = line.substr(8);
+                        } else if (line == "NoDisplay=true") {
+                            no_display = true;
+                        }
+                    }
+
+                    if (no_display || name.empty() || exec.empty()) continue;
+
+                    size_t pct = exec.find('%');
+                    while (pct != std::string::npos) {
+                        if (pct + 1 < exec.size()) {
+                            exec.erase(pct, 2);
+                        } else {
+                            exec.erase(pct, 1);
+                        }
+                        pct = exec.find('%');
+                    }
+                    while (!exec.empty() && exec.back() == ' ') exec.pop_back();
+
+                    if (isDupName(name)) continue;
+                    scanned.push_back({std::move(name), std::move(exec), std::move(icon), std::move(comment)});
+                }
+            } catch (...) {}
         }
-    }
-    if (!has_firefox && (fs::exists("/usr/bin/firefox") || fs::exists("/usr/share/applications/firefox.desktop"))) {
-        QVariantMap ff;
-        ff[QStringLiteral("name")] = QStringLiteral("Firefox");
-        ff[QStringLiteral("exec")] = QStringLiteral("env MOZ_ENABLE_WAYLAND=1 firefox");
-        ff[QStringLiteral("icon")] = QStringLiteral("firefox");
-        ff[QStringLiteral("comment")] = QStringLiteral("Mozilla Firefox Web Browser");
-        m_applicationsList.append(ff);
-    }
 
-    // Alphabetically sort applications for quick, intuitive navigation
-    std::sort(m_applicationsList.begin(), m_applicationsList.end(), [](const QVariant& a, const QVariant& b) {
-        return a.toMap().value(QStringLiteral("name")).toString().toLower() <
-               b.toMap().value(QStringLiteral("name")).toString().toLower();
-    });
+        bool has_firefox = false;
+        for (const auto& existing : scanned) {
+            std::string lower = existing.name;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (lower.find("firefox") != std::string::npos) {
+                has_firefox = true;
+                break;
+            }
+        }
+        std::error_code ec;
+        if (!has_firefox && (fs::exists("/usr/bin/firefox", ec) || fs::exists("/usr/share/applications/firefox.desktop", ec))) {
+            scanned.push_back({
+                "Firefox",
+                "env MOZ_ENABLE_WAYLAND=1 firefox",
+                "firefox",
+                "Mozilla Firefox Web Browser"
+            });
+        }
 
-    emit applicationsListChanged();
+        if (!self) {
+            scanningFlag->store(false);
+            return;
+        }
+
+        QMetaObject::invokeMethod(self, [self, scanningFlag, scanned = std::move(scanned)]() {
+            scanningFlag->store(false);
+            if (!self) return;
+
+            QVariantList newList;
+            newList.reserve(static_cast<int>(scanned.size()));
+            for (const auto& e : scanned) {
+                QVariantMap item;
+                item[QStringLiteral("name")] = QString::fromStdString(e.name);
+                item[QStringLiteral("exec")] = QString::fromStdString(e.exec);
+                item[QStringLiteral("icon")] = QString::fromStdString(e.icon);
+                item[QStringLiteral("comment")] = QString::fromStdString(e.comment);
+                newList.append(item);
+            }
+
+            std::sort(newList.begin(), newList.end(), [](const QVariant& a, const QVariant& b) {
+                return a.toMap().value(QStringLiteral("name")).toString().toLower() <
+                       b.toMap().value(QStringLiteral("name")).toString().toLower();
+            });
+
+            self->m_applicationsList = std::move(newList);
+            emit self->applicationsListChanged();
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 void ShellBridge::pollBattery() {
@@ -267,13 +326,30 @@ void ShellBridge::pollBattery() {
 }
 
 void ShellBridge::syncAudioState() {
-    int cur_vol = hardware::AudioUtils::get_volume_percent();
-    bool cur_muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
-    if (m_volume != cur_vol || m_soundMuted != cur_muted) {
-        m_volume = cur_vol;
-        m_soundMuted = cur_muted;
-        emit volumeChanged();
+    if (m_audioPolling->exchange(true)) {
+        return;
     }
+
+    QPointer<ShellBridge> self(this);
+    auto pollingFlag = m_audioPolling;
+
+    std::thread([self, pollingFlag]() {
+        int cur_vol = hardware::AudioUtils::get_volume_percent();
+        bool cur_muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
+        if (!self) {
+            pollingFlag->store(false);
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, pollingFlag, cur_vol, cur_muted]() {
+            pollingFlag->store(false);
+            if (!self) return;
+            if (self->m_volume != cur_vol || self->m_soundMuted != cur_muted) {
+                self->m_volume = cur_vol;
+                self->m_soundMuted = cur_muted;
+                emit self->volumeChanged();
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 void ShellBridge::updateClock() {
@@ -286,9 +362,6 @@ void ShellBridge::updateClock() {
         m_currentDate = newDate;
         emit timeChanged();
     }
-
-    pollBattery();
-    syncAudioState();
 }
 
 void ShellBridge::setVolume(int vol) {

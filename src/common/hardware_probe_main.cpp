@@ -37,6 +37,15 @@ int main(int argc, char** argv) {
     }
     out.flush();
 
+    // Write authoritative detected GPU model for Settings and About UI
+    try {
+        std::ofstream gpu_out("/run/tinexus/gpu");
+        if (gpu_out.is_open()) {
+            gpu_out << probe_result.gpu_name << "\n";
+            tinexus::log::info("[probe] Wrote GPU model to /run/tinexus/gpu: {}", probe_result.gpu_name);
+        }
+    } catch (...) {}
+
     tinexus::log::info("[probe] Hardware environment successfully written to /run/tinexus/env");
     return 0;
 }

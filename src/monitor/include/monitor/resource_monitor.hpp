@@ -19,7 +19,7 @@ public:
     ResourceMonitor() = default;
     ~ResourceMonitor() = default;
 
-    SystemSnapshot collect_snapshot();
+    SystemSnapshot collect_snapshot(bool include_processes = true);
     [[nodiscard]] std::vector<SystemSnapshot> history() const;
 
 private:

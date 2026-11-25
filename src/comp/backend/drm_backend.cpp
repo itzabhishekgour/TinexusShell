@@ -18,12 +18,39 @@ bool DrmBackend::initialize() {
         if (!probe.device.card_path.empty() && std::filesystem::exists(probe.device.card_path)) {
             m_device_path = probe.device.card_path;
         } else {
-            // Dynamically scan for any existing DRM card node rather than hardcoding card0
-            for (int i = 0; i < 8; ++i) {
-                std::string candidate = "/dev/dri/card" + std::to_string(i);
-                if (std::filesystem::exists(candidate)) {
-                    m_device_path = candidate;
-                    break;
+            // Prioritize DRM card driving an active connected display across Intel/AMD/NVIDIA
+            bool found_connected = false;
+            if (std::filesystem::exists("/sys/class/drm")) {
+                for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm")) {
+                    std::string name = entry.path().filename().string();
+                    if (name.find("card") != std::string::npos && name.find('-') != std::string::npos) {
+                        std::filesystem::path status_path = entry.path() / "status";
+                        if (std::filesystem::exists(status_path)) {
+                            std::ifstream sf(status_path);
+                            std::string status;
+                            if (sf >> status && status == "connected") {
+                                std::string card_part = name.substr(0, name.find('-'));
+                                std::string dev_node = "/dev/dri/" + card_part;
+                                if (std::filesystem::exists(dev_node)) {
+                                    m_device_path = dev_node;
+                                    found_connected = true;
+                                    log::info("DrmBackend: Prioritizing DRM card with active display connector: {}", m_device_path);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback: scan any existing DRM card node
+            if (!found_connected) {
+                for (int i = 0; i < 8; ++i) {
+                    std::string candidate = "/dev/dri/card" + std::to_string(i);
+                    if (std::filesystem::exists(candidate)) {
+                        m_device_path = candidate;
+                        break;
+                    }
                 }
             }
         }

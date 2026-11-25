@@ -73,6 +73,8 @@ target_link_libraries(tinexus-comp PRIVATE
     PkgConfig::WLROOTS
     PkgConfig::DRM
     PkgConfig::VULKAN
+    EGL
+    GLESv2
     PkgConfig::XKBCOMMON
     PkgConfig::PIXMAN
     PkgConfig::SYSTEMD

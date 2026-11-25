@@ -150,7 +150,7 @@ BUILD_START_TIME=$(date +%s)
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   "${OBJS[@]}" \
   -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
-  -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lxkbcommon -lpixman-1 -lsystemd -lpthread \
+  -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lEGL -lGLESv2 -lxkbcommon -lpixman-1 -lsystemd -lpthread \
   -o /workspace/build/bin/tinexus-comp
 
 # Post-link assertions

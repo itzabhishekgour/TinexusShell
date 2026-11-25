@@ -69,7 +69,7 @@ ScrollView {
 
                 Text {
                     Layout.alignment: Qt.AlignHCenter
-                    text: typeof bridge !== "undefined" ? bridge.displaySubtitle : "Primary Display  •  60 Hz"
+                    text: (typeof bridge !== "undefined" && bridge.displaySubtitle.length > 0) ? bridge.displaySubtitle : "Primary Display"
                     color: "#86868b"
                     font.pixelSize: 11
                 }
