@@ -51,7 +51,7 @@ fi
 
 echo "[INFO] Found moc at: $MOC_BIN"
 
-QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps"
+QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtSvg -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps"
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
 echo "[INFO] Generating MOC for tinexus-dock..."
@@ -90,7 +90,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/dock/DockAdaptor.cpp \
   /workspace/src/files/trash_manager.cpp \
   /tmp/build_apps/wlr-foreign-toplevel.o \
-  -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lwayland-client -lQt6DBus -DHAVE_LAYERSHELL=1 \
+  -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6Svg -lQt6WaylandClient -lLayerShellQtInterface -lwayland-client -lQt6DBus -DHAVE_LAYERSHELL=1 \
   -o /workspace/build/bin/tinexus-dock
 
 # Rigorous post-build assertions
@@ -130,7 +130,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/dock/DockAdaptor.cpp \
   /workspace/src/files/trash_manager.cpp \
   /tmp/build_apps/wlr-foreign-toplevel.o \
-  -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lLayerShellQtInterface -lwayland-client -lQt6DBus -DHAVE_LAYERSHELL=1 \
+  -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6Svg -lQt6WaylandClient -lLayerShellQtInterface -lwayland-client -lQt6DBus -DHAVE_LAYERSHELL=1 \
   -o /workspace/build/bin/test-dock-render
 
 [ -f /workspace/build/bin/test-dock-render ] || { echo "[FATAL] test-dock-render failed!" >&2; exit 1; }

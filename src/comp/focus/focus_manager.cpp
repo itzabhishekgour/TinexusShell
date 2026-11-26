@@ -86,6 +86,8 @@ void FocusManager::update_pointer_focus(const PickResult& pick,
     }
 
     if (pick.surface) {
+        m_last_sx = pick.sx;
+        m_last_sy = pick.sy;
         // Entering a new surface or staying on the same one
         if (m_pointer_surface != pick.surface) {
             // Log surface transition for debugging
@@ -105,6 +107,62 @@ void FocusManager::update_pointer_focus(const PickResult& pick,
         }
         wlr_seat_pointer_clear_focus(m_seat);
     }
+}
+
+void FocusManager::handle_pointer_button(double cursor_x, double cursor_y, bool pressed) noexcept {
+    if (pressed) {
+        if (m_pressed_buttons == 0 && m_pointer_surface != nullptr) {
+            m_pointer_grab_surface = m_pointer_surface;
+            m_grab_origin_x = cursor_x - m_last_sx;
+            m_grab_origin_y = cursor_y - m_last_sy;
+
+            if (m_grab_destroy_listener.link.next) {
+                wl_list_remove(&m_grab_destroy_listener.link);
+                m_grab_destroy_listener.link.next = nullptr;
+            }
+            m_grab_destroy_listener.notify = [](struct wl_listener* l, void* /*data*/) {
+                FocusManager* self = wl_container_of(l, self, m_grab_destroy_listener);
+                self->m_pointer_grab_surface = nullptr;
+                self->m_pressed_buttons = 0;
+                if (self->m_grab_destroy_listener.link.next) {
+                    wl_list_remove(&self->m_grab_destroy_listener.link);
+                    self->m_grab_destroy_listener.link.next = nullptr;
+                }
+            };
+            wl_signal_add(&m_pointer_grab_surface->events.destroy, &m_grab_destroy_listener);
+        }
+        ++m_pressed_buttons;
+    } else {
+        if (m_pressed_buttons > 0) {
+            --m_pressed_buttons;
+        }
+        if (m_pressed_buttons == 0) {
+            m_pointer_grab_surface = nullptr;
+            if (m_grab_destroy_listener.link.next) {
+                wl_list_remove(&m_grab_destroy_listener.link);
+                m_grab_destroy_listener.link.next = nullptr;
+            }
+        }
+    }
+}
+
+bool FocusManager::update_grabbed_pointer_motion(double cursor_x, double cursor_y,
+                                                 const PickResult& pick, uint32_t time_msec) noexcept {
+    if (!m_seat || !has_pointer_grab()) {
+        return false;
+    }
+    double sx = cursor_x - m_grab_origin_x;
+    double sy = cursor_y - m_grab_origin_y;
+    if (pick.surface == m_pointer_grab_surface) {
+        sx = pick.sx;
+        sy = pick.sy;
+        m_grab_origin_x = cursor_x - pick.sx;
+        m_grab_origin_y = cursor_y - pick.sy;
+    }
+    m_last_sx = sx;
+    m_last_sy = sy;
+    wlr_seat_pointer_notify_motion(m_seat, time_msec, sx, sy);
+    return true;
 }
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,12 @@ public:
     {
         // Standard XDG and project asset search paths
         m_searchDirs = {
+            QStringLiteral("/usr/share/icons/Papirus/64x64/apps"),
+            QStringLiteral("/usr/share/icons/Papirus/48x48/apps"),
+            QStringLiteral("/usr/share/icons/Papirus/64x64/categories"),
+            QStringLiteral("/usr/share/icons/Papirus/48x48/categories"),
+            QStringLiteral("/usr/share/icons/Papirus-Dark/64x64/apps"),
+            QStringLiteral("/usr/share/icons/Papirus-Dark/48x48/apps"),
             QStringLiteral("/usr/share/icons/Adwaita/symbolic/status"),
             QStringLiteral("/usr/share/icons/Adwaita/symbolic/devices"),
             QStringLiteral("/usr/share/icons/Adwaita/symbolic/actions"),
@@ -36,6 +42,9 @@ public:
             QStringLiteral("/usr/share/icons/Adwaita/symbolic/legacy"),
             QStringLiteral("/usr/share/icons/Adwaita/symbolic/apps"),
             QStringLiteral("/usr/share/icons/Adwaita/symbolic/categories"),
+            QStringLiteral("/usr/share/icons/hicolor/128x128/apps"),
+            QStringLiteral("/usr/share/icons/hicolor/64x64/apps"),
+            QStringLiteral("/usr/share/icons/hicolor/48x48/apps"),
             QStringLiteral("/usr/share/icons/hicolor/scalable/status"),
             QStringLiteral("/usr/share/icons/hicolor/scalable/apps"),
             QStringLiteral("/usr/share/icons/hicolor/scalable/devices"),
@@ -159,6 +168,9 @@ public:
 
 private:
     QString findIconFile(const QString& name) const {
+        if (name.startsWith(QLatin1Char('/')) && QFileInfo::exists(name)) {
+            return name;
+        }
         QStringList candidateNames;
         if (name.endsWith(QStringLiteral("-symbolic"))) {
             candidateNames << name + QStringLiteral(".svg")

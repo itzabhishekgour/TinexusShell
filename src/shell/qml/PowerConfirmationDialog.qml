@@ -42,25 +42,18 @@ Item {
         }
     }
 
-    // Shadow
-    Rectangle {
-        anchors.fill: parent
-        anchors.margins: -4
-        radius: 14
-        color: Qt.rgba(0, 0, 0, 0.40)
-    }
-
-    // Card background
+    // Card background (LiquidGlass provides Dual-Kawase blur, specular rim, and MultiEffect shadows)
     LiquidGlass {
         anchors.fill: parent
         materialType: "popover"
-        cornerRadius: 12
+        cornerRadius: 14
+        fluidOpacity: 0.68
     }
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 20
-        spacing: 12
+        spacing: 10
 
         // Title
         Text {
@@ -82,6 +75,12 @@ Item {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             Layout.alignment: Qt.AlignHCenter
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            height: 1
+            color: Qt.rgba(1, 1, 1, 0.09)
         }
 
         Item { Layout.fillHeight: true }

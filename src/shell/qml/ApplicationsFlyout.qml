@@ -1,6 +1,6 @@
 // ============================================================================
 // ApplicationsFlyout.qml — Dropdown List of Installed Applications
-// Refined to match Apple LogoMenuFlyout aesthetic
+// Unified LiquidGlass popover styling matching CalendarFlyout & NotificationFlyout
 // ============================================================================
 import QtQuick
 import QtQuick.Controls
@@ -8,75 +8,148 @@ import "../../common/qml"
 
 Item {
     id: root
-    width: 220
-    height: Math.min(360, (appList.count * 28) + 16)
+    readonly property int shadowPad: 18
+    readonly property int cardWidth: 248
+    readonly property int cardHeight: Math.min(372, Math.max(88, 56 + (appList.count * 34)))
 
-    LiquidGlass {
-        id: bg
-        anchors.fill: parent
-        materialType: "popover"
-        cornerRadius: 10
-    }
+    width: cardWidth + shadowPad * 2
+    height: cardHeight + shadowPad * 2
 
-    ListView {
-        id: appList
-        anchors.fill: parent
-        anchors.margins: 6
-        clip: true
-        spacing: 2
-        model: typeof bridge !== "undefined" ? bridge.applicationsList : []
+    Item {
+        id: glassCard
+        x: root.shadowPad
+        y: root.shadowPad
+        width: root.cardWidth
+        height: root.cardHeight
 
-        ScrollBar.vertical: ScrollBar {
-            policy: appList.contentHeight > appList.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+        LiquidGlass {
+            id: bg
+            anchors.fill: parent
+            materialType: "popover"
+            cornerRadius: 14
+            blurAmount: 28
+            fluidOpacity: 0.66
+            shadowEnabled: true
+            topSpecularOpacity: 0.14
         }
 
-        delegate: Rectangle {
-            id: itemRect
-            width: appList.width
-            height: 26
-            radius: 5
-            color: itemMouse.containsMouse ? Qt.rgba(0.42, 0.55, 0.94, 0.30) : "transparent"
+        Column {
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 8
 
-            Row {
-                anchors.fill: parent
-                anchors.leftMargin: 8
-                anchors.rightMargin: 8
-                spacing: 8
-                anchors.verticalCenter: parent.verticalCenter
+            // Header
+            Item {
+                width: parent.width
+                height: 22
 
-                // Minimalist Accent Dot
-                Rectangle {
-                    width: 5
-                    height: 5
-                    radius: 2.5
-                    color: itemMouse.containsMouse ? "#38BDF8" : Qt.rgba(1, 1, 1, 0.40)
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 4
                     anchors.verticalCenter: parent.verticalCenter
+                    text: "Applications"
+                    color: "#FFFFFF"
+                    font.family: "Inter"
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
                 }
 
-                // App Title
-                Text {
-                    text: modelData.name
-                    color: "#FFFFFF"
-                    font.pixelSize: 13
-                    elide: Text.ElideRight
-                    width: parent.width - 20
+                Rectangle {
+                    anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
+                    width: countText.implicitWidth + 10
+                    height: 18
+                    radius: 9
+                    color: Qt.rgba(56 / 255.0, 189 / 255.0, 248 / 255.0, 0.18)
+                    border.color: Qt.rgba(56 / 255.0, 189 / 255.0, 248 / 255.0, 0.35)
+                    visible: appList.count > 0
+
+                    Text {
+                        id: countText
+                        anchors.centerIn: parent
+                        text: appList.count.toString()
+                        color: "#38BDF8"
+                        font.family: "Inter"
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                    }
                 }
             }
 
-            MouseArea {
-                id: itemMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (typeof bridge !== "undefined") {
-                        bridge.launchApp(modelData.exec);
-                        bridge.closeAllFlyouts();
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Qt.rgba(1, 1, 1, 0.09)
+            }
+
+            ListView {
+                id: appList
+                width: parent.width
+                height: Math.max(24, parent.height - 39)
+                clip: true
+                spacing: 2
+                model: typeof bridge !== "undefined" ? bridge.applicationsList : []
+
+                ScrollBar.vertical: ScrollBar {
+                    policy: appList.contentHeight > appList.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                }
+
+                delegate: Rectangle {
+                    width: appList.width
+                    height: 32
+                    radius: 8
+                    color: itemMouse.containsMouse
+                           ? Qt.rgba(0.36, 0.56, 0.96, 0.32)
+                           : "transparent"
+
+                    Behavior on color {
+                        ColorAnimation { duration: 90 }
+                    }
+
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 10
+
+                        Image {
+                            width: 18
+                            height: 18
+                            anchors.verticalCenter: parent.verticalCenter
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.width: 36
+                            sourceSize.height: 36
+                            source: "image://icon/" + ((modelData.icon && modelData.icon.length > 0)
+                                    ? modelData.icon
+                                    : "application-x-executable")
+                        }
+
+                        Text {
+                            text: modelData.name
+                            color: "#FFFFFF"
+                            font.family: "Inter"
+                            font.pixelSize: 13
+                            font.weight: itemMouse.containsMouse ? Font.Medium : Font.Normal
+                            elide: Text.ElideRight
+                            width: parent.width - 30
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    MouseArea {
+                        id: itemMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof bridge !== "undefined") {
+                                bridge.launchApp(modelData.exec);
+                                bridge.closeAllFlyouts();
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
-

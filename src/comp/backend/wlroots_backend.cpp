@@ -50,6 +50,7 @@ extern "C" {
 #include <wlr/types/wlr_session_lock_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
+#include <wlr/types/wlr_viewporter.h>
 #include <wlr/xwayland/server.h>
 #define class c_class
 #include <wlr/xwayland/xwayland.h>
@@ -604,6 +605,9 @@ public:
         m_foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(m_display);
         m_fractional_scale_mgr = wlr_fractional_scale_manager_v1_create(m_display, 1);
         m_presentation = wlr_presentation_create(m_display, m_wlr_backend, 2);
+        if (wlr_viewporter_create(m_display)) {
+            log::info("[Backend] wp_viewporter protocol initialized.");
+        }
 
         // Create wlr_scene (base world) and m_overlay_scene (composited glass overlays)
         // and link both to output layout for multi-monitor synchronization.
@@ -1090,7 +1094,8 @@ public:
             const char* ns = lw->layer_surface->wl_namespace;
             const std::string ns_str = ns ? ns : "";
             const bool is_blurred = BlurManager::instance().is_surface_blurred(surf) ||
-                                    BlurManager::instance().is_namespace_blurred(ns_str);
+                                    (!BlurManager::instance().is_surface_explicitly_unset(surf) &&
+                                     BlurManager::instance().is_namespace_blurred(ns_str));
             if (!is_blurred) continue;
 
             struct wlr_scene_layer_surface_v1* sl = lw->scene_layer;
@@ -1104,7 +1109,7 @@ public:
             float cr = 0.0f;
             if (ns && (strcmp(ns, "tinexus-dock") == 0 || strcmp(ns, "dock") == 0)) cr = 22.0f;
             else if (ns && (strcmp(ns, "dock-menu") == 0 || strcmp(ns, "dock-stacks") == 0)) cr = 14.0f;
-            else if (ns && (strcmp(ns, "tinexus-launcher") == 0 || strcmp(ns, "launcher") == 0)) cr = 20.0f;
+            else if (ns && (strcmp(ns, "tinexus-launcher") == 0 || strcmp(ns, "launcher") == 0)) cr = 18.0f;
             else if (ns && (strcmp(ns, "tinexus-notifications") == 0 || strcmp(ns, "notifications") == 0)) cr = 16.0f;
             else if (ns && (strcmp(ns, "tinexus-shell") == 0 || strcmp(ns, "topbar") == 0 || strcmp(ns, "tinexus-panel") == 0)) cr = 14.0f;
 
@@ -1124,7 +1129,32 @@ public:
                     const int ry0 = std::max(0, rects[i].y1);
                     const int rx1 = std::min(sw, rects[i].x2);
                     const int ry1 = std::min(sh, rects[i].y2);
-                    emit_blur_box(sx + rx0, sy + ry0, rx1 - rx0, ry1 - ry0, cr, tint_hex, radius);
+                    const int rw  = rx1 - rx0;
+                    const int rh  = ry1 - ry0;
+                    if (rw <= 0 || rh <= 0) continue;
+                    float rect_cr = cr;
+                    if (ns && (strcmp(ns, "tinexus-shell") == 0 || strcmp(ns, "topbar") == 0) &&
+                        ry0 == 0 && rw >= (sw - 4) && rh <= 36) {
+                        rect_cr = 0.0f;
+                    }
+                    emit_blur_box(sx + rx0, sy + ry0, rw, rh, rect_cr, tint_hex, radius);
+                }
+                continue;
+            }
+
+            const bool is_dock_ns = (ns && (strcmp(ns, "dock") == 0 || strcmp(ns, "tinexus-dock") == 0));
+            if (is_dock_ns && m_has_dock_blur_rect) {
+                if (m_dock_blur_visible && m_dock_blur_w > 0 && m_dock_blur_h > 0) {
+                    const int rx0 = std::max(0, m_dock_blur_x);
+                    const int ry0 = std::max(0, m_dock_blur_y);
+                    const int rx1 = std::min(sw, m_dock_blur_x + m_dock_blur_w);
+                    const int ry1 = std::min(sh, m_dock_blur_y + m_dock_blur_h);
+                    const int rw  = rx1 - rx0;
+                    const int rh  = ry1 - ry0;
+                    if (rw > 0 && rh > 0) {
+                        const float rect_cr = (m_dock_blur_radius > 0.0f) ? m_dock_blur_radius : cr;
+                        emit_blur_box(sx + rx0, sy + ry0, rw, rh, rect_cr, tint_hex, radius);
+                    }
                 }
                 continue;
             }
@@ -1155,9 +1185,9 @@ public:
                 continue;
             }
 
-            if (ns && (strcmp(ns, "launcher") == 0 || strcmp(ns, "tinexus-launcher") == 0) && sh > 48) {
-                // LauncherWindow container sits 12px from top with height = window.height - 24
-                emit_blur_box(sx, sy + 12, sw, sh - 24, cr, tint_hex, radius);
+            if (ns && (strcmp(ns, "launcher") == 0 || strcmp(ns, "tinexus-launcher") == 0) && sh > 48 && sw > 48) {
+                // LauncherWindow container is inset by 24px shadowPad on all 4 sides
+                emit_blur_box(sx + 24, sy + 24, sw - 48, sh - 48, cr, tint_hex, radius);
             } else {
                 emit_blur_box(sx, sy, sw, sh, cr, tint_hex, radius);
             }
@@ -1248,6 +1278,18 @@ public:
         DockIconTarget t{x, y, w, h};
         m_dock_icons[app_id] = t;
         m_dock_icons[get_canonical_app_id(app_id)] = t;
+    }
+
+    void update_dock_blur_region(int32_t x, int32_t y, int32_t w, int32_t h,
+                                 float corner_radius, bool visible) noexcept override {
+        m_has_dock_blur_rect = true;
+        m_dock_blur_x = x;
+        m_dock_blur_y = y;
+        m_dock_blur_w = w;
+        m_dock_blur_h = h;
+        m_dock_blur_radius = corner_radius;
+        m_dock_blur_visible = visible;
+        mark_all_outputs_overlay_dirty(true);
     }
 
 
@@ -1375,6 +1417,10 @@ private:
     // Dock icon position cache for minimize-to-dock suction (keyed by canonical app_id)
     struct DockIconTarget { int32_t x{0}, y{0}, w{0}, h{0}; };
     std::unordered_map<std::string, DockIconTarget> m_dock_icons;
+    bool    m_has_dock_blur_rect{false};
+    bool    m_dock_blur_visible{true};
+    int32_t m_dock_blur_x{0}, m_dock_blur_y{0}, m_dock_blur_w{0}, m_dock_blur_h{0};
+    float   m_dock_blur_radius{22.0f};
 
     // Snap preview spring state (0=hidden → 1=fully shown)
     SpringState m_snap_preview_spring;
@@ -2047,8 +2093,11 @@ private:
                 }
             }
 
-            // Wake composited overlay repaint when layer-shell surfaces commit
-            w->backend->mark_all_outputs_overlay_dirty(false);
+            // Wake composited overlay repaint immediately on ANY layer-surface state/buffer commit
+            // so m_overlay_scene clients (dock, shell, launcher) never starve waiting on frame_done.
+            const bool overlay_commit =
+                (w->layer_surface->surface->current.committed != 0);
+            w->backend->mark_all_outputs_overlay_dirty(overlay_commit);
         };
         wl_signal_add(&layer_surface->surface->events.commit, &wrapper->commit);
     }
@@ -6159,7 +6208,10 @@ private:
         // [3D.3] Scene-graph hit-test → FocusManager handles pointer enter/motion/leave
         const PickResult pick = FocusManager::instance().pick_surface(
             m_cursor->x, m_cursor->y);
-        FocusManager::instance().update_pointer_focus(pick, time);
+        if (!FocusManager::instance().update_grabbed_pointer_motion(
+                m_cursor->x, m_cursor->y, pick, time)) {
+            FocusManager::instance().update_pointer_focus(pick, time);
+        }
 
         // Update SSD traffic-light hover state and resize edge cursor when in passthrough
         if (m_cursor_mode == CursorMode::Passthrough && m_scene) {
@@ -6268,6 +6320,10 @@ private:
                                                 log::info("[LayerShell] Click focused layer surface '{}'",
                                                           ls->layer_surface->wl_namespace ? ls->layer_surface->wl_namespace : "unnamed");
                                                 FocusManager::instance().set_keyboard_focus(ls->layer_surface->surface);
+                                            } else {
+                                                // Clicking a non-keyboard-interactive layer (wallpaper/dock) must unfocus
+                                                // interactive overlays like tinexus-shell flyouts so they dismiss cleanly.
+                                                FocusManager::instance().set_keyboard_focus(nullptr);
                                             }
                                             found_layer = true;
                                             break;
@@ -6335,9 +6391,21 @@ private:
             }
         }
 
+        if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+            FocusManager::instance().handle_pointer_button(self->m_cursor->x, self->m_cursor->y, true);
+        }
+
         SeatManager::instance().notify_button(
             event->time_msec, event->button,
             static_cast<uint32_t>(event->state));
+
+        if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+            FocusManager::instance().handle_pointer_button(self->m_cursor->x, self->m_cursor->y, false);
+            if (!FocusManager::instance().has_pointer_grab()) {
+                const PickResult pick = FocusManager::instance().pick_surface(self->m_cursor->x, self->m_cursor->y);
+                FocusManager::instance().update_pointer_focus(pick, event->time_msec);
+            }
+        }
     }
 
     static void handle_cursor_axis(struct wl_listener* listener, void* data) {

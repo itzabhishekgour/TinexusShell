@@ -54,10 +54,10 @@ Window {
         }
     }
 
-    // Live auto-refresh timer (3.0s interval, paused when minimized/hidden)
+    // Live auto-refresh timer (3.0s interval, paused when hidden or minimized for 0% idle CPU)
     Timer {
         interval: 3000
-        running: rootWindow.visible
+        running: rootWindow.visible && rootWindow.visibility !== Window.Minimized
         repeat: true
         onTriggered: monitorBridge.refresh()
     }
@@ -128,19 +128,23 @@ Window {
                         Rectangle {
                             width: (parent.width - 4) / 3
                             height: parent.height
-                            radius: 5
-                            color: rootWindow.activeTab === modelData.tab ? Qt.rgba(1, 1, 1, 0.15) : "transparent"
+                            radius: 6
+                            color: rootWindow.activeTab === modelData.tab ? Qt.rgba(1, 1, 1, 0.16) : (tabMa.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : "transparent")
+                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: rootWindow.activeTab === modelData.tab ? "#FFFFFF" : "#9CA3AF"
+                                font.family: "Inter"
                                 font.pixelSize: 12
                                 font.weight: rootWindow.activeTab === modelData.tab ? Font.Medium : Font.Normal
                             }
 
                             MouseArea {
+                                id: tabMa
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: rootWindow.activeTab = modelData.tab
                             }
@@ -164,6 +168,7 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
 
                     SequentialAnimation on opacity {
+                        running: rootWindow.visible && rootWindow.visibility !== Window.Minimized
                         loops: Animation.Infinite
                         PropertyAnimation { from: 0.4; to: 1.0; duration: 800; easing.type: Easing.InOutQuad }
                         PropertyAnimation { from: 1.0; to: 0.4; duration: 800; easing.type: Easing.InOutQuad }
@@ -174,14 +179,26 @@ Window {
                     width: 26
                     height: 26
                     radius: 6
-                    color: refreshMa.containsMouse ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
+                    color: refreshMa.pressed ? Qt.rgba(1, 1, 1, 0.16) : (refreshMa.containsMouse ? Qt.rgba(1, 1, 1, 0.10) : "transparent")
+                    Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
                     anchors.verticalCenter: parent.verticalCenter
 
+                    Image {
+                        id: refreshIcon
+                        anchors.centerIn: parent
+                        width: 14
+                        height: 14
+                        source: "image://tinexus/view-refresh-symbolic"
+                        fillMode: Image.PreserveAspectFit
+                        visible: status === Image.Ready
+                        opacity: 0.85
+                    }
                     Text {
                         anchors.centerIn: parent
                         text: "↻"
                         color: "#9CA3AF"
                         font.pixelSize: 14
+                        visible: refreshIcon.status !== Image.Ready
                     }
 
                     MouseArea {
@@ -518,12 +535,13 @@ Window {
 
                             delegate: Rectangle {
                                 width: procList.width
-                                height: 28
+                                height: 30
                                 color: {
                                     if (modelData.pid === monitorBridge.selectedPid) return "#0A84FF"
                                     if (rowMa.containsMouse) return "#222634"
                                     return index % 2 === 0 ? "#181B24" : "#15171F"
                                 }
+                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                                 MouseArea {
                                     id: rowMa
@@ -540,7 +558,7 @@ Window {
                                     anchors.rightMargin: 12
                                     spacing: rootWindow.colSpacing
 
-                                    // Process Name + Protected Vector Badge
+                                    // Process Name + Real Papirus Icon (with Protected/System badge fallback)
                                     Item {
                                         width: rootWindow.colWidthName
                                         height: parent.height
@@ -548,27 +566,47 @@ Window {
 
                                         Row {
                                             anchors.fill: parent
-                                            spacing: 6
+                                            spacing: 7
 
-                                            Rectangle {
-                                                width: 14; height: 14; radius: 3
-                                                color: modelData.isProtected ? "#F59E0B" : (modelData.isSystem ? "#6366F1" : "#0A84FF")
-                                                opacity: 0.9
+                                            Item {
+                                                width: 16
+                                                height: 16
                                                 anchors.verticalCenter: parent.verticalCenter
 
-                                                Text {
+                                                Image {
+                                                    id: procIcon
+                                                    anchors.fill: parent
+                                                    sourceSize.width: 32
+                                                    sourceSize.height: 32
+                                                    fillMode: Image.PreserveAspectFit
+                                                    smooth: true
+                                                    source: modelData.name ? ("image://tinexus/" + modelData.name.toLowerCase()) : ""
+                                                    visible: status === Image.Ready
+                                                }
+
+                                                Rectangle {
                                                     anchors.centerIn: parent
-                                                    text: modelData.isProtected ? "P" : (modelData.isSystem ? "S" : "A")
-                                                    color: "#FFFFFF"
-                                                    font.pixelSize: 9
-                                                    font.bold: true
+                                                    width: 15; height: 15; radius: 4
+                                                    visible: !procIcon.visible
+                                                    color: modelData.isProtected ? "#F59E0B" : (modelData.isSystem ? "#6366F1" : "#0A84FF")
+                                                    opacity: 0.9
+
+                                                    Text {
+                                                        anchors.centerIn: parent
+                                                        text: modelData.isProtected ? "P" : (modelData.isSystem ? "S" : "A")
+                                                        color: "#FFFFFF"
+                                                        font.family: "Inter"
+                                                        font.pixelSize: 9
+                                                        font.bold: true
+                                                    }
                                                 }
                                             }
 
                                             Text {
-                                                width: parent.width - 24
+                                                width: parent.width - 26
                                                 text: modelData.name
                                                 color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#F3F4F6"
+                                                font.family: "Inter"
                                                 font.pixelSize: 12
                                                 font.weight: modelData.pid === monitorBridge.selectedPid ? Font.Medium : Font.Normal
                                                 elide: Text.ElideRight
@@ -582,6 +620,7 @@ Window {
                                         width: rootWindow.colWidthPid
                                         text: modelData.pid
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#9CA3AF"
+                                        font.family: "JetBrains Mono"
                                         font.pixelSize: 11
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
@@ -601,6 +640,7 @@ Window {
                                         width: rootWindow.colWidthCpu
                                         text: modelData.cpuStr
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : (modelData.cpu > 10.0 ? "#F87171" : "#E5E7EB")
+                                        font.family: "JetBrains Mono"
                                         font.pixelSize: 11
                                         font.weight: modelData.cpu > 5.0 ? Font.Medium : Font.Normal
                                         anchors.verticalCenter: parent.verticalCenter
@@ -611,6 +651,7 @@ Window {
                                         width: rootWindow.colWidthMem
                                         text: modelData.rssStr
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#E5E7EB"
+                                        font.family: "JetBrains Mono"
                                         font.pixelSize: 11
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
@@ -620,6 +661,7 @@ Window {
                                         width: rootWindow.colWidthDisk
                                         text: modelData.diskStr
                                         color: modelData.pid === monitorBridge.selectedPid ? "#FFFFFF" : "#9CA3AF"
+                                        font.family: "JetBrains Mono"
                                         font.pixelSize: 11
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
@@ -1135,15 +1177,28 @@ Window {
                                     // Name
                                     RowLayout {
                                         Layout.preferredWidth: 180
-                                        spacing: 6
-                                        Text {
-                                            text: modelData.isProtected ? "🛡" : "⚙"
-                                            color: modelData.isProtected ? "#38BDF8" : "#9CA3AF"
-                                            font.pixelSize: 12
+                                        spacing: 8
+                                        Rectangle {
+                                            width: 14
+                                            height: 14
+                                            radius: 4
+                                            color: modelData.isProtected ? Qt.rgba(56 / 255, 189 / 255, 248 / 255, 0.22) : Qt.rgba(156 / 255, 163 / 255, 175 / 255, 0.16)
+                                            border.color: modelData.isProtected ? "#38BDF8" : "#6B7280"
+                                            border.width: 1
+
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: modelData.isProtected ? "S" : "D"
+                                                color: modelData.isProtected ? "#38BDF8" : "#9CA3AF"
+                                                font.family: "JetBrains Mono"
+                                                font.pixelSize: 8
+                                                font.bold: true
+                                            }
                                         }
                                         Text {
                                             text: modelData.name
                                             color: "#F3F4F6"
+                                            font.family: "Inter"
                                             font.pixelSize: 12
                                             font.weight: Font.Medium
                                         }

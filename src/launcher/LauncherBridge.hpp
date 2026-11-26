@@ -5,11 +5,16 @@
 #pragma once
 
 #include <QtCore/QObject>
+#include <QtCore/QPointer>
 #include <QtCore/QString>
 #include <QtCore/QVariantList>
 #include <QtCore/QVariantMap>
-#include <vector>
+#include <QtGui/QRegion>
+#include <memory>
 #include <string>
+#include <vector>
+
+class QQuickWindow;
 
 namespace tinexus::launcher {
 
@@ -33,7 +38,9 @@ class LauncherBridge : public QObject {
 
 public:
     explicit LauncherBridge(QObject* parent = nullptr);
-    ~LauncherBridge() override = default;
+    ~LauncherBridge() override;
+
+    void setLauncherWindow(QQuickWindow* window);
 
     [[nodiscard]] QString query() const { return m_query; }
     [[nodiscard]] int selectedIndex() const { return m_selectedIndex; }
@@ -52,8 +59,10 @@ public:
     Q_INVOKABLE void launchIndex(int idx);
     Q_INVOKABLE void tabComplete();
     Q_INVOKABLE void closeLauncher();
+    Q_INVOKABLE void notifyVisibilityChanged(bool visible);
     Q_INVOKABLE void pinToDock(int idx);
     Q_INVOKABLE void pinToDockByAppId(const QString& appId);
+    Q_INVOKABLE void syncBlurRegion(int x, int y, int width, int height, bool visible = true);
 
     // Test Harness Support
     void setAllApps(const std::vector<LauncherItem>& apps);
@@ -76,9 +85,16 @@ private:
     QString m_query;
     int     m_selectedIndex{0};
     bool    m_reducedMotion{false};
+    bool    m_lastBroadcastVisible{false};
 
     std::vector<LauncherItem> m_allApps;
     std::vector<LauncherItem> m_results;
+
+    struct BlurProtocolState;
+    std::unique_ptr<BlurProtocolState> m_blurState;
+    QPointer<QQuickWindow> m_launcherWindow;
+    QRegion m_lastBlurRegion;
+    bool    m_lastBlurVisible{false};
 };
 
 } // namespace tinexus::launcher

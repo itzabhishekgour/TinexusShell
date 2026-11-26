@@ -382,6 +382,11 @@ void TinexusOutput::frame() {
             }
         }
         wlr_scene_output_send_frame_done(bd_scene_out, &now);
+        if (m_composite_info.overlay_scene) {
+            if (auto* ov_so = wlr_scene_get_scene_output(m_composite_info.overlay_scene, m_output)) {
+                wlr_scene_output_send_frame_done(ov_so, &now);
+            }
+        }
     } else {
         m_was_compositing = true;
         bool committed = false;
@@ -544,17 +549,28 @@ void TinexusOutput::frame() {
 
             if (committed) {
                 wlr_scene_output_send_frame_done(bd_scene_out, &now);
+                if (ov_scene_out) {
+                    wlr_scene_output_send_frame_done(ov_scene_out, &now);
+                }
                 for (auto* sb : ov_ctx.drawn_buffers) {
                     wlr_scene_buffer_send_frame_done(sb, &now);
                 }
             } else {
                 wlr_scene_output_commit(bd_scene_out, nullptr);
                 wlr_scene_output_send_frame_done(bd_scene_out, &now);
+                if (ov_scene_out) {
+                    wlr_scene_output_send_frame_done(ov_scene_out, &now);
+                }
             }
         } else {
             if (out_buffer) wlr_buffer_unlock(out_buffer);
             wlr_scene_output_commit(bd_scene_out, nullptr);
             wlr_scene_output_send_frame_done(bd_scene_out, &now);
+            if (m_composite_info.overlay_scene) {
+                if (auto* ov_so = wlr_scene_get_scene_output(m_composite_info.overlay_scene, m_output)) {
+                    wlr_scene_output_send_frame_done(ov_so, &now);
+                }
+            }
         }
     }
 

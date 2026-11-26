@@ -6,6 +6,7 @@
 // ============================================================================
 import QtQuick
 import QtQuick.Window
+import "../../common/qml"
 
 Window {
     id: rootWindow
@@ -21,15 +22,22 @@ Window {
     onWidthChanged: {
         if (typeof bridge !== "undefined") {
             bridge.updateLayout(width)
-            bridge.updateScreenGeometry(width, Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight : 1080)
+            bridge.updateScreenGeometry(width,
+                                        Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight : 1080,
+                                        Screen.virtualX !== undefined ? Screen.virtualX : 0,
+                                        Screen.virtualY !== undefined ? Screen.virtualY : 0)
         }
     }
     Component.onCompleted: {
         if (typeof bridge !== "undefined") {
             bridge.updateLayout(width)
-            bridge.updateScreenGeometry(width, Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight : 1080)
+            bridge.updateScreenGeometry(width,
+                                        Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight : 1080,
+                                        Screen.virtualX !== undefined ? Screen.virtualX : 0,
+                                        Screen.virtualY !== undefined ? Screen.virtualY : 0)
         }
         syncInputRegion()
+        syncBlurRegion()
         if (rootWindow.autoHide && !rootWindow.mouseInDock) {
             hideDebounceTimer.restart()
         }
@@ -41,11 +49,11 @@ Window {
         readonly property real baseSize:       typeof bridge !== "undefined" ? bridge.baseSize : 48.0
         readonly property real gap:            typeof bridge !== "undefined" ? bridge.gap      : 14.0
         readonly property real dockPad:        typeof bridge !== "undefined" ? bridge.dockPad  : 16.0
-        readonly property real botMargin:      typeof bridge !== "undefined" ? bridge.dockBotMargin : 8.0
+        readonly property real botMargin:      typeof bridge !== "undefined" ? bridge.dockBotMargin : 14.0
         readonly property real pillRadius:     22.0
         readonly property real iconRadius:     11.5
         readonly property real pillHeight:     typeof bridge !== "undefined" ? bridge.pillHeight : 68.0
-        readonly property real windowHeight:   pillHeight + baseSize * 0.85 + 50 // generous headroom for fisheye & floating tooltip
+        readonly property real windowHeight:   pillHeight + baseSize * 0.85 + 64 // headroom for fisheye, tooltip, & bottom shadow
         readonly property real separatorWidth: 1.0
         readonly property real separatorHeight: baseSize * 0.55
     }
@@ -63,8 +71,12 @@ Window {
     // Synchronize native Wayland input region mask to the pill geometry
     function syncInputRegion() {
         if (typeof dockWindow === "undefined" || !dockWindow) return;
-        if (rootWindow.autoHideState === "HIDDEN") {
-            dockWindow.updateInputRegion(0, 0, 0, 0);
+        if (rootWindow.isDraggingIcon) {
+            dockWindow.updateInputRegion(0, 0, Math.ceil(rootWindow.width), Math.ceil(rootWindow.height));
+        } else if (rootWindow.autoHideState === "HIDDEN") {
+            const sx = Math.max(0, Math.floor(rootWindow.pillX));
+            const sw = Math.max(120, Math.ceil(rootWindow.pillWidth));
+            dockWindow.updateInputRegion(sx, Math.max(0, rootWindow.height - 2), sw, 2);
         } else {
             const rx = Math.max(0, Math.floor(rootWindow.pillX - 10));
             const ry = Math.max(0, Math.floor(rootWindow.pillY - dockConstants.baseSize * 0.85 - 25));
@@ -74,11 +86,22 @@ Window {
         }
     }
 
-    onPillWidthChanged: syncInputRegion()
-    onPillXChanged: syncInputRegion()
-    onPillYChanged: syncInputRegion()
-    onAutoHideStateChanged: syncInputRegion()
-    onHeightChanged: syncInputRegion()
+    // Synchronize tight pill Dual-Kawase blur geometry separately from taller hover input region
+    function syncBlurRegion() {
+        if (typeof dockWindow === "undefined" || !dockWindow || typeof dockWindow.updateBlurRegion !== "function") return;
+        const visible = (rootWindow.autoHideState !== "HIDDEN") && (rootWindow.pillWidth > 0);
+        const curY = Math.round(rootWindow.pillY + pillContainer.y);
+        dockWindow.updateBlurRegion(Math.round(rootWindow.pillX), curY,
+                                    Math.round(rootWindow.pillWidth), Math.round(dockConstants.pillHeight),
+                                    dockConstants.pillRadius, visible);
+    }
+
+    onPillWidthChanged: { syncInputRegion(); syncBlurRegion() }
+    onPillXChanged: { syncInputRegion(); syncBlurRegion() }
+    onPillYChanged: { syncInputRegion(); syncBlurRegion() }
+    onAutoHideStateChanged: { syncInputRegion(); syncBlurRegion() }
+    onHeightChanged: { syncInputRegion(); syncBlurRegion() }
+    onIsDraggingIconChanged: { syncInputRegion() }
 
     // ── Auto-Hide State Machine ─────────────────────────────────────────────
     readonly property bool autoHide: typeof bridge !== "undefined" ? bridge.autoHideEnabled : false
@@ -87,13 +110,40 @@ Window {
     // ── Slice 5: Drag Rearrange & Poof State ────────────────────────────────
     property bool   isDraggingIcon:  false
     property int    draggedIndex:    -1
+    property int    dragTargetIndex: -1
     property string draggedAppId:    ""
     property string draggedLabel:    ""
     property string draggedIconType: "terminal"
+    property string draggedIconUrl:  ""
     property real   dragX:           0.0
     property real   dragY:           0.0
     property bool   isPoofCandidate: false
+    property bool   draggedIsRunning: false
     readonly property real poofThresholdPx: 80.0
+
+    function cancelActiveDrag() {
+        if (rootWindow.isDraggingIcon) {
+            rootWindow.isDraggingIcon   = false
+            rootWindow.draggedIndex     = -1
+            rootWindow.dragTargetIndex  = -1
+            rootWindow.isPoofCandidate  = false
+            rootWindow.draggedIsRunning = false
+            rootWindow.dragX            = 0.0
+            rootWindow.dragY            = 0.0
+        }
+    }
+
+    onActiveChanged: {
+        if (!active && rootWindow.isDraggingIcon) {
+            cancelActiveDrag()
+        }
+    }
+
+    Shortcut {
+        sequence: "Escape"
+        enabled: rootWindow.isDraggingIcon
+        onActivated: rootWindow.cancelActiveDrag()
+    }
 
     // Debounce timer (300ms) to prevent flicker on accidental overshoots
     Timer {
@@ -145,7 +195,9 @@ Window {
         MouseArea {
             id: globalHoverArea
             x: Math.max(0, rootWindow.pillX - 10)
-            y: Math.max(0, rootWindow.pillY - dockConstants.baseSize * 0.85 - 25)
+            y: rootWindow.autoHideState === "HIDDEN"
+               ? Math.max(0, rootWindow.height - 4)
+               : Math.max(0, rootWindow.pillY - dockConstants.baseSize * 0.85 - 25)
             width: rootWindow.pillWidth + 20
             height: rootWindow.height - y
             hoverEnabled: true
@@ -202,6 +254,7 @@ Window {
             anchors.right: parent.right
             height:        parent.height
             y:             0
+            onYChanged:    rootWindow.syncBlurRegion()
 
             // ── Auto-Hide States & GPU YAnimator Transitions ────────────────
             states: [
@@ -249,83 +302,23 @@ Window {
                 }
             ]
 
-            // ── Soft Progressive Gaussian Drop Shadow (5 Layers) ───────────
+            // ── LiquidGlass Pill Body (Compositor Blur + MultiEffect Shadow + Specular Rim) ──
             Item {
-                id: pillShadow
-                x:      rootWindow.pillX
-                y:      rootWindow.pillY
-                width:  rootWindow.pillWidth
-                height: dockConstants.pillHeight
-                z: -1
-
-                // Layer 1: Ambient deep core shadow
-                Rectangle {
-                    anchors.centerIn: parent
-                    anchors.verticalCenterOffset: 3
-                    width:  parent.width + 4
-                    height: parent.height + 2
-                    radius: dockConstants.pillRadius + 1
-                    color:  Qt.rgba(0, 0, 0, 0.18)
-                }
-                // Layer 2: Near shadow
-                Rectangle {
-                    anchors.centerIn: parent
-                    anchors.verticalCenterOffset: 6
-                    width:  parent.width + 10
-                    height: parent.height + 4
-                    radius: dockConstants.pillRadius + 3
-                    color:  Qt.rgba(0, 0, 0, 0.12)
-                }
-                // Layer 3: Mid penumbra
-                Rectangle {
-                    anchors.centerIn: parent
-                    anchors.verticalCenterOffset: 10
-                    width:  parent.width + 18
-                    height: parent.height + 6
-                    radius: dockConstants.pillRadius + 6
-                    color:  Qt.rgba(0, 0, 0, 0.08)
-                }
-                // Layer 4: Far soft shadow
-                Rectangle {
-                    anchors.centerIn: parent
-                    anchors.verticalCenterOffset: 15
-                    width:  parent.width + 28
-                    height: parent.height + 8
-                    radius: dockConstants.pillRadius + 10
-                    color:  Qt.rgba(0, 0, 0, 0.045)
-                }
-                // Layer 5: Outer ambient dispersion
-                Rectangle {
-                    anchors.centerIn: parent
-                    anchors.verticalCenterOffset: 22
-                    width:  parent.width + 42
-                    height: parent.height + 12
-                    radius: dockConstants.pillRadius + 14
-                    color:  Qt.rgba(0, 0, 0, 0.02)
-                }
-            }
-
-            // ── LiquidGlass Pill Body ───────────────────────────────────────
-            Rectangle {
                 id: pillBody
                 x:      rootWindow.pillX
                 y:      rootWindow.pillY
                 width:  rootWindow.pillWidth
                 height: dockConstants.pillHeight
-                radius: dockConstants.pillRadius
-                clip:   false
 
-                // Frosted translucent glass base (translucent for desktop backdrop visibility)
-                gradient: Gradient {
-                    orientation: Gradient.Vertical
-                    GradientStop { position: 0.0;  color: Qt.rgba(0.120, 0.135, 0.220, 0.62) }
-                    GradientStop { position: 0.45; color: Qt.rgba(0.080, 0.090, 0.160, 0.68) }
-                    GradientStop { position: 1.0;  color: Qt.rgba(0.045, 0.050, 0.100, 0.76) }
+                LiquidGlass {
+                    id: pillGlass
+                    anchors.fill: parent
+                    materialType: "popover"
+                    cornerRadius: dockConstants.pillRadius
+                    fluidOpacity: 0.62
+                    topSpecularOpacity: 0.24
+                    shadowEnabled: true
                 }
-
-                // Outer glass border
-                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.24)
-                border.width: 1
 
                 // Right-click on pill background invokes dock-level options
                 MouseArea {
@@ -337,39 +330,6 @@ Window {
                         }
                     }
                 }
-            }
-
-            // ── 1px Top-Edge Highlight (glossy macOS-style rim light) ───────
-            Rectangle {
-                x:      rootWindow.pillX + dockConstants.pillRadius
-                y:      rootWindow.pillY + 1
-                width:  rootWindow.pillWidth - 2 * dockConstants.pillRadius
-                height: 1
-                color:  Qt.rgba(1.0, 1.0, 1.0, 0.45)
-                z: 2
-            }
-
-            // Top specular highlight (16% shimmer)
-            Rectangle {
-                x:      rootWindow.pillX + 1
-                y:      rootWindow.pillY + 1
-                width:  rootWindow.pillWidth - 2
-                height: dockConstants.pillHeight * 0.42
-                radius: dockConstants.pillRadius - 1
-                gradient: Gradient {
-                    orientation: Gradient.Vertical
-                    GradientStop { position: 0.0; color: Qt.rgba(1.0, 1.0, 1.0, 0.16) }
-                    GradientStop { position: 1.0; color: Qt.rgba(1.0, 1.0, 1.0, 0.00) }
-                }
-            }
-
-            // Inner bottom edge glow
-            Rectangle {
-                x:      rootWindow.pillX + dockConstants.pillRadius
-                y:      rootWindow.pillY + dockConstants.pillHeight - 2
-                width:  rootWindow.pillWidth - 2 * dockConstants.pillRadius
-                height: 1
-                color:  Qt.rgba(1.0, 1.0, 1.0, 0.08)
             }
 
             // ────────────────────────────────────────────────────────────────
@@ -397,28 +357,45 @@ Window {
                     itemIndex:      index
                     isBeingDragged: rootWindow.isDraggingIcon && rootWindow.draggedIndex === index
 
-                    // Geometry
+                    // Geometry (single unified source of truth from DockBridge spring math)
                     readonly property real baseSize: dockConstants.baseSize
                     baseIconSize: dockConstants.baseSize
+                    externalScale: (!isSep && md.scale !== undefined) ? md.scale : 1.0
                     readonly property real iconSize: baseSize * scaleFactor
                     readonly property real iconBaseY: rootWindow.pillY + 7.0
-                    readonly property real liftY: iconBaseY - (iconSize - baseSize) - (bounceOff * 40.0)
+                    readonly property real liftY: iconBaseY - (iconSize - baseSize) - (bounceOff * 38.0)
 
                     visible: true
-                    x: isSep ? (centerX - dockConstants.separatorWidth / 2.0) : (centerX - iconSize / 2.0)
+                    property real slotShiftX: {
+                        if (!rootWindow.isDraggingIcon || rootWindow.isPoofCandidate || isBeingDragged || isSep) {
+                            return 0.0
+                        }
+                        const fromIdx = rootWindow.draggedIndex
+                        const toIdx = rootWindow.dragTargetIndex
+                        if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return 0.0
+                        const step = dockConstants.baseSize + dockConstants.gap
+                        if (toIdx > fromIdx && index > fromIdx && index <= toIdx) {
+                            return -step
+                        }
+                        if (toIdx < fromIdx && index >= toIdx && index < fromIdx) {
+                            return step
+                        }
+                        return 0.0
+                    }
+                    Behavior on slotShiftX {
+                        SpringAnimation {
+                            spring: 6.0
+                            damping: 0.55
+                            epsilon: 0.5
+                        }
+                    }
+
+                    x: (isSep ? (centerX - dockConstants.separatorWidth / 2.0) : (centerX - iconSize / 2.0)) + slotShiftX
                     y: isSep ? (rootWindow.pillY + (dockConstants.pillHeight - dockConstants.separatorHeight) / 2.0)
                               : liftY
                     width:  isSep ? dockConstants.separatorWidth : iconSize
                     height: isSep ? dockConstants.separatorHeight : iconSize
-
-                    // Smooth gap shifting when neighbor items move
-                    Behavior on x {
-                        enabled: !rootWindow.isDraggingIcon || rootWindow.draggedIndex !== index
-                        NumberAnimation {
-                            duration: 180
-                            easing.type: Easing.OutCubic
-                        }
-                    }
+                    pillFloorY: rootWindow.pillY + dockConstants.pillHeight - 9.0
 
                     // Separator override: thin line
                     Rectangle {
@@ -432,6 +409,7 @@ Window {
                     appId:         md.appId
                     label:         md.label
                     iconType:      md.iconType
+                    iconUrl:       md.iconUrl !== undefined ? md.iconUrl : ""
                     appState:      md.appState
                     isHovered:     typeof bridge !== "undefined" && bridge.hoveredIndex === index && !rootWindow.isDraggingIcon
                     badgeCount:    md.badgeCount !== undefined ? md.badgeCount : 0
@@ -448,17 +426,20 @@ Window {
                         if (typeof bridge !== "undefined") bridge.requestContextMenu(index)
                     }
 
-                    // Slice 5: Drag gesture handlers
+                    // Slice 5: Drag gesture handlers (live visual slot shifting without mid-drag model resets)
                     onDragStarted: function(idx, gx, gy, appId) {
                         if (md.iconType === "separator" || md.iconType === "trash") return
-                        rootWindow.isDraggingIcon  = true
-                        rootWindow.draggedIndex    = idx
-                        rootWindow.draggedAppId    = appId
-                        rootWindow.draggedLabel    = md.label
-                        rootWindow.draggedIconType = md.iconType
-                        rootWindow.dragX           = gx
-                        rootWindow.dragY           = gy
-                        rootWindow.isPoofCandidate = false
+                        rootWindow.isDraggingIcon   = true
+                        rootWindow.draggedIndex     = idx
+                        rootWindow.dragTargetIndex  = idx
+                        rootWindow.draggedAppId     = appId
+                        rootWindow.draggedLabel     = md.label
+                        rootWindow.draggedIconType  = md.iconType
+                        rootWindow.draggedIconUrl   = md.iconUrl !== undefined ? md.iconUrl : ""
+                        rootWindow.draggedIsRunning = Boolean(md.isRunning) || (md.toplevelCount > 0)
+                        rootWindow.dragX            = gx
+                        rootWindow.dragY            = gy
+                        rootWindow.isPoofCandidate  = false
                     }
 
                     onDragMoved: function(gx, gy) {
@@ -466,13 +447,14 @@ Window {
                         rootWindow.dragX = gx
                         rootWindow.dragY = gy
 
-                        // 80px upwards threshold for Poof
-                        if (gy < rootWindow.pillY - rootWindow.poofThresholdPx) {
+                        // 80px upwards threshold for Poof (non-running pinned apps only)
+                        if (!rootWindow.draggedIsRunning && gy < rootWindow.pillY - rootWindow.poofThresholdPx) {
                             rootWindow.isPoofCandidate = true
+                            rootWindow.dragTargetIndex = rootWindow.draggedIndex
                         } else {
                             rootWindow.isPoofCandidate = false
 
-                            // Real-time rearrange among pinned items (before separator)
+                            // Compute live neighbor swap target slot among pinned items (before separator)
                             if (typeof bridge !== "undefined" && bridge.icons) {
                                 let bestIndex = rootWindow.draggedIndex
                                 let bestDist = 999999.0
@@ -485,39 +467,39 @@ Window {
                                         bestIndex = i
                                     }
                                 }
-
-                                if (bestIndex !== rootWindow.draggedIndex && bestIndex >= 0) {
-                                    if (typeof bridge.moveItem === "function") {
-                                        bridge.moveItem(rootWindow.draggedIndex, bestIndex)
-                                    } else if (typeof dockModel !== "undefined" && typeof dockModel.moveItem === "function") {
-                                        dockModel.moveItem(rootWindow.draggedIndex, bestIndex)
-                                    }
-                                    rootWindow.draggedIndex = bestIndex
-                                }
+                                rootWindow.dragTargetIndex = bestIndex
                             }
                         }
                     }
 
                     onDragFinished: function(gx, gy) {
                         if (!rootWindow.isDraggingIcon) return
-                        if (rootWindow.isPoofCandidate) {
-                            poofEffect.trigger(gx, gy, rootWindow.draggedAppId)
-                        } else {
-                            if (typeof bridge !== "undefined" && typeof bridge.commitMove === "function") {
+                        const fromIdx = rootWindow.draggedIndex
+                        const toIdx = rootWindow.dragTargetIndex
+                        const poof = rootWindow.isPoofCandidate
+                        const appId = rootWindow.draggedAppId
+
+                        rootWindow.isDraggingIcon   = false
+                        rootWindow.draggedIndex     = -1
+                        rootWindow.dragTargetIndex  = -1
+                        rootWindow.isPoofCandidate  = false
+                        rootWindow.draggedIsRunning = false
+
+                        if (poof) {
+                            poofEffect.trigger(gx, gy, appId)
+                        } else if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) {
+                            if (typeof bridge !== "undefined" && typeof bridge.moveItem === "function") {
+                                bridge.moveItem(fromIdx, toIdx)
                                 bridge.commitMove()
-                            } else if (typeof dockModel !== "undefined" && typeof dockModel.commitMove === "function") {
+                            } else if (typeof dockModel !== "undefined" && typeof dockModel.moveItem === "function") {
+                                dockModel.moveItem(fromIdx, toIdx)
                                 dockModel.commitMove()
                             }
                         }
-                        rootWindow.isDraggingIcon  = false
-                        rootWindow.draggedIndex    = -1
-                        rootWindow.isPoofCandidate = false
                     }
 
                     onDragCanceled: {
-                        rootWindow.isDraggingIcon  = false
-                        rootWindow.draggedIndex    = -1
-                        rootWindow.isPoofCandidate = false
+                        rootWindow.cancelActiveDrag()
                     }
                 }
             }
@@ -695,8 +677,22 @@ Window {
                     }
                 }
 
+                Image {
+                    id: cloneRealIcon
+                    anchors.centerIn: parent
+                    width:  parent.width * 0.78
+                    height: parent.height * 0.78
+                    source: rootWindow.draggedIconUrl
+                    sourceSize.width: 96
+                    sourceSize.height: 96
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    visible: rootWindow.draggedIconUrl.length > 0 && status === Image.Ready
+                }
+
                 Text {
                     anchors.centerIn: parent
+                    visible: !cloneRealIcon.visible
                     text: {
                         switch (rootWindow.draggedIconType) {
                         case "terminal": return ">_"

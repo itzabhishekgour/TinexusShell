@@ -33,6 +33,7 @@ target_include_directories(tinexus-shell PRIVATE
 
 target_link_libraries(tinexus-shell PRIVATE
     tinexus_common
+    tinexus_protocols_client
     Qt6::Core
     Qt6::Gui
     Qt6::Quick
@@ -40,6 +41,7 @@ target_link_libraries(tinexus-shell PRIVATE
     Qt6::DBus
     Qt6::WaylandClient
     Qt6::Svg
+    wayland-client
     tinexus_warnings
 )
 
@@ -69,12 +71,14 @@ target_include_directories(test-shell-render PRIVATE
 
 target_link_libraries(test-shell-render PRIVATE
     tinexus_common
+    tinexus_protocols_client
     Qt6::Core
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
     Qt6::DBus
     Qt6::Svg
+    wayland-client
     tinexus_warnings
 )
 
@@ -95,12 +99,14 @@ target_include_directories(test-shell-live PRIVATE
 )
 target_link_libraries(test-shell-live PRIVATE
     tinexus_common
+    tinexus_protocols_client
     Qt6::Core
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
     Qt6::DBus
     Qt6::Svg
+    wayland-client
     tinexus_warnings
 )
 set_target_properties(test-shell-live PROPERTIES

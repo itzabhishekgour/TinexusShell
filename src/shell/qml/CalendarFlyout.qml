@@ -65,8 +65,8 @@ Item {
         anchors.fill: parent
         materialType: "popover"
         cornerRadius: 14
-        blurAmount: 24
-        fluidOpacity: 0.90
+        blurAmount: 28
+        fluidOpacity: 0.66
     }
 
     Column {

@@ -437,7 +437,8 @@ void TinexusServer::setup_ipc_connection() {
             uint16_t sub_types[] = {
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_ICON_POSITION),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RESTORE_REQUEST),
-                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS)
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_BLUR_REGION)
             };
             
             for (uint16_t t : sub_types) {
@@ -502,6 +503,15 @@ void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, 
         std::memcpy(safe_app, p->app_id, sizeof(p->app_id));
         if (m_backend && safe_app[0] != '\0') {
             m_backend->update_dock_icon_position(safe_app, p->x, p->y, p->w, p->h);
+        }
+        return;
+    }
+    if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_BLUR_REGION) &&
+        payload_len >= sizeof(DockBlurRegionPayload)) {
+        const auto* p = static_cast<const DockBlurRegionPayload*>(payload);
+        if (m_backend) {
+            m_backend->update_dock_blur_region(p->x, p->y, p->w, p->h,
+                                               p->corner_radius, p->visible != 0);
         }
         return;
     }

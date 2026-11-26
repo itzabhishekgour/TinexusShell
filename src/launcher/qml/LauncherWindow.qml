@@ -10,8 +10,12 @@ import "../../common/qml"
 Window {
     id: rootWindow
 
-    width: 640
-    height: Math.min(540, (searchBox.height + (resultsList.count > 0 ? resultsList.height + 20 : 0) + 36) + 24)
+    readonly property int shadowPad: 24
+    readonly property int cardWidth: 640
+    readonly property int cardHeight: Math.min(540, (searchBox.height + (resultsList.count > 0 ? resultsList.height + 20 : 0) + 36))
+
+    width: cardWidth + shadowPad * 2
+    height: cardHeight + shadowPad * 2
     color: "transparent"
     flags: Qt.FramelessWindowHint
 
@@ -41,6 +45,7 @@ Window {
         searchInput.text = "";
         if (typeof bridge !== "undefined") {
             bridge.query = "";
+            bridge.notifyVisibilityChanged(true);
         }
         Qt.callLater(function() {
             rootWindow.requestActivate();
@@ -54,6 +59,9 @@ Window {
         hasBeenActive = false;
         canDismiss = false;
         activationGraceTimer.stop();
+        if (typeof bridge !== "undefined") {
+            bridge.notifyVisibilityChanged(false);
+        }
         dismissTimer.restart();
     }
 
@@ -79,6 +87,10 @@ Window {
             canDismiss = false;
             activationGraceTimer.stop();
             dismissTimer.stop();
+            if (typeof bridge !== "undefined") {
+                bridge.notifyVisibilityChanged(false);
+                bridge.syncBlurRegion(0, 0, 0, 0, false);
+            }
         }
     }
 
@@ -108,55 +120,75 @@ Window {
     // ── Drop-from-Notch Container with LiquidGlass & Spring Physics ──────
     Item {
         id: container
-        width: parent.width
-        height: parent.height - 24
+        x: rootWindow.shadowPad
+        y: rootWindow.shadowPad
+        width: rootWindow.cardWidth
+        height: rootWindow.cardHeight
         transformOrigin: Item.Top
 
-        // Physical drop from notch: detaches from notch tip (y: -48) and falls down into workspace (y: 12)
-        // while expanding horizontally and vertically (scale: 0.25 -> 1.0)
-        scale: isOpen ? 1.0 : 0.25
-        y: isOpen ? 12 : -48
+        property real animOffsetY: isOpen ? 0.0 : -10.0
+
+        // Critically-damped macOS Spotlight drop & scale settle (0.95 -> 1.0)
+        scale: isOpen ? 1.0 : 0.95
         opacity: isOpen ? 1.0 : 0.0
+        transform: Translate {
+            y: container.animOffsetY
+        }
+
+        function scheduleBlurSync() {
+            Qt.callLater(function() {
+                if (typeof bridge === "undefined" || typeof bridge.syncBlurRegion !== "function") return;
+                const vis = rootWindow.visible && (container.opacity > 0.05);
+                if (!vis) {
+                    bridge.syncBlurRegion(0, 0, 0, 0, false);
+                    return;
+                }
+                const sw = Math.max(1, Math.round(container.width * container.scale));
+                const sh = Math.max(1, Math.round(container.height * container.scale));
+                const sx = Math.round(container.x + (container.width - sw) / 2.0);
+                const sy = Math.round(container.y + container.animOffsetY);
+                bridge.syncBlurRegion(sx, sy, sw, sh, true);
+            });
+        }
+
+        onWidthChanged: scheduleBlurSync()
+        onHeightChanged: scheduleBlurSync()
+        onScaleChanged: scheduleBlurSync()
+        onAnimOffsetYChanged: scheduleBlurSync()
+        onOpacityChanged: scheduleBlurSync()
 
         Behavior on scale {
             SpringAnimation {
-                spring: 3.6
-                damping: 0.28
-                epsilon: 0.005
+                spring: 6.2
+                damping: 0.86
+                epsilon: 0.001
             }
         }
 
-        Behavior on y {
+        Behavior on animOffsetY {
             SpringAnimation {
-                spring: 3.6
-                damping: 0.28
-                epsilon: 0.005
+                spring: 6.2
+                damping: 0.86
+                epsilon: 0.05
             }
         }
 
         Behavior on opacity {
-            SpringAnimation {
-                spring: 3.6
-                damping: 0.28
-                epsilon: 0.005
+            NumberAnimation {
+                duration: 145
+                easing.type: Easing.OutCubic
             }
-        }
-
-        // Outer specular drop shadow
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: -10
-            radius: 28
-            color: Qt.rgba(0, 0, 0, 0.50)
         }
 
         LiquidGlass {
             id: glassBg
             anchors.fill: parent
             materialType: "launcher"
-            cornerRadius: 20
-            blurAmount: 40
-            fluidOpacity: 0.82
+            cornerRadius: 18
+            blurAmount: 36
+            fluidOpacity: 0.68
+            topSpecularOpacity: 0.18
+            shadowEnabled: true
             tintColor: "#14151B"
             fallbackColor: "#14151B"
         }
@@ -242,7 +274,7 @@ Window {
                                 } else if (event.key === Qt.Key_Escape || ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_K)) {
                                     rootWindow.dismissLauncher();
                                     event.accepted = true;
-                                } else if ((event.modifiers & Qt.ControlModifier) && event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
+                                } else if ((event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) && event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
                                     var idx = event.key - Qt.Key_1;
                                     bridge.launchIndex(idx);
                                     event.accepted = true;
@@ -278,6 +310,7 @@ Window {
                 spacing: 4
                 model: typeof bridge !== "undefined" ? bridge.results : []
                 currentIndex: typeof bridge !== "undefined" ? bridge.selectedIndex : 0
+                onCountChanged: container.scheduleBlurSync()
 
                 ScrollBar.vertical: ScrollBar {
                     policy: resultsList.contentHeight > resultsList.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
@@ -312,32 +345,48 @@ Window {
                         anchors.rightMargin: 12
                         spacing: 12
 
-                        // Icon Glyph
-                        Rectangle {
-                            width: 32
-                            height: 32
-                            radius: 8
+                        // Real App Icon (Papirus via image://tinexus/) with crisp fallback
+                        Item {
+                            width: 34
+                            height: 34
                             anchors.verticalCenter: parent.verticalCenter
-                            color: {
-                                if (modelData.kind === "Calculator") return "#FF9F0A";
-                                if (modelData.kind === "Store") return "#30B0C7";
-                                if (modelData.name.indexOf("Firefox") !== -1) return "#EA580C";
-                                return isSelected ? Qt.rgba(1, 1, 1, 0.25) : "#252834";
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 9
+                                visible: !launcherRealIcon.visible
+                                color: {
+                                    if (modelData.kind === "Calculator") return "#FF9F0A";
+                                    if (modelData.kind === "Store") return "#30B0C7";
+                                    if (modelData.name.indexOf("Firefox") !== -1) return "#EA580C";
+                                    return isSelected ? Qt.rgba(1, 1, 1, 0.25) : "#252834";
+                                }
+                            }
+
+                            Image {
+                                id: launcherRealIcon
+                                anchors.centerIn: parent
+                                width: 30
+                                height: 30
+                                source: (modelData.kind !== "Calculator" && modelData.iconUrl) ? modelData.iconUrl : ""
+                                sourceSize.width: 64
+                                sourceSize.height: 64
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
+                                visible: source.toString().length > 0 && status === Image.Ready
                             }
 
                             Text {
                                 anchors.centerIn: parent
+                                visible: !launcherRealIcon.visible
                                 text: {
                                     if (modelData.kind === "Calculator") return "=";
-                                    if (modelData.kind === "Store") return "🛒";
-                                    if (modelData.name.indexOf("Firefox") !== -1) return "🌐";
+                                    if (modelData.kind === "Store") return "S";
                                     if (modelData.name.indexOf("Terminal") !== -1) return ">_";
-                                    if (modelData.name.indexOf("Files") !== -1) return "📁";
-                                    if (modelData.name.indexOf("Settings") !== -1) return "⚙";
-                                    if (modelData.name.indexOf("Monitor") !== -1) return "📊";
-                                    return "📦";
+                                    return modelData.name.length > 0 ? modelData.name.substring(0, 1).toUpperCase() : "A";
                                 }
                                 color: "#FFFFFF"
+                                font.family: "Inter"
                                 font.bold: true
                                 font.pixelSize: 14
                             }
@@ -346,12 +395,13 @@ Window {
                         // Text Column
                         Column {
                             anchors.verticalCenter: parent.verticalCenter
-                            width: parent.width - 120
+                            width: parent.width - 178
                             spacing: 2
 
                             Text {
                                 text: modelData.name
                                 color: "#FFFFFF"
+                                font.family: "Inter"
                                 font.pixelSize: 14
                                 font.bold: true
                                 elide: Text.ElideRight
@@ -361,32 +411,51 @@ Window {
                             Text {
                                 text: modelData.description
                                 color: isSelected ? Qt.rgba(1, 1, 1, 0.85) : Qt.rgba(1, 1, 1, 0.50)
+                                font.family: "Inter"
                                 font.pixelSize: 11
                                 elide: Text.ElideRight
                                 width: parent.width
                             }
                         }
 
-                        // Right Badges (Pin button + ⌘1..9/Enter badge)
-                        Item {
-                            width: 80
-                            height: parent.height
+                        // Right Badges (Pin button + Alt+1..9 / Enter badge)
+                        Row {
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 6
 
                             Rectangle {
                                 id: pinBtn
-                                anchors.right: badgeRect.left
-                                anchors.rightMargin: 6
+                                width: 22
+                                height: 22
+                                radius: 6
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 24
-                                height: 20
-                                radius: 4
                                 visible: (rowMouse.containsMouse || isSelected) && modelData.kind !== "Calculator" && modelData.kind !== "Store"
-                                color: pinMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.32) : Qt.rgba(1, 1, 1, 0.14)
+                                color: pinMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.28) : Qt.rgba(1, 1, 1, 0.14)
+                                border.color: Qt.rgba(1, 1, 1, 0.16)
+                                border.width: 1
 
-                                Text {
+                                // Crisp geometric pin glyph (avoids missing emoji glyphs)
+                                Item {
                                     anchors.centerIn: parent
-                                    text: "📌"
-                                    font.pixelSize: 11
+                                    width: 10
+                                    height: 12
+
+                                    Rectangle {
+                                        x: 2; y: 1; width: 6; height: 2; radius: 1
+                                        color: "#FFFFFF"
+                                    }
+                                    Rectangle {
+                                        x: 3; y: 3; width: 4; height: 4
+                                        color: Qt.rgba(1, 1, 1, 0.85)
+                                    }
+                                    Rectangle {
+                                        x: 1; y: 7; width: 8; height: 1.5; radius: 0.75
+                                        color: "#FFFFFF"
+                                    }
+                                    Rectangle {
+                                        x: 4.5; y: 8.5; width: 1.2; height: 3; radius: 0.6
+                                        color: "#FFFFFF"
+                                    }
                                 }
 
                                 MouseArea {
@@ -404,19 +473,24 @@ Window {
 
                             Rectangle {
                                 id: badgeRect
-                                anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: index < 9 ? 24 : 48
-                                height: 20
-                                radius: 4
-                                color: isSelected ? Qt.rgba(1, 1, 1, 0.22) : Qt.rgba(1, 1, 1, 0.08)
+                                width: Math.max(index < 9 ? 44 : 58, badgeText.implicitWidth + 12)
+                                height: 22
+                                radius: 6
+                                color: isSelected ? Qt.rgba(1, 1, 1, 0.24) : Qt.rgba(1, 1, 1, 0.10)
+                                border.color: Qt.rgba(1, 1, 1, isSelected ? 0.28 : 0.12)
+                                border.width: 1
 
                                 Text {
+                                    id: badgeText
                                     anchors.centerIn: parent
-                                    text: index < 9 ? ("⌘" + (index + 1)) : "Enter"
-                                    color: isSelected ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.60)
+                                    text: index < 9 ? ("Alt+" + (index + 1)) : (isSelected ? "↵ Enter" : "Enter")
+                                    color: isSelected ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.72)
+                                    font.family: "JetBrains Mono"
                                     font.pixelSize: 10
-                                    font.bold: true
+                                    font.weight: Font.DemiBold
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
                                 }
                             }
                         }

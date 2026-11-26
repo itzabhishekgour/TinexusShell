@@ -7,6 +7,7 @@
 #include <common/RuntimePaths.hpp>
 #include <common/AppId.hpp>
 #include <common/logger.hpp>
+#include <common/ui/WaylandBlurHelper.hpp>
 
 #include <QtCore/QProcess>
 #include <QtCore/QFileInfo>
@@ -15,6 +16,8 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QMetaObject>
 #include <QtCore/QPointer>
+#include <QtGui/QGuiApplication>
+#include <QtQuick/QQuickWindow>
 #include <QtNetwork/QLocalSocket>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusConnection>
@@ -22,17 +25,23 @@
 #include <sys/reboot.h>
 #include <linux/reboot.h>
 #include <unistd.h>
+#include <cctype>
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <sstream>
 #include <thread>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
 namespace tinexus::shell {
 
+struct ShellBridge::BlurProtocolState : public tinexus::common::ui::WaylandBlurHelper {};
+
 ShellBridge::ShellBridge(QObject* parent)
     : QObject(parent)
+    , m_blurState(std::make_unique<BlurProtocolState>())
 {
     // Initialize fast lightweight defaults for immediate zero-lag mapping
     m_volume = 75;
@@ -113,8 +122,61 @@ ShellBridge::ShellBridge(QObject* parent)
     connect(&m_audioTimer, &QTimer::timeout, this, &ShellBridge::syncAudioState);
     m_audioTimer.start(8000);
 
+    m_volumeApplyTimer.setSingleShot(true);
+    m_volumeApplyTimer.setInterval(40);
+    connect(&m_volumeApplyTimer, &QTimer::timeout, this, [this]() {
+        if (m_pendingVolume < 0 || m_audioWriting->exchange(true)) {
+            if (m_pendingVolume >= 0 && !m_volumeApplyTimer.isActive()) {
+                m_volumeApplyTimer.start(40);
+            }
+            return;
+        }
+        const int targetVol = m_pendingVolume;
+        m_pendingVolume = -1;
+        QPointer<ShellBridge> self(this);
+        auto writingFlag = m_audioWriting;
+        std::thread([self, writingFlag, targetVol]() {
+            hardware::AudioUtils::set_volume_percent(targetVol, /*persist=*/true, /*throttle=*/false);
+            const int actualVol = hardware::AudioUtils::get_volume_percent();
+            const bool actualMuted = hardware::AudioUtils::is_muted() || (actualVol == 0);
+            if (!self) {
+                writingFlag->store(false);
+                return;
+            }
+            QMetaObject::invokeMethod(self, [self, writingFlag, actualVol, actualMuted]() {
+                writingFlag->store(false);
+                if (!self) return;
+                if (self->m_pendingVolume >= 0) {
+                    self->m_volumeApplyTimer.start(0);
+                    return;
+                }
+                if (self->m_volume != actualVol || self->m_soundMuted != actualMuted) {
+                    self->m_volume = actualVol;
+                    self->m_soundMuted = actualMuted;
+                    emit self->volumeChanged();
+                }
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
+
     m_toastTimer.setSingleShot(true);
     connect(&m_toastTimer, &QTimer::timeout, this, &ShellBridge::dismissToast);
+}
+
+ShellBridge::~ShellBridge() = default;
+
+void ShellBridge::setShellWindow(QQuickWindow* window) {
+    m_shellWindow = window;
+}
+
+void ShellBridge::syncBlurRegion(const QRegion& region) {
+    m_lastBlurRegion = region;
+    if (!m_blurState) return;
+    m_blurState->applyToWindow(m_shellWindow, m_blurEnabled, region);
+}
+
+void ShellBridge::syncOverlayGeometry() {
+    emit overlayGeometrySyncRequested();
 }
 
 void ShellBridge::resolveLogoUrl() {
@@ -147,8 +209,10 @@ void ShellBridge::scanApplications() {
     struct DesktopEntryRaw {
         std::string name;
         std::string exec;
+        std::string exec_key;
         std::string icon;
         std::string comment;
+        bool is_tinexus{false};
     };
 
     QPointer<ShellBridge> self(this);
@@ -156,33 +220,132 @@ void ShellBridge::scanApplications() {
 
     std::thread([self, scanningFlag]() {
         std::vector<DesktopEntryRaw> scanned;
+        std::unordered_set<std::string> seen_canonical_paths;
+
         const std::vector<std::string> dirs = {
             "/usr/share/applications",
             "/usr/local/share/applications"
         };
 
-        auto isDupName = [&scanned](const std::string& name) {
-            for (const auto& existing : scanned) {
-                if (existing.name == name) return true;
+        auto to_lower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+
+        auto list_contains_ci = [&](const std::string& semi_list, const char* target) {
+            std::string tgt = to_lower(target);
+            std::stringstream ss(semi_list);
+            std::string tok;
+            while (std::getline(ss, tok, ';')) {
+                while (!tok.empty() && tok.front() == ' ') tok.erase(tok.begin());
+                while (!tok.empty() && tok.back() == ' ') tok.pop_back();
+                if (to_lower(tok) == tgt) return true;
             }
             return false;
+        };
+
+        auto is_executable_available = [](const std::string& bin) {
+            if (bin.empty()) return false;
+            if (bin.find('/') != std::string::npos) {
+                return ::access(bin.c_str(), X_OK) == 0;
+            }
+            const char* path_env = std::getenv("PATH");
+            if (!path_env) path_env = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+            std::stringstream ss(path_env);
+            std::string dir;
+            while (std::getline(ss, dir, ':')) {
+                if (dir.empty()) continue;
+                std::string full = dir + "/" + bin;
+                if (::access(full.c_str(), X_OK) == 0) return true;
+            }
+            return false;
+        };
+
+        auto normalize_exec_key = [&](const std::string& raw_exec) {
+            std::string cleaned;
+            cleaned.reserve(raw_exec.size());
+            for (char c : raw_exec) {
+                if (c != '"' && c != '\'') cleaned.push_back(c);
+            }
+            std::istringstream iss(cleaned);
+            std::string tok;
+            while (iss >> tok) {
+                std::string low = to_lower(tok);
+                if (low == "env" || low == "sudo" || low == "pkexec" ||
+                    low == "sh" || low == "/bin/sh" || low == "bash" || low == "/bin/bash" ||
+                    low == "-c" || low == "-e") {
+                    continue;
+                }
+                if (!low.empty() && low[0] == '-') continue;
+                if (tok.find('=') != std::string::npos) continue;
+                auto slash = low.find_last_of('/');
+                if (slash != std::string::npos) low = low.substr(slash + 1);
+                return low;
+            }
+            return std::string{};
+        };
+
+        auto is_hidden_desktop_id = [](const std::string& filename) {
+            static const std::unordered_set<std::string> kHiddenIds = {
+                "tinexus-dock.desktop",
+                "tinexus-app-installer.desktop",
+                "footclient.desktop",
+                "foot-server.desktop",
+                "org.freedesktop.Xwayland.desktop",
+                "org.kde.kded6.desktop",
+                "org.kde.kiod6.desktop",
+                "org.kde.ksecretd.desktop",
+                "ktelnetservice6.desktop",
+                "python3.14.desktop"
+            };
+            return kHiddenIds.find(filename) != kHiddenIds.end();
         };
 
         for (const auto& d : dirs) {
             std::error_code ec;
             if (!fs::exists(d, ec)) continue;
             try {
+                std::vector<fs::directory_entry> dir_entries;
                 for (const auto& entry : fs::directory_iterator(d, ec)) {
-                    if (!entry.is_regular_file() || entry.path().extension() != ".desktop") continue;
+                    dir_entries.push_back(entry);
+                }
+                // Process tinexus-*.desktop entries before third-party entries so branded
+                // entries (e.g. tinexus-installer) win deduplication over upstream wrappers.
+                std::sort(dir_entries.begin(), dir_entries.end(),
+                          [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                              std::string fa = a.path().filename().string();
+                              std::string fb = b.path().filename().string();
+                              bool ta = fa.rfind("tinexus-", 0) == 0;
+                              bool tb = fb.rfind("tinexus-", 0) == 0;
+                              if (ta != tb) return ta;
+                              return fa < fb;
+                          });
+
+                for (const auto& entry : dir_entries) {
+                    if (!entry.is_regular_file(ec) || entry.path().extension() != ".desktop") continue;
+                    const std::string base_id = entry.path().filename().string();
+                    if (is_hidden_desktop_id(base_id)) continue;
+
+                    std::error_code canon_ec;
+                    fs::path canon = fs::canonical(entry.path(), canon_ec);
+                    std::string canon_str = canon_ec ? entry.path().string() : canon.string();
+                    if (!seen_canonical_paths.insert(canon_str).second) continue;
+
                     std::ifstream f(entry.path());
                     if (!f.is_open()) continue;
 
                     std::string line;
                     std::string name;
                     std::string exec;
+                    std::string try_exec;
                     std::string icon;
                     std::string comment;
+                    std::string type;
+                    std::string only_show_in;
+                    std::string not_show_in;
                     bool no_display = false;
+                    bool hidden = false;
                     bool is_desktop_entry = false;
 
                     while (std::getline(f, line)) {
@@ -195,16 +358,30 @@ void ShellBridge::scanApplications() {
                             name = line.substr(5);
                         } else if (line.rfind("Exec=", 0) == 0 && exec.empty()) {
                             exec = line.substr(5);
+                        } else if (line.rfind("TryExec=", 0) == 0 && try_exec.empty()) {
+                            try_exec = line.substr(8);
                         } else if (line.rfind("Icon=", 0) == 0 && icon.empty()) {
                             icon = line.substr(5);
                         } else if (line.rfind("Comment=", 0) == 0 && comment.empty()) {
                             comment = line.substr(8);
-                        } else if (line == "NoDisplay=true") {
+                        } else if (line.rfind("Type=", 0) == 0 && type.empty()) {
+                            type = line.substr(5);
+                        } else if (line.rfind("OnlyShowIn=", 0) == 0 && only_show_in.empty()) {
+                            only_show_in = line.substr(11);
+                        } else if (line.rfind("NotShowIn=", 0) == 0 && not_show_in.empty()) {
+                            not_show_in = line.substr(10);
+                        } else if (line == "NoDisplay=true" || line == "NoDisplay=1") {
                             no_display = true;
+                        } else if (line == "Hidden=true" || line == "Hidden=1") {
+                            hidden = true;
                         }
                     }
 
-                    if (no_display || name.empty() || exec.empty()) continue;
+                    if (no_display || hidden || name.empty() || exec.empty()) continue;
+                    if (!type.empty() && type != "Application") continue;
+                    if (!only_show_in.empty() && !list_contains_ci(only_show_in, "Tinexus")) continue;
+                    if (!not_show_in.empty() && list_contains_ci(not_show_in, "Tinexus")) continue;
+                    if (!try_exec.empty() && !is_executable_available(try_exec)) continue;
 
                     size_t pct = exec.find('%');
                     while (pct != std::string::npos) {
@@ -217,17 +394,33 @@ void ShellBridge::scanApplications() {
                     }
                     while (!exec.empty() && exec.back() == ' ') exec.pop_back();
 
-                    if (isDupName(name)) continue;
-                    scanned.push_back({std::move(name), std::move(exec), std::move(icon), std::move(comment)});
+                    const std::string name_low = to_lower(name);
+                    const std::string exec_key = normalize_exec_key(exec);
+                    const bool is_tinexus_entry = (base_id.rfind("tinexus-", 0) == 0);
+
+                    bool dup = false;
+                    for (auto& existing : scanned) {
+                        if (to_lower(existing.name) == name_low ||
+                            (!exec_key.empty() && existing.exec_key == exec_key)) {
+                            if (is_tinexus_entry && !existing.is_tinexus) {
+                                existing = {name, exec, exec_key, icon, comment, true};
+                            }
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (dup) continue;
+
+                    scanned.push_back({std::move(name), std::move(exec), std::move(exec_key),
+                                       std::move(icon), std::move(comment), is_tinexus_entry});
                 }
             } catch (...) {}
         }
 
         bool has_firefox = false;
         for (const auto& existing : scanned) {
-            std::string lower = existing.name;
-            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            if (lower.find("firefox") != std::string::npos) {
+            if (to_lower(existing.name).find("firefox") != std::string::npos ||
+                existing.exec_key == "firefox") {
                 has_firefox = true;
                 break;
             }
@@ -238,7 +431,9 @@ void ShellBridge::scanApplications() {
                 "Firefox",
                 "env MOZ_ENABLE_WAYLAND=1 firefox",
                 "firefox",
-                "Mozilla Firefox Web Browser"
+                "firefox",
+                "Mozilla Firefox Web Browser",
+                false
             });
         }
 
@@ -366,18 +561,38 @@ void ShellBridge::updateClock() {
 
 void ShellBridge::setVolume(int vol) {
     vol = std::clamp(vol, 0, 100);
-    hardware::AudioUtils::set_volume_percent(vol, /*persist=*/true);
-    m_volume = hardware::AudioUtils::get_volume_percent();
-    m_soundMuted = hardware::AudioUtils::is_muted() || (m_volume == 0);
-    emit volumeChanged();
+    const bool newMuted = (vol == 0);
+    if (m_volume != vol || m_soundMuted != newMuted) {
+        m_volume = vol;
+        m_soundMuted = newMuted;
+        emit volumeChanged();
+    }
+    m_pendingVolume = vol;
+    if (!m_volumeApplyTimer.isActive()) {
+        m_volumeApplyTimer.start(40);
+    }
 }
 
 void ShellBridge::setSoundMuted(bool muted) {
-    if (hardware::AudioUtils::is_muted() != muted) {
-        hardware::AudioUtils::toggle_mute(/*persist=*/true);
+    if (m_soundMuted != muted) {
+        m_soundMuted = muted;
+        emit volumeChanged();
     }
-    m_soundMuted = hardware::AudioUtils::is_muted();
-    emit volumeChanged();
+    QPointer<ShellBridge> self(this);
+    std::thread([self, muted]() {
+        if (hardware::AudioUtils::is_muted() != muted) {
+            hardware::AudioUtils::toggle_mute(/*persist=*/true);
+        }
+        const bool actualMuted = hardware::AudioUtils::is_muted();
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, actualMuted]() {
+            if (!self) return;
+            if (self->m_soundMuted != actualMuted) {
+                self->m_soundMuted = actualMuted;
+                emit self->volumeChanged();
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 void ShellBridge::setBrightness(int bri) {
@@ -446,13 +661,7 @@ void ShellBridge::setNotificationsOpen(bool open) {
 void ShellBridge::setVolumeFlyoutOpen(bool open) {
     if (open) {
         closeAllFlyouts();
-        int cur_vol = hardware::AudioUtils::get_volume_percent();
-        bool cur_muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
-        if (m_volume != cur_vol || m_soundMuted != cur_muted) {
-            m_volume = cur_vol;
-            m_soundMuted = cur_muted;
-            emit volumeChanged();
-        }
+        syncAudioState();
     }
     m_volumeFlyoutOpen = open;
     emit flyoutStateChanged();
@@ -507,6 +716,9 @@ void ShellBridge::toggleNotifications() {
 void ShellBridge::toggleVolume() {
     bool next = !m_volumeFlyoutOpen;
     closeAllFlyouts();
+    if (next) {
+        syncAudioState();
+    }
     m_volumeFlyoutOpen = next;
     emit flyoutStateChanged();
 }
@@ -662,7 +874,10 @@ void ShellBridge::powerSleep() {
 }
 
 void ShellBridge::requestBlur(bool enable, int radius) {
-    tinexus::log::info("[Shell] Surface requested compositor backdrop blur: enable={}, radius={}", enable, radius);
+    m_blurEnabled = enable;
+    m_blurRadius = radius;
+    tinexus::log::debug("[Shell] Surface requested compositor backdrop blur: enable={}, radius={}", enable, radius);
+    syncBlurRegion(m_lastBlurRegion);
 }
 
 void ShellBridge::setNotchExpanded(bool exp) {

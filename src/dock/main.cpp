@@ -11,6 +11,7 @@
 #include "dock/StacksModel.hpp"
 #include "dock/StacksPopup.hpp"
 #include "dock/DockIpcClient.hpp"
+#include "dock/DockIconProvider.hpp"
 #include <common/logger.hpp>
 #include <common/RuntimePaths.hpp>
 #include <common/SingleInstance.hpp>
@@ -126,6 +127,7 @@ int main(int argc, char* argv[]) {
 
     // ── QML Engine ───────────────────────────────────────────────────────────
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("tinexus"), new tinexus::dock::DockIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"),      &bridge);
     engine.rootContext()->setContextProperty(QStringLiteral("dockModel"),   &dockModel);
     engine.rootContext()->setContextProperty(QStringLiteral("tracker"),     &tracker);

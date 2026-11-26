@@ -118,21 +118,8 @@ std::string run_cmd_output(const char* bin, const std::vector<std::string>& args
 }
 
 void run_cmd_async(const char* bin, const std::vector<std::string>& args) {
-    if (!fs::exists(bin)) return;
-    pid_t pid = fork();
-    if (pid == 0) {
-        std::vector<char*> c_args;
-        c_args.push_back(const_cast<char*>(bin));
-        for (const auto& a : args) {
-            c_args.push_back(const_cast<char*>(a.c_str()));
-        }
-        c_args.push_back(nullptr);
-        execv(bin, c_args.data());
-        _exit(127);
-    } else if (pid > 0) {
-        int status = 0;
-        waitpid(pid, &status, 0);
-    }
+    // Bounded subprocess execution so hung audio daemons never block callers forever.
+    (void)run_cmd_output(bin, args, 250);
 }
 } // namespace
 

@@ -35,6 +35,24 @@ private:
     DockWindow* m_owner{nullptr};
 };
 
+class MainWindowLeaveFilter : public QObject {
+public:
+    explicit MainWindowLeaveFilter(DockWindow* owner) : QObject(owner), m_owner(owner) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Leave || event->type() == QEvent::HoverLeave) {
+            if (m_owner) {
+                emit m_owner->pointerLeft();
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    DockWindow* m_owner{nullptr};
+};
+
 DockWindow::DockWindow(QObject* parent)
     : QObject(parent)
 {
@@ -60,6 +78,7 @@ bool DockWindow::init(QQuickWindow* mainWindow, QQmlApplicationEngine* engine, i
 
     setupMainWindowLayerShell();
     setupTripwireWindow(engine);
+    m_mainWindow->installEventFilter(new MainWindowLeaveFilter(this));
 
     tinexus::log::info("[DockWindow] Initialized successfully. BaseExclusiveZone={}", m_baseExclusiveZone);
     return true;
@@ -243,22 +262,34 @@ void DockWindow::updateInputRegion(int x, int y, int width, int height) {
     if (!m_mainWindow) return;
 
     if (m_autoHideState == AutoHideState::Hidden || width <= 0 || height <= 0) {
-        // Wayland protocol: passing empty wl_region to wl_surface.set_input_region
-        // makes surface accept no pointer events. Qt's setMask(QRegion()) calls
-        // set_input_region(nullptr) which resets to infinite/full window.
-        // Therefore, we pass a 1x1 offscreen pixel region to guarantee total pass-through.
-        const int offscreenY = m_mainWindow->height() > 0 ? (m_mainWindow->height() + 50) : 2000;
-        const QRect offscreen(0, offscreenY, 1, 1);
-        m_mainWindow->setMask(QRegion(offscreen));
-        tinexus::log::info("[DockWindow] Wayland input region set to pass-through (offscreen 1x1 at y={})", offscreenY);
+        // Keep a bottom 2px hover/reveal strip interactive at all times so
+        // wl_surface.set_input_region never collapses to an empty (0,0,0,0) or offscreen mask.
+        const int winW = m_mainWindow->width() > 0 ? m_mainWindow->width() : 1920;
+        const int winH = m_mainWindow->height() > 0 ? m_mainWindow->height() : 140;
+        const int stripW = width > 0 ? std::min(winW, width) : std::min(winW, 420);
+        const int stripX = width > 0 ? std::clamp(x, 0, std::max(0, winW - stripW)) : std::max(0, (winW - stripW) / 2);
+        const QRect revealStrip(stripX, std::max(0, winH - 2), std::max(1, stripW), 2);
+        if (m_inputRegionRect != revealStrip) {
+            m_inputRegionRect = revealStrip;
+            m_mainWindow->setMask(QRegion(revealStrip));
+            tinexus::log::debug("[DockWindow] Wayland input region set to bottom reveal strip: QRect(x={} y={} w={} h={})",
+                                revealStrip.x(), revealStrip.y(), revealStrip.width(), revealStrip.height());
+        }
         return;
     }
 
     const QRect rect(x, y, width, height);
-    m_inputRegionRect = rect;
-    m_mainWindow->setMask(QRegion(rect));
-    tinexus::log::info("[DockWindow] Wayland input region mask updated: QRect(x={} y={} w={} h={})",
-                       x, y, width, height);
+    if (m_inputRegionRect != rect) {
+        m_inputRegionRect = rect;
+        m_mainWindow->setMask(QRegion(rect));
+        tinexus::log::debug("[DockWindow] Wayland input region mask updated: QRect(x={} y={} w={} h={})",
+                            x, y, width, height);
+    }
+}
+
+void DockWindow::updateBlurRegion(int x, int y, int width, int height, double cornerRadius, bool visible) {
+    emit blurRegionUpdated(x, y, width, height, cornerRadius,
+                           visible && (m_autoHideState != AutoHideState::Hidden) && width > 0 && height > 0);
 }
 
 void DockWindow::requestHide() {

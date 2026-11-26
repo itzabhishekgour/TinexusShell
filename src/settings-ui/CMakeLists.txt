@@ -1,7 +1,7 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
 
-find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 DBus QUIET)
+find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 DBus Svg QUIET)
 
 if(Qt6_FOUND)
     set(SETTINGS_CONTROLLER_SRCS
@@ -40,6 +40,7 @@ if(Qt6_FOUND)
         Qt6::Qml
         Qt6::QuickControls2
         Qt6::DBus
+        Qt6::Svg
         tinexus_common
         tinexus_warnings
         tinexus-guard

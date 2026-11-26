@@ -8,15 +8,17 @@ import "../../common/qml"
 
 Item {
     id: root
+    readonly property int notifCount: (typeof bridge !== "undefined" && bridge.notifications)
+                                      ? bridge.notifications.length : 0
     width: 360
-    height: Math.max(160, Math.min(420, headerRow.height + 24 + (cardsColumn.implicitHeight > 0 ? cardsColumn.implicitHeight : 100)))
+    height: notifCount > 0 ? Math.min(410, 77 + (notifCount * 70)) : 178
 
     LiquidGlass {
         id: flyoutBg
         anchors.fill: parent
         materialType: "popover"
-        cornerRadius: 16
-        fluidOpacity: 0.88
+        cornerRadius: 14
+        fluidOpacity: 0.66
     }
 
     Column {
@@ -102,12 +104,19 @@ Item {
             }
         }
 
+        // ── Header Divider Line ──────────────────────────────────────
+        Rectangle {
+            width: parent.width
+            height: 1
+            color: Qt.rgba(1, 1, 1, 0.09)
+        }
+
         // ── Notification Cards Column ────────────────────────────────
         Column {
             id: cardsColumn
             width: parent.width
-            spacing: 8
-            visible: typeof bridge !== "undefined" && bridge.notifications && bridge.notifications.length > 0
+            spacing: 6
+            visible: root.notifCount > 0
 
             Repeater {
                 model: typeof bridge !== "undefined" ? bridge.notifications : []
@@ -116,13 +125,15 @@ Item {
                     id: cardItem
                     width: cardsColumn.width
                     height: 64
-                    radius: 12
-                    color: cardMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.09) : Qt.rgba(1, 1, 1, 0.05)
-                    border.color: cardMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(1, 1, 1, 0.08)
-                    border.width: 1
+                    radius: 10
+                    color: cardMouse.containsMouse
+                           ? Qt.rgba(1, 1, 1, 0.12)
+                           : Qt.rgba(1, 1, 1, 0.05)
+                    border.color: Qt.rgba(1, 1, 1, 0.14)
+                    border.width: cardMouse.containsMouse ? 1 : 0
 
                     Behavior on color {
-                        ColorAnimation { duration: 120 }
+                        ColorAnimation { duration: 110 }
                     }
 
                     Row {
@@ -131,103 +142,103 @@ Item {
                         anchors.rightMargin: 10
                         spacing: 10
 
-                        // App Icon Badge (36x36)
-                        Rectangle {
-                            width: 36
-                            height: 36
-                            radius: 9
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: Qt.rgba(0, 0, 0, 0.30)
-                            border.color: Qt.rgba(1, 1, 1, 0.10)
+                            // App Icon Badge (36x36)
+                            Rectangle {
+                                width: 36
+                                height: 36
+                                radius: 9
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: Qt.rgba(0, 0, 0, 0.30)
+                                border.color: Qt.rgba(1, 1, 1, 0.10)
 
-                            Image {
-                                anchors.centerIn: parent
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 20
+                                    height: 20
+                                    source: (modelData.icon && modelData.icon.length > 0)
+                                            ? ("image://icon/" + modelData.icon + "?color=#38BDF8")
+                                            : "image://icon/dialog-information-symbolic?color=#38BDF8"
+                                    fillMode: Image.PreserveAspectFit
+                                }
+                            }
+
+                            // Content (Title, Timestamp, Message Body)
+                            Column {
+                                width: parent.width - 56 - (cardMouse.containsMouse ? 24 : 0)
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 3
+
+                                Row {
+                                    width: parent.width
+                                    spacing: 6
+
+                                    Text {
+                                        text: modelData.title || "System"
+                                        color: "#FFFFFF"
+                                        font.family: "Inter"
+                                        font.pixelSize: 12
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                        width: Math.min(implicitWidth, parent.width - 60)
+                                    }
+
+                                    Text {
+                                        text: "• " + (modelData.time || "Just now")
+                                        color: Qt.rgba(1, 1, 1, 0.40)
+                                        font.family: "Inter"
+                                        font.pixelSize: 10
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                Text {
+                                    text: modelData.message || ""
+                                    color: Qt.rgba(1, 1, 1, 0.75)
+                                    font.family: "Inter"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Normal
+                                    elide: Text.ElideRight
+                                    width: parent.width
+                                }
+                            }
+
+                            // Dismiss 'x' action button (visible on card hover)
+                            Rectangle {
                                 width: 20
                                 height: 20
-                                source: (modelData.icon && modelData.icon.length > 0)
-                                        ? ("image://icon/" + modelData.icon + "?color=#38BDF8")
-                                        : "image://icon/dialog-information-symbolic?color=#38BDF8"
-                                fillMode: Image.PreserveAspectFit
-                            }
-                        }
+                                radius: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: dismissMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.20) : "transparent"
+                                visible: cardMouse.containsMouse
 
-                        // Content (Title, Timestamp, Message Body)
-                        Column {
-                            width: parent.width - 56 - (cardMouse.containsMouse ? 24 : 0)
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 3
-
-                            Row {
-                                width: parent.width
-                                spacing: 6
-
-                                Text {
-                                    text: modelData.title || "System"
-                                    color: "#FFFFFF"
-                                    font.family: "Inter"
-                                    font.pixelSize: 12
-                                    font.weight: Font.DemiBold
-                                    elide: Text.ElideRight
-                                    width: Math.min(implicitWidth, parent.width - 60)
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 10
+                                    height: 10
+                                    source: "image://icon/window-close-symbolic?color=" +
+                                            (dismissMouse.containsMouse ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.60).toString())
+                                    fillMode: Image.PreserveAspectFit
                                 }
 
-                                Text {
-                                    text: "• " + (modelData.time || "Just now")
-                                    color: Qt.rgba(1, 1, 1, 0.40)
-                                    font.family: "Inter"
-                                    font.pixelSize: 10
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-
-                            Text {
-                                text: modelData.message || ""
-                                color: Qt.rgba(1, 1, 1, 0.75)
-                                font.family: "Inter"
-                                font.pixelSize: 11
-                                font.weight: Font.Normal
-                                elide: Text.ElideRight
-                                width: parent.width
-                            }
-                        }
-
-                        // Dismiss 'x' action button (visible on card hover)
-                        Rectangle {
-                            width: 20
-                            height: 20
-                            radius: 10
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: dismissMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.20) : "transparent"
-                            visible: cardMouse.containsMouse
-
-                            Image {
-                                anchors.centerIn: parent
-                                width: 10
-                                height: 10
-                                source: "image://icon/window-close-symbolic?color=" +
-                                        (dismissMouse.containsMouse ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.60).toString())
-                                fillMode: Image.PreserveAspectFit
-                            }
-
-                            MouseArea {
-                                id: dismissMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    if (typeof bridge !== "undefined" && typeof bridge.dismissNotification === "function") {
-                                        bridge.dismissNotification(index);
+                                MouseArea {
+                                    id: dismissMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (typeof bridge !== "undefined" && typeof bridge.dismissNotification === "function") {
+                                            bridge.dismissNotification(index);
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    MouseArea {
-                        id: cardMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                    }
+                        MouseArea {
+                            id: cardMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                        }
                 }
             }
         }

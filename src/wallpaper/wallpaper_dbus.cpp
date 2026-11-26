@@ -37,11 +37,13 @@ WallpaperDBus::~WallpaperDBus() {
 bool WallpaperDBus::init(SetWallpaperHandler on_set,
                          StatusQueryHandler on_status,
                          AdvanceFrameHandler on_advance,
-                         ReloadHandler on_reload) {
-    m_on_set     = std::move(on_set);
-    m_on_status  = std::move(on_status);
-    m_on_advance = std::move(on_advance);
-    m_on_reload  = std::move(on_reload);
+                         ReloadHandler on_reload,
+                         LauncherVisibilityHandler on_launcher_visibility) {
+    m_on_set                 = std::move(on_set);
+    m_on_status              = std::move(on_status);
+    m_on_advance             = std::move(on_advance);
+    m_on_reload              = std::move(on_reload);
+    m_on_launcher_visibility = std::move(on_launcher_visibility);
 
     int r = sd_bus_open_user(&m_bus);
     if (r < 0 || !m_bus) {
@@ -130,14 +132,27 @@ bool WallpaperDBus::init(SetWallpaperHandler on_set,
                         on_settings_signal,
                         this);
 
+    r = sd_bus_match_signal(m_bus,
+                            &m_match_launcher,
+                            nullptr,
+                            nullptr,
+                            tinexus::common::dbus::interface::Launcher,
+                            "LauncherVisibilityChanged",
+                            on_launcher_signal,
+                            this);
+    if (r < 0) {
+        log::warn("[wallpaper/dbus] Match LauncherVisibilityChanged failed: {}", std::strerror(-r));
+    }
+
     log::info("[wallpaper/dbus] {} registered on user session bus",
               tinexus::common::dbus::service::Wallpaper);
     return true;
 }
 
 void WallpaperDBus::shutdown() {
-    if (m_match_theme)  { sd_bus_slot_unref(m_match_theme);  m_match_theme = nullptr; }
-    if (m_match_config) { sd_bus_slot_unref(m_match_config); m_match_config = nullptr; }
+    if (m_match_launcher) { sd_bus_slot_unref(m_match_launcher); m_match_launcher = nullptr; }
+    if (m_match_theme)    { sd_bus_slot_unref(m_match_theme);    m_match_theme = nullptr; }
+    if (m_match_config)   { sd_bus_slot_unref(m_match_config);   m_match_config = nullptr; }
     if (m_slot_root)    { sd_bus_slot_unref(m_slot_root);    m_slot_root = nullptr; }
     if (m_slot_io)      { sd_bus_slot_unref(m_slot_io);      m_slot_io = nullptr; }
     if (m_bus)          { sd_bus_flush_close_unref(m_bus);   m_bus = nullptr; }
@@ -261,6 +276,16 @@ int WallpaperDBus::on_settings_signal(sd_bus_message* m, void* userdata, sd_bus_
 
     if (self && self->m_on_reload) {
         self->m_on_reload();
+    }
+    return 0;
+}
+
+int WallpaperDBus::on_launcher_signal(sd_bus_message* m, void* userdata, sd_bus_error* /*ret_error*/) {
+    auto* self = static_cast<WallpaperDBus*>(userdata);
+    int visible = 0;
+    const int r = sd_bus_message_read(m, "b", &visible);
+    if (r >= 0 && self && self->m_on_launcher_visibility) {
+        self->m_on_launcher_visibility(visible != 0);
     }
     return 0;
 }

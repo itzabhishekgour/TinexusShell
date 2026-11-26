@@ -4,6 +4,10 @@
 #include <string>
 #include <cstdint>
 
+extern "C" {
+#include <wayland-server-core.h>
+}
+
 // Forward-declare wlroots types to avoid pulling heavy C headers into every TU.
 struct wlr_seat;
 struct wlr_scene;
@@ -78,6 +82,12 @@ public:
     /// Internally calls wlr_seat_pointer_notify_enter/motion/clear_focus.
     void update_pointer_focus(const PickResult& pick, uint32_t time_msec) noexcept;
 
+    /// Implicit Wayland pointer button grab: keeps drag motion and button release
+    /// routed to the surface where the press began, even outside its input mask.
+    void handle_pointer_button(double cursor_x, double cursor_y, bool pressed) noexcept;
+    [[nodiscard]] bool has_pointer_grab() const noexcept { return m_pressed_buttons > 0 && m_pointer_grab_surface != nullptr; }
+    bool update_grabbed_pointer_motion(double cursor_x, double cursor_y, const PickResult& pick, uint32_t time_msec) noexcept;
+
     // ------------------------------------------------------------------
     // Keyboard focus  (expanded in Phase 4 — stubbed cleanly for now)
     // ------------------------------------------------------------------
@@ -108,6 +118,13 @@ private:
 
     // Pointer state
     struct wlr_surface* m_pointer_surface{nullptr}; ///< currently hovered surface
+    struct wlr_surface* m_pointer_grab_surface{nullptr}; ///< implicit button-press grab surface
+    double              m_last_sx{0.0};
+    double              m_last_sy{0.0};
+    double              m_grab_origin_x{0.0};
+    double              m_grab_origin_y{0.0};
+    uint32_t            m_pressed_buttons{0};
+    struct wl_listener  m_grab_destroy_listener{};
 
     // Legacy keyboard-focus state
     FocusTargetType m_focus_type{FocusTargetType::None};

@@ -19,8 +19,13 @@
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusMessage>
+#include <QtNetwork/QLocalSocket>
 #include <common/SingleInstance.hpp>
 #include <common/DBusNames.hpp>
+#include <common/RuntimePaths.hpp>
+#include <common/AppId.hpp>
+#include "ipcd/protocol/header.hpp"
+#include "ipcd/protocol/dock_protocol.hpp"
 #include <files/trash_manager.hpp>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -65,6 +70,7 @@ DockBridge::DockBridge(QObject* parent)
 
     recomputeLayout();
     setupDBus();
+    setupIpcdClient();
 
     // Setup live filesystem watcher for Trash
     QString trashFilesPath = QDir::homePath() + QStringLiteral("/.local/share/Trash/files");
@@ -76,13 +82,28 @@ DockBridge::DockBridge(QObject* parent)
 
     connect(&m_animTimer, &QTimer::timeout, this, &DockBridge::onAnimationTimer);
     // m_animTimer starts strictly on-demand (hover/bounce) and stops when static (0% idle CPU)
+
+    // Guard against stale hover state when pointer exits without firing QML onExited
+    m_hoverTimer.setInterval(250);
+    m_hoverTimer.setSingleShot(false);
+    connect(&m_hoverTimer, &QTimer::timeout, this, [this]() {
+        if (m_hoveredIndex < 0 && m_mouseX < 0.0) {
+            m_hoverTimer.stop();
+            return;
+        }
+        if (m_autoHideState == 2 || (m_dockWindow && m_dockWindow->mainWindow() && !m_dockWindow->mainWindow()->isVisible())) {
+            m_hoverTimer.stop();
+            resetHover();
+        }
+    });
 }
 
 DockBridge::~DockBridge() = default;
 
 void DockBridge::requestAnimation() {
     if (!m_reducedMotion && !m_animTimer.isActive()) {
-        m_animTimer.start(16);
+        m_animClock.restart();
+        m_animTimer.start(8);
     }
 }
 
@@ -117,6 +138,7 @@ QVariantList DockBridge::iconsList() const {
         map[QStringLiteral("label")]         = icon.label;
         map[QStringLiteral("exec")]          = icon.exec;
         map[QStringLiteral("iconType")]      = icon.iconType;
+        map[QStringLiteral("iconUrl")]       = icon.iconUrl.toString();
         map[QStringLiteral("appState")]      = static_cast<int>(icon.appState);
         map[QStringLiteral("scale")]         = icon.scaleSpring.value + icon.bounceSpring.value;
         map[QStringLiteral("bounceOffset")]  = icon.bounceSpring.value;
@@ -142,7 +164,8 @@ void DockBridge::updateLayout(double totalWindowWidth) {
     }
 }
 
-void DockBridge::updateScreenGeometry(double totalWindowWidth, double totalWindowHeight) {
+void DockBridge::updateScreenGeometry(double totalWindowWidth, double totalWindowHeight,
+                                      double screenX, double screenY) {
     bool changed = false;
     if (std::abs(m_windowWidth - totalWindowWidth) > 0.5) {
         m_windowWidth = totalWindowWidth;
@@ -150,6 +173,14 @@ void DockBridge::updateScreenGeometry(double totalWindowWidth, double totalWindo
     }
     if (std::abs(m_screenHeight - totalWindowHeight) > 0.5) {
         m_screenHeight = totalWindowHeight;
+        changed = true;
+    }
+    if (std::abs(m_screenX - screenX) > 0.5) {
+        m_screenX = screenX;
+        changed = true;
+    }
+    if (std::abs(m_screenY - screenY) > 0.5) {
+        m_screenY = screenY;
         changed = true;
     }
     if (changed) {
@@ -165,12 +196,16 @@ void DockBridge::updateScreenGeometry(double totalWindowWidth, double totalWindo
     }
 }
 
-void DockBridge::recomputeLayout() {
+void DockBridge::recomputeLayout(bool syncIpc) {
     // Compute total pill width
     double width = DOCK_PAD * 2.0;
     for (const auto& icon : m_icons) {
-        double scale = icon.scaleSpring.value + icon.bounceSpring.value;
-        width += BASE_SIZE * scale;
+        if (icon.iconType == QStringLiteral("separator")) {
+            width += 1.0;
+        } else {
+            double scale = icon.scaleSpring.value + icon.bounceSpring.value;
+            width += BASE_SIZE * scale;
+        }
     }
     width += GAP * static_cast<double>(std::max(0, static_cast<int>(m_icons.size()) - 1));
     m_pillWidth = width;
@@ -179,30 +214,39 @@ void DockBridge::recomputeLayout() {
     const double pillX = (m_windowWidth - m_pillWidth) / 2.0;
     double curX = pillX + DOCK_PAD;
     for (auto& icon : m_icons) {
-        double scale = icon.scaleSpring.value + icon.bounceSpring.value;
-        double size = BASE_SIZE * scale;
-        icon.centerX = curX + size / 2.0;
-        curX += size + GAP;
+        double itemW = 1.0;
+        if (icon.iconType != QStringLiteral("separator")) {
+            double scale = icon.scaleSpring.value + icon.bounceSpring.value;
+            itemW = BASE_SIZE * scale;
+        }
+        icon.centerX = curX + itemW / 2.0;
+        curX += itemW + GAP;
     }
 
     if (m_dockWindow) {
         m_dockWindow->setBaseExclusiveZone(static_cast<int>(exclusiveZone()));
+    }
+    if (syncIpc) {
+        sendAllIconPositions();
     }
 }
 
 void DockBridge::handleHover(double mouseX) {
     m_mouseX = mouseX;
     m_hoveredIndex = -1;
+    if (m_mouseX >= 0.0 && !m_hoverTimer.isActive()) {
+        m_hoverTimer.start();
+    }
 
     for (size_t i = 0; i < m_icons.size(); ++i) {
         auto& icon = m_icons[i];
         double target = 1.0;
-        if (m_mouseX >= 0.0) {
-            double dist = std::abs(m_mouseX - icon.centerX);
+        if (m_mouseX >= 0.0 && icon.iconType != QStringLiteral("separator")) {
+            const double dist = std::abs(m_mouseX - icon.centerX);
             if (dist < INFLUENCE_R) {
-                double norm = dist / INFLUENCE_R;
-                double falloff = (std::cos(M_PI * norm) + 1.0) / 2.0;
-                target = 1.0 + (MAX_SCALE - 1.0) * falloff;
+                const double norm = std::clamp(dist / INFLUENCE_R, 0.0, 1.0);
+                const double bell = (1.0 - norm * norm);
+                target = 1.0 + (MAX_SCALE - 1.0) * (bell * bell);
             }
         }
 
@@ -213,8 +257,8 @@ void DockBridge::handleHover(double mouseX) {
         }
 
         double scale = icon.scaleSpring.value + icon.bounceSpring.value;
-        double half = (BASE_SIZE * scale) / 2.0;
-        if (std::abs(m_mouseX - icon.centerX) <= half) {
+        double half = (BASE_SIZE * scale) / 2.0 + (GAP * 0.45);
+        if (icon.iconType != QStringLiteral("separator") && std::abs(m_mouseX - icon.centerX) <= half) {
             m_hoveredIndex = static_cast<int>(i);
         }
     }
@@ -232,6 +276,9 @@ void DockBridge::handleHover(double mouseX) {
 void DockBridge::resetHover() {
     m_mouseX = -1.0;
     m_hoveredIndex = -1;
+    if (m_hoverTimer.isActive()) {
+        m_hoverTimer.stop();
+    }
     for (auto& icon : m_icons) {
         icon.scaleSpring.target = 1.0;
         if (m_reducedMotion) {
@@ -265,18 +312,26 @@ void DockBridge::tickAnimations(double dt) {
     }
 
     if (animating) {
-        recomputeLayout();
+        recomputeLayout(false);
         emit layoutChanged();
         emit iconsChanged();
     } else {
         if (m_animTimer.isActive()) {
             m_animTimer.stop();
         }
+        recomputeLayout(true);
+        emit layoutChanged();
+        emit iconsChanged();
     }
 }
 
 void DockBridge::onAnimationTimer() {
-    tickAnimations(0.016);
+    double dt = 0.016;
+    if (m_animClock.isValid()) {
+        dt = static_cast<double>(m_animClock.restart()) / 1000.0;
+        dt = std::clamp(dt, 0.004, 0.032);
+    }
+    tickAnimations(dt);
 }
 
 void DockBridge::attachModel(DockModel* model) {
@@ -321,7 +376,7 @@ void DockBridge::syncFromModel() {
         }
 
         DockIconItem icon(item.appId, item.displayName, item.execCmd, item.iconType, st,
-                          item.toplevelCount, item.badgeCount, item.needsAttention);
+                          item.toplevelCount, item.badgeCount, item.needsAttention, item.iconUrl);
 
         auto it = prevSprings.find(item.appId.toStdString());
         if (it != prevSprings.end()) {
@@ -329,7 +384,7 @@ void DockBridge::syncFromModel() {
             icon.bounceSpring = it->second.second;
         } else {
             icon.scaleSpring.reset(1.0, 1.0);
-            icon.bounceSpring.reset(0.2, 0.0);
+            icon.bounceSpring.reset(0.0, 0.0);
         }
         newIcons.push_back(std::move(icon));
     }
@@ -361,6 +416,11 @@ void DockBridge::attachDockWindow(DockWindow* dockWindow) {
 
     connect(m_dockWindow, &DockWindow::revealRequested, this, &DockBridge::requestReveal);
     connect(m_dockWindow, &DockWindow::hideRequested, this, &DockBridge::requestHide);
+    connect(m_dockWindow, &DockWindow::pointerLeft, this, &DockBridge::resetHover);
+    connect(m_dockWindow, &DockWindow::blurRegionUpdated, this,
+            [this](int x, int y, int w, int h, double cornerRadius, bool visible) {
+                publishBlurRegion(x, y, w, h, cornerRadius, visible);
+            });
     connect(m_dockWindow, &DockWindow::autoHideStateChanged, this, [this](int st) {
         if (m_autoHideState != st) {
             m_autoHideState = st;
@@ -397,6 +457,9 @@ void DockBridge::setAutoHideEnabled(bool val) {
 void DockBridge::setAutoHideState(int val) {
     if (m_autoHideState != val) {
         m_autoHideState = val;
+        if (m_autoHideState == 2) {
+            resetHover();
+        }
         emit autoHideStateChanged(m_autoHideState);
         if (m_dockWindow) {
             m_dockWindow->setAutoHideStateInt(m_autoHideState);
@@ -999,23 +1062,205 @@ void DockBridge::onDBusNotifyAppClosed(const QString& appId, qulonglong surfaceI
 }
 
 void DockBridge::onDBusQueryIconPosition(const QString& appId) {
-    int x = 0, y = 0, w = 0, h = 0;
-    queryIconPosition(appId, x, y, w, h);
+    sendIconPosition(appId);
 }
 
 void DockBridge::queryIconPosition(const QString& appId, int& x, int& y, int& w, int& h) const {
     x = y = w = h = 0;
+    const std::string queryCan = tinexus::common::get_canonical_app_id(appId.toStdString());
     for (const auto& icon : m_icons) {
-        if (icon.appId == appId) {
-            double scale = icon.scaleSpring.value + icon.bounceSpring.value;
-            double size = BASE_SIZE * scale;
-            w = static_cast<int32_t>(size);
-            h = static_cast<int32_t>(size);
-            x = static_cast<int32_t>(icon.centerX - size / 2.0);
-            y = static_cast<int32_t>(120.0 - DOCK_BOT_MARGIN - pillHeight() + (pillHeight() - size) / 2.0);
+        if (icon.iconType == QStringLiteral("separator")) continue;
+        const std::string iconCan = tinexus::common::get_canonical_app_id(icon.appId.toStdString());
+        if (icon.appId == appId || icon.appId.compare(appId, Qt::CaseInsensitive) == 0 ||
+            (!queryCan.empty() && queryCan == iconCan)) {
+            const double scale = icon.scaleSpring.value + icon.bounceSpring.value;
+            const double size = BASE_SIZE * scale;
+            const double iconBaseY = m_screenY + m_screenHeight - DOCK_BOT_MARGIN - PILL_HEIGHT + 7.0;
+            const double iconY = iconBaseY - (size - BASE_SIZE) - (icon.bounceSpring.value * 38.0);
+            w = static_cast<int32_t>(std::lround(size));
+            h = static_cast<int32_t>(std::lround(size));
+            x = static_cast<int32_t>(std::lround(m_screenX + icon.centerX - size / 2.0));
+            y = static_cast<int32_t>(std::lround(iconY));
             break;
         }
     }
+}
+
+void DockBridge::setupIpcdClient() {
+    if (m_ipcSocket) return;
+    m_ipcSocket = new QLocalSocket(this);
+    m_ipcSocket->setReadBufferSize(65536);
+    connect(m_ipcSocket, &QLocalSocket::connected, this, &DockBridge::onIpcdConnected);
+    connect(m_ipcSocket, &QLocalSocket::readyRead, this, &DockBridge::onIpcdReadyRead);
+    auto scheduleReconnect = [this]() {
+        if (!m_ipcReconnectTimer.isActive()) {
+            m_ipcReconnectTimer.start(m_ipcBackoffMs);
+            m_ipcBackoffMs = std::min(m_ipcBackoffMs * 2, 30000);
+        }
+    };
+    connect(m_ipcSocket, &QLocalSocket::disconnected, this, [this, scheduleReconnect]() {
+        m_ipcReadBuf.clear();
+        m_lastSentIconCoords.clear();
+        m_lastSentBlurRadius = -1.0;
+        scheduleReconnect();
+    });
+    connect(m_ipcSocket, &QLocalSocket::errorOccurred, this, [scheduleReconnect](QLocalSocket::LocalSocketError) {
+        scheduleReconnect();
+    });
+
+    m_ipcBackoffMs = 500;
+    m_ipcReconnectTimer.setInterval(m_ipcBackoffMs);
+    m_ipcReconnectTimer.setSingleShot(true);
+    connect(&m_ipcReconnectTimer, &QTimer::timeout, this, &DockBridge::tryConnectIpcd);
+    tryConnectIpcd();
+}
+
+void DockBridge::tryConnectIpcd() {
+    if (!m_ipcSocket) return;
+    if (m_ipcSocket->state() == QLocalSocket::ConnectedState ||
+        m_ipcSocket->state() == QLocalSocket::ConnectingState) {
+        return;
+    }
+    const QString sockPath = QString::fromStdString(tinexus::common::RuntimePaths::get_ipc_socket_path());
+    m_ipcSocket->connectToServer(sockPath);
+}
+
+void DockBridge::onIpcdConnected() {
+    m_ipcReconnectTimer.stop();
+    m_ipcBackoffMs = 500;
+    m_ipcReadBuf.clear();
+    m_lastSentIconCoords.clear();
+
+    const uint16_t topic = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION);
+    sendIpcFrame(static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC),
+                 &topic, sizeof(topic));
+
+    sendAllIconPositions();
+    if (m_lastSentBlurRadius > 0.0) {
+        const double r = m_lastSentBlurRadius;
+        m_lastSentBlurRadius = -1.0;
+        publishBlurRegion(m_lastSentBlurRect.x(), m_lastSentBlurRect.y(),
+                          m_lastSentBlurRect.width(), m_lastSentBlurRect.height(),
+                          r, m_lastSentBlurVisible);
+    }
+    tinexus::log::info("[DockBridge] Connected to ipcd socket for icon & blur sync");
+}
+
+void DockBridge::onIpcdReadyRead() {
+    if (!m_ipcSocket) return;
+    m_ipcReadBuf.append(m_ipcSocket->readAll());
+
+    constexpr qsizetype kHdrSize = static_cast<qsizetype>(sizeof(tinexus::ipcd::protocol::Header));
+    while (m_ipcReadBuf.size() >= kHdrSize) {
+        tinexus::ipcd::protocol::Header hdr{};
+        std::memcpy(&hdr, m_ipcReadBuf.constData(), sizeof(hdr));
+        if (hdr.magic != tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC ||
+            hdr.version != tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1 ||
+            hdr.payload_len > 65536) {
+            m_ipcReadBuf.remove(0, 1);
+            continue;
+        }
+        const qsizetype frameSize = kHdrSize + static_cast<qsizetype>(hdr.payload_len);
+        if (m_ipcReadBuf.size() < frameSize) break;
+
+        if (hdr.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION) &&
+            hdr.payload_len >= sizeof(tinexus::ipcd::protocol::DockQueryIconPositionPayload)) {
+            tinexus::ipcd::protocol::DockQueryIconPositionPayload req{};
+            std::memcpy(&req, m_ipcReadBuf.constData() + kHdrSize, sizeof(req));
+            char safeId[129]{};
+            std::memcpy(safeId, req.app_id, sizeof(req.app_id));
+            if (safeId[0] != '\0') {
+                sendIconPosition(QString::fromUtf8(safeId));
+            }
+        }
+        m_ipcReadBuf.remove(0, frameSize);
+    }
+}
+
+void DockBridge::sendIpcFrame(uint16_t msgType, const void* payload, uint32_t payloadLen) {
+    if (!m_ipcSocket || m_ipcSocket->state() != QLocalSocket::ConnectedState) return;
+    tinexus::ipcd::protocol::Header hdr{};
+    hdr.magic       = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+    hdr.version     = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+    hdr.msg_type    = msgType;
+    hdr.sequence_id = ++m_ipcSeq;
+    hdr.payload_len = payloadLen;
+
+    QByteArray frame;
+    frame.resize(static_cast<qsizetype>(sizeof(hdr) + payloadLen));
+    std::memcpy(frame.data(), &hdr, sizeof(hdr));
+    if (payloadLen > 0 && payload != nullptr) {
+        std::memcpy(frame.data() + sizeof(hdr), payload, payloadLen);
+    }
+    m_ipcSocket->write(frame);
+}
+
+void DockBridge::sendIconPosition(const QString& appId) {
+    int x = 0, y = 0, w = 0, h = 0;
+    queryIconPosition(appId, x, y, w, h);
+    if (w <= 0 || h <= 0) return;
+
+    tinexus::ipcd::protocol::DockIconPositionPayload pld{};
+    const QByteArray idUtf8 = appId.toUtf8();
+    const size_t n = std::min(static_cast<size_t>(idUtf8.size()), sizeof(pld.app_id) - 1);
+    std::memcpy(pld.app_id, idUtf8.constData(), n);
+    pld.app_id[n] = '\0';
+    pld.x = x;
+    pld.y = y;
+    pld.w = w;
+    pld.h = h;
+    sendIpcFrame(static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_ICON_POSITION),
+                 &pld, sizeof(pld));
+}
+
+void DockBridge::sendAllIconPositions() {
+    if (!m_ipcSocket || m_ipcSocket->state() != QLocalSocket::ConnectedState) return;
+    for (const auto& icon : m_icons) {
+        if (icon.iconType == QStringLiteral("separator")) continue;
+        int x = 0, y = 0, w = 0, h = 0;
+        queryIconPosition(icon.appId, x, y, w, h);
+        if (w <= 0 || h <= 0) continue;
+
+        const QRect cur(x, y, w, h);
+        const std::string key = icon.appId.toStdString();
+        auto it = m_lastSentIconCoords.find(key);
+        if (it != m_lastSentIconCoords.end() && it->second == cur) continue;
+
+        m_lastSentIconCoords[key] = cur;
+        tinexus::ipcd::protocol::DockIconPositionPayload pld{};
+        const QByteArray idUtf8 = icon.appId.toUtf8();
+        const size_t n = std::min(static_cast<size_t>(idUtf8.size()), sizeof(pld.app_id) - 1);
+        std::memcpy(pld.app_id, idUtf8.constData(), n);
+        pld.app_id[n] = '\0';
+        pld.x = x;
+        pld.y = y;
+        pld.w = w;
+        pld.h = h;
+        sendIpcFrame(static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_ICON_POSITION),
+                     &pld, sizeof(pld));
+    }
+}
+
+void DockBridge::publishBlurRegion(int x, int y, int w, int h, double cornerRadius, bool visible) {
+    const QRect rect(x, y, w, h);
+    if (m_lastSentBlurRect == rect &&
+        std::abs(m_lastSentBlurRadius - cornerRadius) < 0.1 &&
+        m_lastSentBlurVisible == visible) {
+        return;
+    }
+    m_lastSentBlurRect = rect;
+    m_lastSentBlurRadius = cornerRadius;
+    m_lastSentBlurVisible = visible;
+
+    tinexus::ipcd::protocol::DockBlurRegionPayload pld{};
+    pld.x = x;
+    pld.y = y;
+    pld.w = w;
+    pld.h = h;
+    pld.corner_radius = static_cast<float>(cornerRadius);
+    pld.visible = visible ? 1 : 0;
+    sendIpcFrame(static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_BLUR_REGION),
+                 &pld, sizeof(pld));
 }
 
 QStringList DockBridge::runningApps() const {

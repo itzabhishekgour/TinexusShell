@@ -7,6 +7,7 @@ import QtQuick.Shapes
 Item {
     id: root
     property string iconKind: "file" // "folder" | "image" | "video" | "audio" | "pdf" | "code" | "archive" | "file"
+    property string iconName: ""
     property bool isDir: false
     property real iconSize: 44.0
 
@@ -14,13 +15,39 @@ Item {
     height: iconSize
 
     readonly property string kind: isDir ? "folder" : iconKind
+    readonly property string papirusIconName: {
+        if (root.iconName && root.iconName.length > 0) return root.iconName;
+        switch (root.kind) {
+        case "folder":  return "inode-directory";
+        case "image":   return "image-x-generic";
+        case "video":   return "video-x-generic";
+        case "audio":   return "audio-x-generic";
+        case "pdf":     return "application-pdf";
+        case "code":    return "text-x-script";
+        case "archive": return "application-x-archive";
+        default:        return "text-x-generic";
+        }
+    }
 
-    // ── 1. Folder Icon (macOS Finder Style) ──────────────────────
+    Image {
+        id: papirusIcon
+        anchors.centerIn: parent
+        width: root.iconSize
+        height: root.iconSize
+        sourceSize.width: Math.max(32, Math.round(root.iconSize * 2))
+        sourceSize.height: Math.max(32, Math.round(root.iconSize * 2))
+        fillMode: Image.PreserveAspectFit
+        smooth: true
+        source: papirusIconName.length > 0 ? ("image://tinexus/" + papirusIconName) : ""
+        visible: status === Image.Ready
+    }
+
+    // ── 1. Folder Icon (macOS Finder Style Fallback) ─────────────
     Item {
         anchors.centerIn: parent
         width: root.iconSize * 0.90
         height: root.iconSize * 0.70
-        visible: root.kind === "folder"
+        visible: !papirusIcon.visible && root.kind === "folder"
 
         // Folder back tab
         Rectangle {
@@ -54,7 +81,7 @@ Item {
         anchors.centerIn: parent
         width: root.iconSize * 0.70
         height: root.iconSize * 0.88
-        visible: root.kind !== "folder"
+        visible: !papirusIcon.visible && root.kind !== "folder"
 
         // Document body
         Rectangle {

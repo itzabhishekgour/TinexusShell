@@ -548,7 +548,7 @@ void blur_manager_handle_unset(struct wl_client* /*client*/, struct wl_resource*
     struct wlr_surface* surface = wlr_surface_from_resource(surface_resource);
     if (!surface) return;
 
-    BlurManager::instance().unregister_surface_blur(surface);
+    BlurManager::instance().unregister_surface_blur(surface, true);
 }
 
 const struct org_kde_kwin_blur_manager_interface blur_manager_implementation = {
@@ -741,10 +741,14 @@ void BlurManager::shutdown() {
         }
     }
     m_surfaces.clear();
+    m_explicitly_unset.clear();
 }
 
 void BlurManager::register_surface_blur(struct wlr_surface* surface, struct wl_resource* blur_resource) {
     if (!surface) return;
+    if (blur_resource != nullptr) {
+        m_explicitly_unset.erase(surface);
+    }
 
     auto it = m_surfaces.find(surface);
     if (it == m_surfaces.end()) {
@@ -809,8 +813,13 @@ void BlurManager::commit_surface_blur(struct wlr_surface* surface) {
     }
 }
 
-void BlurManager::unregister_surface_blur(struct wlr_surface* surface) {
+void BlurManager::unregister_surface_blur(struct wlr_surface* surface, bool explicit_unset) {
     if (!surface) return;
+    if (explicit_unset) {
+        m_explicitly_unset.insert(surface);
+    } else {
+        m_explicitly_unset.erase(surface);
+    }
     auto it = m_surfaces.find(surface);
     if (it != m_surfaces.end()) {
         if (it->second->destroy_listener.link.next) {
@@ -820,13 +829,18 @@ void BlurManager::unregister_surface_blur(struct wlr_surface* surface) {
         }
         pixman_region32_fini(&it->second->region);
         m_surfaces.erase(it);
-        log::info("[BlurManager] Unregistered blur for surface {:p}", static_cast<void*>(surface));
+        log::info("[BlurManager] Unregistered blur for surface {:p} (unset={})", static_cast<void*>(surface), explicit_unset);
     }
 }
 
 bool BlurManager::is_surface_blurred(struct wlr_surface* surface) const {
     if (!surface) return false;
     return m_surfaces.find(surface) != m_surfaces.end();
+}
+
+bool BlurManager::is_surface_explicitly_unset(struct wlr_surface* surface) const {
+    if (!surface) return false;
+    return m_explicitly_unset.find(surface) != m_explicitly_unset.end();
 }
 
 const BlurSurfaceState* BlurManager::get_surface_state(struct wlr_surface* surface) const {

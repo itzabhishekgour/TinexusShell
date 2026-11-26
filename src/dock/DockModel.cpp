@@ -4,9 +4,11 @@
 // ============================================================================
 #include "dock/DockModel.hpp"
 #include "dock/ToplevelTracker.hpp"
+#include "dock/DockIconProvider.hpp"
 #include <common/logger.hpp>
 #include <common/AppId.hpp>
 #include <common/DBusNames.hpp>
+#include <common/DesktopEntryResolver.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -39,14 +41,15 @@ DockModel::DockModel(QObject* parent)
 void DockModel::loadHardcodedPinnedItems() {
     m_pinned.clear();
 
-    auto make = [](int idx, DockItemKind kind, const char* appId, const char* name,
-                   const char* exec, const char* iconType) -> DockItemData {
+    auto make = [this](int idx, DockItemKind kind, const char* appId, const char* name,
+                       const char* exec, const char* iconType) -> DockItemData {
         DockItemData item;
         item.kind        = kind;
         item.appId       = QString::fromUtf8(appId);
         item.displayName = QString::fromUtf8(name);
         item.execCmd     = QString::fromUtf8(exec);
         item.iconType    = QString::fromUtf8(iconType);
+        item.iconUrl     = resolveIconUrl(item.appId, item.iconType, item.execCmd);
         item.configIndex = idx;
         return item;
     };
@@ -58,7 +61,7 @@ void DockModel::loadHardcodedPinnedItems() {
         make(3, DockItemKind::PinnedApp, "tinexus-monitor",   "Monitor",     "tinexus-monitor",     "barchart"),
         make(4, DockItemKind::PinnedApp, "firefox",           "Firefox",
              "env MOZ_ENABLE_WAYLAND=1 firefox",               "firefox"),
-        make(5, DockItemKind::PinnedApp, "tinexus-appstore",  "App Store",   "tinexus-appstore",    "package"),
+        make(5, DockItemKind::PinnedApp, "tinexus-store",     "App Store",   "tinexus-store",       "package"),
     };
 }
 
@@ -88,6 +91,12 @@ void DockModel::loadPinnedFromConfig() {
 
     auto finishItem = [&]() {
         if (inPinnedTable && !currentItem.appId.isEmpty()) {
+            if (currentItem.appId == QStringLiteral("tinexus-appstore")) {
+                currentItem.appId = QStringLiteral("tinexus-store");
+                if (currentItem.execCmd == QStringLiteral("tinexus-appstore") || currentItem.execCmd.isEmpty()) {
+                    currentItem.execCmd = QStringLiteral("tinexus-store");
+                }
+            }
             if (currentItem.displayName.isEmpty()) {
                 currentItem.displayName = resolveDisplayName(currentItem.appId, QString());
             }
@@ -97,6 +106,7 @@ void DockModel::loadPinnedFromConfig() {
             if (currentItem.iconType.isEmpty()) {
                 currentItem.iconType = resolveIconType(currentItem.appId);
             }
+            currentItem.iconUrl = resolveIconUrl(currentItem.appId, currentItem.iconType, currentItem.execCmd);
             currentItem.configIndex = (parsedOrder >= 0) ? parsedOrder : static_cast<int>(m_pinned.size());
             m_pinned.append(currentItem);
         }
@@ -255,6 +265,7 @@ void DockModel::appendSeparatorAndStacks() {
     trash.appId       = QStringLiteral("__trash__");
     trash.displayName = QStringLiteral("Trash");
     trash.iconType    = QStringLiteral("trash");
+    trash.iconUrl     = resolveIconUrl(QStringLiteral("user-trash"), trash.iconType);
     trash.configIndex = 9999;
     m_stacks.append(trash);
 }
@@ -363,7 +374,7 @@ bool DockModel::matchesAppId(const QString& itemAppId, const QString& incomingAp
     if (itemAppId == QStringLiteral("firefox") && lowerInc.contains(QStringLiteral("firefox"))) {
         return true;
     }
-    if (itemAppId == QStringLiteral("tinexus-appstore") &&
+    if ((itemAppId == QStringLiteral("tinexus-store") || itemAppId == QStringLiteral("tinexus-appstore")) &&
         (lowerInc.contains(QStringLiteral("store")) || lowerInc.contains(QStringLiteral("pkg")))) {
         return true;
     }
@@ -371,6 +382,11 @@ bool DockModel::matchesAppId(const QString& itemAppId, const QString& incomingAp
 }
 
 QString DockModel::resolveDisplayName(const QString& appId, const QString& title) const {
+    if (auto entry = tinexus::common::DesktopEntryResolver::instance().resolve(appId.toStdString())) {
+        if (!entry->name.empty()) {
+            return QString::fromStdString(entry->name);
+        }
+    }
     if (!title.isEmpty() && title.length() <= 30) {
         // Use clean window title if descriptive
         return title;
@@ -416,6 +432,51 @@ QString DockModel::resolveIconType(const QString& appId) const {
         return QStringLiteral("package");
     }
     return QStringLiteral("package");
+}
+
+QUrl DockModel::resolveIconUrl(const QString& appId, const QString& iconType, const QString& execCmd) const {
+    QStringList candidates;
+
+    if (auto entry = tinexus::common::DesktopEntryResolver::instance().resolve(appId.toStdString())) {
+        if (!entry->icon.empty()) {
+            candidates.append(QString::fromStdString(entry->icon));
+        }
+    }
+    if (!execCmd.isEmpty()) {
+        if (auto entry = tinexus::common::DesktopEntryResolver::instance().resolve(execCmd.toStdString())) {
+            if (!entry->icon.empty()) {
+                candidates.append(QString::fromStdString(entry->icon));
+            }
+        }
+    }
+
+    const QString low = appId.toLower();
+    if (low == QStringLiteral("user-trash") || iconType == QStringLiteral("trash")) {
+        candidates << QStringLiteral("user-trash");
+    } else if (iconType == QStringLiteral("terminal") || low.contains(QStringLiteral("terminal")) || low.contains(QStringLiteral("foot"))) {
+        candidates << QStringLiteral("utilities-terminal");
+    } else if (iconType == QStringLiteral("folder") || low.contains(QStringLiteral("files"))) {
+        candidates << QStringLiteral("system-file-manager");
+    } else if (iconType == QStringLiteral("gear") || low.contains(QStringLiteral("settings"))) {
+        candidates << QStringLiteral("preferences-system");
+    } else if (iconType == QStringLiteral("barchart") || low.contains(QStringLiteral("monitor"))) {
+        candidates << QStringLiteral("utilities-system-monitor");
+    } else if (iconType == QStringLiteral("firefox") || low.contains(QStringLiteral("firefox"))) {
+        candidates << QStringLiteral("firefox");
+    } else if (low.contains(QStringLiteral("store")) || low.contains(QStringLiteral("pkg"))) {
+        candidates << QStringLiteral("system-software-install");
+    }
+
+    if (!appId.isEmpty() && !appId.startsWith(QStringLiteral("__"))) {
+        candidates << appId;
+    }
+
+    for (const auto& cand : candidates) {
+        if (DockIconProvider::canResolveIcon(cand)) {
+            return QUrl(QStringLiteral("image://tinexus/") + cand);
+        }
+    }
+    return {};
 }
 
 void DockModel::recomputeItemState(DockItemData& item) {
@@ -543,6 +604,7 @@ void DockModel::onToplevelAddedWithHandle(struct zwlr_foreign_toplevel_handle_v1
     transient.displayName  = resolveDisplayName(appId, title);
     transient.execCmd      = appId;
     transient.iconType     = resolveIconType(appId);
+    transient.iconUrl      = resolveIconUrl(appId, transient.iconType);
     transient.toplevels.append(ToplevelRef{handle, title, isActivated, isMinimized, isMaximized, isFullscreen});
     recomputeItemState(transient);
     transient.configIndex  = 5000 + static_cast<int>(m_transient.size());
@@ -829,6 +891,7 @@ void DockModel::pinApp(const QString& appId, const QString& displayName, const Q
     item.displayName = !displayName.isEmpty() ? displayName : resolveDisplayName(appId, QString());
     item.execCmd = !execCmd.isEmpty() ? execCmd : appId;
     item.iconType = !iconType.isEmpty() ? iconType : resolveIconType(appId);
+    item.iconUrl = resolveIconUrl(item.appId, item.iconType, item.execCmd);
     item.configIndex = static_cast<int>(m_pinned.size());
     item.appState = DockAppState::NotRunning;
     item.toplevelCount = 0;

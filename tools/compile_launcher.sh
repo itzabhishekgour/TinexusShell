@@ -60,8 +60,16 @@ fi
 
 echo "[INFO] Found moc at: $MOC_BIN"
 
-QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/x86_64-linux-gnu/qt6/QtDBus -I/usr/include/LayerShellQt -I/tmp/build_apps"
+QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtSvg -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps -I/workspace/build/protocols"
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
+
+echo "[INFO] Generating org-kde-kwin-blur Wayland client protocol..."
+mkdir -p /workspace/build/protocols
+chroot /mnt/rootfs wayland-scanner client-header /workspace/protocols/org-kde-kwin-blur.xml /workspace/build/protocols/org-kde-kwin-blur-client-protocol.h
+chroot /mnt/rootfs wayland-scanner private-code /workspace/protocols/org-kde-kwin-blur.xml /workspace/build/protocols/org-kde-kwin-blur-protocol.c
+
+echo "[INFO] Compiling org-kde-kwin-blur-protocol.c..."
+chroot /mnt/rootfs /usr/bin/gcc -O2 -fPIC -c /workspace/build/protocols/org-kde-kwin-blur-protocol.c -o /tmp/build_apps/org-kde-kwin-blur-protocol.o
 
 echo "[INFO] Running moc on LauncherBridge.hpp..."
 chroot /mnt/rootfs "$MOC_BIN" $COMMON_INC /workspace/src/launcher/LauncherBridge.hpp -o /tmp/build_apps/moc_LauncherBridge.cpp
@@ -71,11 +79,12 @@ mkdir -p /workspace/build/bin
 rm -f /workspace/build/bin/tinexus-launcher
 BUILD_START_TIME=$(date +%s)
 
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 -Wall -Wextra -Werror \
   $QT6_INC $COMMON_INC -I/workspace/src/indexer/include -I/workspace/src/launcher -I/workspace/src/launcher/include \
   /workspace/src/launcher/main.cpp \
   /workspace/src/launcher/LauncherBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lQt6DBus -lLayerShellQtInterface -DHAVE_LAYERSHELL=1 \
+  /tmp/build_apps/org-kde-kwin-blur-protocol.o \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network -lQt6WaylandClient -lQt6DBus -lLayerShellQtInterface -lwayland-client -DHAVE_LAYERSHELL=1 \
   -o /workspace/build/bin/tinexus-launcher
 
 # Post-build assertions
@@ -98,11 +107,12 @@ if ! strings /workspace/build/bin/tinexus-launcher | grep "libQt6Core" >/dev/nul
 fi
 
 echo "[INFO] Compiling test-launcher-render..."
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 -Wall -Wextra -Werror \
   $QT6_INC $COMMON_INC -I/workspace/src/indexer/include -I/workspace/src/launcher -I/workspace/src/launcher/include \
   /workspace/src/launcher/test_launcher_render.cpp \
   /workspace/src/launcher/LauncherBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6WaylandClient -lQt6DBus \
+  /tmp/build_apps/org-kde-kwin-blur-protocol.o \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network -lQt6WaylandClient -lQt6DBus -lwayland-client \
   -o /workspace/build/bin/test-launcher-render
 
 echo "[INFO] Running test-launcher-render harness..."

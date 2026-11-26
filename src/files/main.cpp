@@ -3,6 +3,7 @@
 // ============================================================================
 #include "FilesBridge.hpp"
 #include <common/logger.hpp>
+#include <common/ui/TinexusAppIconProvider.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -28,6 +29,7 @@ int main(int argc, char* argv[]) {
     tinexus::files::FilesBridge bridge(targetPath);
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("tinexus"), new tinexus::common::ui::AppIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
     QString qmlPath;

@@ -30,13 +30,20 @@ Item {
     // ── Physical Spring-Driven LiquidGlass Capsule ─────────────────
     LiquidGlass {
         id: notchPill
+        objectName: "centerNotchPill"
         width: 236
         height: 30
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         materialType: "notch"
         cornerRadius: root.expanded ? 20 : 15
-        fluidOpacity: root.expanded ? 0.88 : 0.72
+        fluidOpacity: root.expanded ? 0.72 : 0.64
+        shadowEnabled: root.expanded
+        onHeightChanged: {
+            if (typeof bridge !== "undefined" && typeof bridge.syncOverlayGeometry === "function") {
+                bridge.syncOverlayGeometry();
+            }
+        }
 
         Behavior on cornerRadius {
             NumberAnimation { duration: 180; easing.type: Easing.OutQuad }

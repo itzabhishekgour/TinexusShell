@@ -187,6 +187,7 @@ private:
     bool matchesAppId(const QString& itemAppId, const QString& incomingAppId) const;
     QString resolveDisplayName(const QString& appId, const QString& title) const;
     QString resolveIconType(const QString& appId) const;
+    QUrl resolveIconUrl(const QString& appId, const QString& iconType, const QString& execCmd = {}) const;
     void recomputeItemState(DockItemData& item);
     void updateActiveStateAcrossAll(struct zwlr_foreign_toplevel_handle_v1* activeHandle);
     void checkMaximizedWindowsState();

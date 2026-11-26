@@ -1,6 +1,7 @@
 #include "TerminalCanvas.hpp"
 #include <QPainter>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -15,7 +16,10 @@ TerminalCanvas::TerminalCanvas(QQuickItem* parent)
     setAcceptedMouseButtons(Qt::AllButtons);
     setActiveFocusOnTab(true);
 
-    m_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    m_font = QFont(QStringLiteral("JetBrains Mono"));
+    if (!QFontInfo(m_font).exactMatch()) {
+        m_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    }
     m_font.setPointSize(10);
     m_font.setStyleHint(QFont::Monospace);
     updateFontMetrics();

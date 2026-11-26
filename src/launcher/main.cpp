@@ -3,6 +3,7 @@
 // ============================================================================
 #include "LauncherBridge.hpp"
 #include <common/logger.hpp>
+#include <common/ui/TinexusAppIconProvider.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -143,6 +144,7 @@ int main(int argc, char* argv[]) {
     tinexus::launcher::LauncherBridge bridge;
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("tinexus"), new tinexus::common::ui::AppIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
     QString qmlPath;
@@ -177,6 +179,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    bridge.setLauncherWindow(window);
     auto* closeFilter = new WindowCloseFilter(window);
     window->installEventFilter(closeFilter);
 
@@ -187,9 +190,10 @@ int main(int argc, char* argv[]) {
         lsWin->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityExclusive);
         lsWin->setScope("launcher");
         lsWin->setAnchors(LayerShellQt::Window::Anchors::fromInt(LayerShellQt::Window::AnchorTop));
-        lsWin->setMargins(QMargins(0, 48, 0, 0));
+        // Reserve 24px top shadow headroom so the visible glass card still anchors cleanly at y=48
+        lsWin->setMargins(QMargins(0, 24, 0, 0));
         lsWin->setExclusiveZone(0);
-        tinexus::log::info("[Launcher] LayerShellQt initialized: Layer=Top, Anchor=Top, MarginTop=48, KeyboardInteractivity=Exclusive, Scope=launcher");
+        tinexus::log::info("[Launcher] LayerShellQt initialized: Layer=Top, Anchor=Top, MarginTop=24 (+24px shadowPad), KeyboardInteractivity=Exclusive, Scope=launcher");
     } else {
         tinexus::log::warn("[Launcher] LayerShellQt::Window::get returned nullptr; running in standard window mode.");
     }

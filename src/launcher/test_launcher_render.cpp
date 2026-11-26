@@ -2,6 +2,7 @@
 // test_launcher_render.cpp — Visual Verification Harness for tinexus-launcher (Qt6)
 // ============================================================================
 #include "LauncherBridge.hpp"
+#include <common/ui/TinexusAppIconProvider.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -43,6 +44,7 @@ int main(int argc, char* argv[]) {
     bridge.setAllApps(get_mock_apps());
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("tinexus"), new tinexus::common::ui::AppIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
     QString qmlPath;

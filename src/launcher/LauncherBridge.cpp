@@ -9,23 +9,40 @@
 #include <QtCore/QRegularExpression>
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusConnection>
+#include <QtQuick/QQuickWindow>
 #include <common/DBusNames.hpp>
+#include <common/DesktopEntryResolver.hpp>
+#include <common/ui/TinexusAppIconProvider.hpp>
+#include <common/ui/WaylandBlurHelper.hpp>
 #include <sstream>
 #include <algorithm>
+#include <cmath>
 
 namespace tinexus::launcher {
 
+struct LauncherBridge::BlurProtocolState : public tinexus::common::ui::WaylandBlurHelper {};
+
 LauncherBridge::LauncherBridge(QObject* parent)
     : QObject(parent)
+    , m_blurState(std::make_unique<BlurProtocolState>())
 {
+    auto resolveIcon = [](const QString& appKey, const QString& fallbackIcon) -> QString {
+        if (auto entry = tinexus::common::DesktopEntryResolver::instance().resolve(appKey.toStdString())) {
+            if (!entry->icon.empty()) {
+                return QString::fromStdString(entry->icon);
+            }
+        }
+        return fallbackIcon;
+    };
+
     m_allApps = {
-        LauncherItem{"Tinexus Terminal", "tinexus-terminal", "Default Wayland GPU Terminal", "utilities-terminal", "App", true},
-        LauncherItem{"Firefox", "env MOZ_ENABLE_WAYLAND=1 firefox", "Mozilla Firefox Web Browser", "firefox", "App", false},
-        LauncherItem{"Tinexus Files", "tinexus-files", "Lightweight Miller Column File Manager", "system-file-manager", "App", false},
-        LauncherItem{"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", "preferences-desktop", "App", false},
-        LauncherItem{"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", "utilities-system-monitor", "App", false},
-        LauncherItem{"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", "system-software-install", "App", false},
-        LauncherItem{"Foot Terminal", "foot", "Wayland Lightweight Terminal Emulator", "utilities-terminal", "App", false},
+        LauncherItem{"Tinexus Terminal", "tinexus-terminal", "Default Wayland GPU Terminal", resolveIcon("tinexus-terminal", "utilities-terminal"), "App", true},
+        LauncherItem{"Firefox", "env MOZ_ENABLE_WAYLAND=1 firefox", "Mozilla Firefox Web Browser", resolveIcon("firefox", "firefox"), "App", false},
+        LauncherItem{"Tinexus Files", "tinexus-files", "Lightweight Miller Column File Manager", resolveIcon("tinexus-files", "system-file-manager"), "App", false},
+        LauncherItem{"Tinexus Settings", "tinexus-settings-ui", "System Configuration & Control Center", resolveIcon("tinexus-settings-ui", "preferences-desktop"), "App", false},
+        LauncherItem{"Activity Monitor", "tinexus-monitor", "Platform Resource & Process Monitor", resolveIcon("tinexus-monitor", "utilities-system-monitor"), "App", false},
+        LauncherItem{"Tinexus Package Manager", "tinexus-pkg", "Package Installer & Software Manager", resolveIcon("tinexus-pkg", "system-software-install"), "App", false},
+        LauncherItem{"Foot Terminal", "foot", "Wayland Lightweight Terminal Emulator", resolveIcon("foot", "utilities-terminal"), "App", false},
 
         // Restored System Actions (from txui LauncherWidget.cpp §get_system_actions)
         LauncherItem{"Lock Screen", "tinexus-lock", "Lock the current desktop session", "system-lock-screen", "System", false},
@@ -37,6 +54,27 @@ LauncherBridge::LauncherBridge(QObject* parent)
 
     scanDesktopApps();
     refreshResults();
+}
+
+LauncherBridge::~LauncherBridge() = default;
+
+void LauncherBridge::setLauncherWindow(QQuickWindow* window) {
+    m_launcherWindow = window;
+}
+
+void LauncherBridge::syncBlurRegion(int x, int y, int width, int height, bool visible) {
+    QRegion region;
+    if (visible && width > 0 && height > 0) {
+        region = QRegion(std::max(0, x), std::max(0, y), width, height);
+    }
+    if (m_lastBlurVisible == visible && m_lastBlurRegion == region) {
+        return;
+    }
+    m_lastBlurVisible = visible;
+    m_lastBlurRegion = region;
+    if (m_blurState) {
+        m_blurState->applyToWindow(m_launcherWindow, visible, region);
+    }
 }
 
 void LauncherBridge::scanDesktopApps() {
@@ -231,7 +269,19 @@ static void enrichEnvironmentWithRuntime(QProcessEnvironment& env) {
 
 void LauncherBridge::closeLauncher() {
     setQuery(QString());
+    notifyVisibilityChanged(false);
     emit closeRequested();
+}
+
+void LauncherBridge::notifyVisibilityChanged(bool visible) {
+    if (m_lastBroadcastVisible == visible) return;
+    m_lastBroadcastVisible = visible;
+    QDBusMessage msg = QDBusMessage::createSignal(
+        tinexus::common::dbus::qpath::Launcher(),
+        tinexus::common::dbus::qinterface::Launcher(),
+        QStringLiteral("LauncherVisibilityChanged"));
+    msg << visible;
+    QDBusConnection::sessionBus().send(msg);
 }
 
 void LauncherBridge::spawnApp(const QString& execCmd, bool inTerminal) {
@@ -353,11 +403,34 @@ QVariantList LauncherBridge::resultsList() const {
     QVariantList list;
     list.reserve(static_cast<int>(m_results.size()));
     for (const auto& item : m_results) {
+        QString resolvedIcon = item.icon;
+        if ((resolvedIcon.isEmpty() || !tinexus::common::ui::AppIconProvider::canResolveIcon(resolvedIcon)) &&
+            !item.exec.isEmpty()) {
+            if (auto entry = tinexus::common::DesktopEntryResolver::instance().resolve(item.exec.toStdString())) {
+                if (!entry->icon.empty()) {
+                    resolvedIcon = QString::fromStdString(entry->icon);
+                }
+            }
+        }
+        if (resolvedIcon.isEmpty() || !tinexus::common::ui::AppIconProvider::canResolveIcon(resolvedIcon)) {
+            if (auto entry = tinexus::common::DesktopEntryResolver::instance().resolve(item.name.toStdString())) {
+                if (!entry->icon.empty()) {
+                    resolvedIcon = QString::fromStdString(entry->icon);
+                }
+            }
+        }
+
+        QString iconUrl;
+        if (!resolvedIcon.isEmpty() && tinexus::common::ui::AppIconProvider::canResolveIcon(resolvedIcon)) {
+            iconUrl = QStringLiteral("image://tinexus/") + resolvedIcon;
+        }
+
         QVariantMap map;
         map[QStringLiteral("name")]        = item.name;
         map[QStringLiteral("exec")]        = item.exec;
         map[QStringLiteral("description")] = item.description;
-        map[QStringLiteral("icon")]        = item.icon;
+        map[QStringLiteral("icon")]        = resolvedIcon;
+        map[QStringLiteral("iconUrl")]     = iconUrl;
         map[QStringLiteral("kind")]        = item.kind;
         map[QStringLiteral("isTerminal")]  = item.isTerminal;
         list.append(map);

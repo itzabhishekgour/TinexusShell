@@ -124,91 +124,96 @@ int main(int argc, char* argv[]) {
                                                                     LayerShellQt::Window::AnchorLeft |
                                                                     LayerShellQt::Window::AnchorRight));
             lsWin->setExclusiveZone(32);
-            std::cout << "[tinexus-shell] LayerShellQt configured: Layer=Top, ExclusiveZone=32" << std::endl;
+            lsWin->setScope(QStringLiteral("tinexus-shell"));
+            std::cout << "[tinexus-shell] LayerShellQt configured: Layer=Top, ExclusiveZone=32, Scope=tinexus-shell" << std::endl;
         }
 #else
         std::cout << "[tinexus-shell] LayerShellQt not linked — running in fallback QWindow mode" << std::endl;
 #endif
 
+        bridge.setShellWindow(window);
+
         // ── Dynamic input-region mask (Precise Compound Geometry) ───────────
         // The shell window dynamically expands up to 420px height when a flyout
         // opens. We construct an exact compound QRegion containing ONLY:
-        //   1. The 32px baseline top bar
-        //   2. The AuraNotch area (either 272x46 idle, or 420x72 expanded)
-        //   3. The exact bounding box of whichever flyout is currently open,
+        //   1. The 32px baseline top bar (which already encloses the 30px idle notch)
+        //   2. Expanded AuraNotch area (420x68 when expanded or animating > 32px)
+        //   3. The exact bounding box of whichever flyout is currently visible/animating,
         //      queried dynamically from the QML item scene mapping to prevent drift.
         //
-        // All other transparent areas remain excluded from the Wayland input
-        // region mask, allowing pointer events to pass cleanly to underlying windows.
+        // Both Wayland input_region (window->setMask) and org_kde_kwin_blur region stay
+        // synchronized so blur & pointer routing follow animated flyouts cleanly.
 
-        constexpr int kBarH      = 32;    // flat bar height (exclusive zone)
-        constexpr int kNotchH    = 46;    // total notch height
-        constexpr int kNotchHalf = 136;   // half-width of notch top edge (AuraNotch.qml)
+        constexpr int kBarH = 32; // flat bar height (exclusive zone)
 
         // Lambda: compute and apply the exact compound mask for current state
-        auto applyInputMask = [window, &bridge, kBarH, kNotchH, kNotchHalf]() {
+        auto applyInputMask = [window, &bridge, kBarH]() {
             int w  = window->width();
             int cx = w / 2;
             QRegion mask;
 
-            // 1. Always mask the top bar
+            // 1. Always mask the top bar (also covers the 236x30 idle AuraNotch at y=1)
             mask += QRect(0, 0, w, kBarH);
 
-            // 2. Center notch geometry
+            // 2. Center notch geometry only extends below bar when expanded/animating
             if (bridge.notchExpanded()) {
-                mask += QRect(cx - 210, 0, 420, 72);
-            } else {
-                mask += QRect(cx - kNotchHalf, 0, kNotchHalf * 2, kNotchH);
+                mask += QRect(cx - 210, 0, 420, 70);
+            } else if (auto* notchItem = window->findChild<QQuickItem*>(QStringLiteral("centerNotchPill"))) {
+                if (notchItem->height() > 33.0) {
+                    QPointF p = notchItem->mapToScene(QPointF(0, 0));
+                    mask += QRect(static_cast<int>(std::floor(p.x())),
+                                  static_cast<int>(std::floor(p.y())),
+                                  static_cast<int>(std::ceil(notchItem->width())),
+                                  static_cast<int>(std::ceil(notchItem->height())));
+                }
             }
 
-            // 3. Add dynamic geometry for open flyouts by querying actual QQuickItem positions & sizes
-            auto addFlyoutItemMask = [window, &mask](const char* objName, const QRect& fallbackRect) {
+            // 3. Add dynamic geometry for open or closing-animation flyouts
+            auto addFlyoutItemMask = [window, &mask](const char* objName, const QRect& fallbackRect, bool isOpen) {
                 bool added = false;
                 if (auto* item = window->findChild<QQuickItem*>(QString::fromLatin1(objName))) {
-                    if (item->isVisible() && item->opacity() > 0.01) {
-                        QPointF p = item->mapToScene(QPointF(0, 0));
-                        int rx = static_cast<int>(std::floor(p.x()));
-                        int ry = static_cast<int>(std::floor(p.y()));
-                        int rw = static_cast<int>(std::ceil(item->width()));
-                        int rh = static_cast<int>(std::ceil(item->height()));
-                        if (rw > 0 && rh > 0) {
+                    if (item->isVisible() && item->width() > 0.0 && item->height() > 0.0) {
+                        QQuickItem* host = (item->parentItem() && item->parentItem()->parentItem())
+                            ? item->parentItem()->parentItem()
+                            : nullptr;
+                        const double padVal = item->property("shadowPad").isValid()
+                            ? item->property("shadowPad").toDouble()
+                            : 0.0;
+                        const double pad = std::max(0.0, padVal);
+                        const double innerW = std::max(1.0, item->width() - 2.0 * pad);
+                        const double innerH = std::max(1.0, item->height() - 2.0 * pad);
+                        const bool hostVisible = host ? (host->opacity() > 0.005) : (item->opacity() > 0.005);
+                        if (hostVisible) {
+                            // mapRectToScene incorporates FlyoutHost spring scale + Translate(y)
+                            // so blur and input mask track the inner glass card cleanly.
+                            const QRectF sceneRect = item->mapRectToScene(QRectF(pad, pad, innerW, innerH));
+                            const int rx = std::max(0, static_cast<int>(std::floor(sceneRect.x())));
+                            const int ry = std::max(0, static_cast<int>(std::floor(sceneRect.y())));
+                            const int rw = std::max(1, static_cast<int>(std::ceil(sceneRect.width())));
+                            const int rh = std::max(1, static_cast<int>(std::ceil(sceneRect.height())));
                             mask += QRect(rx, ry, rw, rh);
                             added = true;
                         }
                     }
                 }
-                if (!added) {
+                if (!added && isOpen) {
                     mask += fallbackRect;
                 }
             };
 
-            if (bridge.logoMenuOpen()) {
-                addFlyoutItemMask("logoFlyout", QRect(8, 36, 230, 290));
-            }
-            if (bridge.appMenuOpen()) {
-                addFlyoutItemMask("appsFlyout", QRect(48, 36, 350, 390));
-            }
-            if (bridge.calendarOpen()) {
-                addFlyoutItemMask("calFlyout", QRect(cx - 90, 48, 310, 310));
-            }
-            if (bridge.notificationsOpen()) {
-                addFlyoutItemMask("notifFlyout", QRect(w - 398, 36, 390, 370));
-            }
-            if (bridge.volumeFlyoutOpen()) {
-                addFlyoutItemMask("volFlyout", QRect(w - 295, 36, 260, 190));
-            }
-            if (bridge.brightnessFlyoutOpen()) {
-                addFlyoutItemMask("briFlyout", QRect(w - 325, 36, 260, 110));
-            }
-            if (bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen()) {
-                addFlyoutItemMask("powerDialog", QRect(cx - 190, 60, 380, 180));
-            }
-            if (bridge.toastVisible()) {
-                addFlyoutItemMask("notifToast", QRect(w - 370, 38, 360, 72));
-            }
+            addFlyoutItemMask("logoFlyout",   QRect(8, 36, 224, 274),        bridge.logoMenuOpen());
+            addFlyoutItemMask("appsFlyout",   QRect(48, 36, 248, 360),       bridge.appMenuOpen());
+            addFlyoutItemMask("calFlyout",    QRect(cx - 90, 48, 300, 310),  bridge.calendarOpen());
+            addFlyoutItemMask("notifFlyout",  QRect(w - 376, 36, 360, 182),  bridge.notificationsOpen());
+            addFlyoutItemMask("volFlyout",    QRect(w - 295, 36, 256, 174),  bridge.volumeFlyoutOpen());
+            addFlyoutItemMask("briFlyout",    QRect(w - 325, 36, 250, 116),  bridge.brightnessFlyoutOpen());
+            addFlyoutItemMask("powerDialog",  QRect(cx - 190, 60, 380, 180), bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen());
+            addFlyoutItemMask("notifToast",   QRect(w - 368, 40, 350, 68),   bridge.toastVisible());
 
             window->setMask(mask);
-            tinexus::log::debug("[shell] Applied dynamic compound input mask (rect count={})", mask.rectCount());
+            window->requestUpdate();
+            bridge.syncBlurRegion(mask);
+            tinexus::log::debug("[shell] Applied dynamic compound input/blur mask (rect count={})", mask.rectCount());
         };
 
         // Install event filter for auto-dismissing flyouts on focus loss
@@ -226,11 +231,20 @@ int main(int argc, char* argv[]) {
         QObject::connect(&bridge, &tinexus::shell::ShellBridge::toastVisibleChanged,
                          window, applyInputMask);
 
+        // Re-apply whenever AuraNotch expands or collapses
+        QObject::connect(&bridge, &tinexus::shell::ShellBridge::notchExpandedChanged,
+                         window, applyInputMask);
+
+        // Re-apply when QML flyout loaders / spring animations settle
+        QObject::connect(&bridge, &tinexus::shell::ShellBridge::overlayGeometrySyncRequested,
+                         window, applyInputMask);
+
         // Re-apply if window width changes (e.g. dynamic output resize)
         QObject::connect(window, &QWindow::widthChanged, window,
                          [applyInputMask](int /*newW*/) { applyInputMask(); });
 
         window->show();
+        applyInputMask();
     }
 
     return app.exec();

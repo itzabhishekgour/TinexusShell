@@ -53,6 +53,7 @@ public:
     Q_INVOKABLE void toggleAutoHide();
     Q_INVOKABLE void onTripwireEntered();
     Q_INVOKABLE void updateInputRegion(int x, int y, int width, int height);
+    Q_INVOKABLE void updateBlurRegion(int x, int y, int width, int height, double cornerRadius, bool visible);
 
     [[nodiscard]] QRect inputRegionRect() const { return m_inputRegionRect; }
 
@@ -66,6 +67,8 @@ signals:
     void revealRequested();
     void hideRequested();
     void peakRequested();
+    void pointerLeft();
+    void blurRegionUpdated(int x, int y, int width, int height, double cornerRadius, bool visible);
 
 private:
     void setupMainWindowLayerShell();

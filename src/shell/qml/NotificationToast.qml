@@ -21,7 +21,7 @@ Item {
         anchors.fill: parent
         materialType: "popover"
         cornerRadius: 14
-        fluidOpacity: 0.92
+        fluidOpacity: 0.68
     }
 
     MouseArea {

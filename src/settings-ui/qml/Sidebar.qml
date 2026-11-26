@@ -286,14 +286,18 @@ Rectangle {
                     delegate: Rectangle {
                         id: itemDelegate
                         Layout.fillWidth: true
-                        height: 30
-                        radius: 6
+                        height: 32
+                        radius: 8
 
                         property bool isSelected: bridge.currentPage === modelData.page
 
                         // Selected: soft macOS blue gradient (#0A84FF to #0071E3)
                         gradient: isSelected ? selectedGrad : null
-                        color: !isSelected && itemArea.containsMouse ? "#0effffff" : "transparent"
+                        color: !isSelected ? (itemArea.pressed ? "#18ffffff" : (itemArea.containsMouse ? "#10ffffff" : "transparent")) : "transparent"
+
+                        Behavior on color {
+                            ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+                        }
 
                         Gradient {
                             id: selectedGrad
@@ -301,14 +305,14 @@ Rectangle {
                             GradientStop { position: 1.0; color: "#0071E3" }
                         }
 
-                        border.color: isSelected ? Qt.rgba(1, 1, 1, 0.15) : "transparent"
-                        border.width: isSelected ? 1 : 0
+                        border.color: isSelected ? Qt.rgba(1, 1, 1, 0.16) : (itemArea.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : "transparent")
+                        border.width: 1
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 6
-                            anchors.rightMargin: 6
-                            spacing: 8
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            spacing: 9
 
                             MacSquircleIcon {
                                 iconSize: 20
@@ -321,6 +325,7 @@ Rectangle {
                             Text {
                                 text: modelData.name
                                 color: itemDelegate.isSelected ? "#ffffff" : "#e5e5ea"
+                                font.family: "Inter"
                                 font.pixelSize: 13
                                 font.weight: itemDelegate.isSelected ? Font.Medium : Font.Normal
                                 Layout.fillWidth: true
@@ -355,9 +360,10 @@ Rectangle {
 
                     delegate: Rectangle {
                         Layout.fillWidth: true
-                        height: 38
-                        radius: 6
-                        color: subArea.containsMouse ? "#14ffffff" : "transparent"
+                        height: 40
+                        radius: 8
+                        color: subArea.pressed ? "#1cffffff" : (subArea.containsMouse ? "#12ffffff" : "transparent")
+                        Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                         RowLayout {
                             anchors.fill: parent

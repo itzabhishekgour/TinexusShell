@@ -13,7 +13,8 @@ enum class DockMessageType : uint16_t {
     DOCK_RAISE_AND_FOCUS      = 0x0065,  // dock→comp: "raise+focus running-bg window"
     DOCK_NOTIFY_FOCUS_CHANGED = 0x0066,  // comp→dock: "app focus state changed"
     DOCK_NOTIFY_APP_STARTED   = 0x0067,  // comp→dock: "app window mapped / running"
-    DOCK_NOTIFY_APP_CLOSED    = 0x0068   // comp→dock: "app window unmapped / closed"
+    DOCK_NOTIFY_APP_CLOSED    = 0x0068,  // comp→dock: "app window unmapped / closed"
+    DOCK_BLUR_REGION          = 0x0069   // dock→comp: tight pill blur region + radius
 };
 
 struct __attribute__((packed)) DockQueryIconPositionPayload {
@@ -36,6 +37,15 @@ struct __attribute__((packed)) DockNotifyPayload {
 struct __attribute__((packed)) DockFocusChangedPayload {
     char     app_id[128];
     uint8_t  is_focused;   // 1 = became focused, 0 = lost focus
+};
+
+struct __attribute__((packed)) DockBlurRegionPayload {
+    int32_t  x;
+    int32_t  y;
+    int32_t  w;
+    int32_t  h;
+    float    corner_radius;
+    uint8_t  visible;      // 1 = blur active pill rect, 0 = hidden (clear blur)
 };
 
 } // namespace tinexus::ipcd::protocol

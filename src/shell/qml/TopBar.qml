@@ -26,7 +26,8 @@ Item {
         anchors.fill: parent
         materialType: "toolbar"
         cornerRadius: 0
-        fluidOpacity: 0.68
+        fluidOpacity: 0.56
+        shadowEnabled: false
     }
 
     // ── Left: Logo + Applications Dropdown ──────────────────────

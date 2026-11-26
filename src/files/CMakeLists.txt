@@ -5,6 +5,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Gui
     Quick
     Qml
+    Svg
     WaylandClient
 )
 
@@ -37,6 +38,7 @@ target_link_libraries(tinexus-files PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
+    Qt6::Svg
     Qt6::WaylandClient
 )
 

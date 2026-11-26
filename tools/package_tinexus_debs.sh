@@ -313,6 +313,7 @@ Icon=user-desktop
 Terminal=false
 Type=Application
 Categories=System;Core;
+NoDisplay=true
 OnlyShowIn=Tinexus;
 EOF_DOCK_DESKTOP
 cp -f "$DESK_DIR/usr/share/applications/tinexus-dock.desktop" "$DESK_DIR/etc/xdg/autostart/tinexus-dock.desktop"
@@ -386,9 +387,9 @@ ln -sf tinexus-store.desktop "$APPS_DIR/usr/share/applications/tinexus-app-insta
 cat > "$APPS_DIR/usr/share/applications/tinexus-files.desktop" << 'EOF'
 [Desktop Entry]
 Name=Files
-Comment=Tinexus File Manage
+Comment=Tinexus File Manager
 Exec=/usr/bin/tinexus-files
-Icon=system-file-manage
+Icon=system-file-manager
 Terminal=false
 Type=Application
 Categories=System;Utility;Core;
@@ -407,10 +408,10 @@ EOF
 
 cat > "$APPS_DIR/usr/share/applications/tinexus-monitor.desktop" << 'EOF'
 [Desktop Entry]
-Name=Activity Monito
-Comment=Platform Resource and Process Monito
-Exec=/usr/bin/tinexus-monito
-Icon=utilities-system-monito
+Name=Activity Monitor
+Comment=Platform Resource and Process Monitor
+Exec=/usr/bin/tinexus-monitor
+Icon=utilities-system-monitor
 Terminal=false
 Type=Application
 Categories=System;Monitor;Core;
@@ -441,7 +442,7 @@ EOF
 cat > "$APPS_DIR/usr/share/applications/foot.desktop" << 'EOF'
 [Desktop Entry]
 Name=Foot Terminal
-Comment=Lightweight Wayland Terminal Emulato
+Comment=Lightweight Wayland Terminal Emulator
 Exec=/usr/bin/foot
 Icon=utilities-terminal
 Terminal=false

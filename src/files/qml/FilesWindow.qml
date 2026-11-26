@@ -341,7 +341,8 @@ Window {
                                 height: 28
                                 radius: 6
                                 readonly property bool isActive: typeof bridge !== "undefined" && bridge.currentViewMode === modelData.mode
-                                color: isActive ? "#0A84FF" : (segMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.10) : "transparent")
+                                color: isActive ? "#0A84FF" : (segMouse.pressed ? Qt.rgba(1, 1, 1, 0.16) : (segMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.10) : "transparent"))
+                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                                 TinexusVectorIcon {
                                     anchors.centerIn: parent
@@ -840,16 +841,17 @@ Window {
 
                             delegate: Item {
                                 width: 166
-                                height: modelData.isHeader ? 22 : 30
+                                height: modelData.isHeader ? 24 : 32
 
                                 // Section Header
                                 Text {
                                     visible: modelData.isHeader
                                     anchors.left: parent.left
-                                    anchors.leftMargin: 6
+                                    anchors.leftMargin: 8
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: modelData.label
                                     color: "#86868B"
+                                    font.family: "Inter"
                                     font.pixelSize: 10
                                     font.weight: Font.DemiBold
                                 }
@@ -858,9 +860,10 @@ Window {
                                 Rectangle {
                                     visible: !modelData.isHeader
                                     anchors.fill: parent
-                                    radius: 6
+                                    radius: 8
                                     readonly property bool isCurrent: typeof bridge !== "undefined" && bridge.currentPath === modelData.path
-                                    color: isCurrent ? "#0A84FF" : (sbMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : "transparent")
+                                    color: isCurrent ? "#0A84FF" : (sbMouse.pressed ? Qt.rgba(1, 1, 1, 0.16) : (sbMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.10) : "transparent"))
+                                    Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                                     Row {
                                         anchors.fill: parent
@@ -870,6 +873,7 @@ Window {
 
                                         FileVectorIcon {
                                             iconKind: modelData.iconKind
+                                            iconName: modelData.iconName ? modelData.iconName : ""
                                             isDir: true
                                             iconSize: 16
                                             anchors.verticalCenter: parent.verticalCenter
@@ -877,8 +881,9 @@ Window {
                                         Text {
                                             text: modelData.label
                                             color: "#FFFFFF"
+                                            font.family: "Inter"
                                             font.pixelSize: 13
-                                            font.bold: isCurrent
+                                            font.weight: isCurrent ? Font.Medium : Font.Normal
                                             anchors.verticalCenter: parent.verticalCenter
                                         }
                                     }
@@ -1020,9 +1025,10 @@ Window {
                             height: 105
                             radius: 8
                             readonly property bool isSelected: typeof bridge !== "undefined" && bridge.isSelected(modelData.path)
-                            color: isSelected ? Qt.rgba(0.04, 0.52, 1.0, 0.35) : (itemMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent")
+                            color: isSelected ? Qt.rgba(0.04, 0.52, 1.0, 0.35) : (itemMouse.pressed ? Qt.rgba(1, 1, 1, 0.12) : (itemMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent"))
                             border.color: isSelected ? "#0A84FF" : (itemMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.15) : "transparent")
                             border.width: 1
+                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                             Column {
                                 anchors.centerIn: parent
@@ -1301,7 +1307,8 @@ Window {
                                 width: parent.width
                                 height: 32
                                 readonly property bool isSelected: typeof bridge !== "undefined" && bridge.isSelected(modelData.path)
-                                color: isSelected ? Qt.rgba(0.04, 0.52, 1.0, 0.35) : (rowMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : (index % 2 === 0 ? "transparent" : Qt.rgba(1, 1, 1, 0.02)))
+                                color: isSelected ? Qt.rgba(0.04, 0.52, 1.0, 0.35) : (rowMouse.pressed ? Qt.rgba(1, 1, 1, 0.10) : (rowMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : (index % 2 === 0 ? "transparent" : Qt.rgba(1, 1, 1, 0.02))))
+                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -1474,7 +1481,8 @@ Window {
                                             height: 30
                                             radius: 5
                                             readonly property bool isSelected: (typeof bridge !== "undefined" && bridge.getColumnSelectedIndex(colIdx) === index)
-                                            color: isSelected ? "#0A84FF" : (cMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent")
+                                            color: isSelected ? "#0A84FF" : (cMouse.pressed ? Qt.rgba(1, 1, 1, 0.14) : (cMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent"))
+                                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                                             DropArea {
                                                 anchors.fill: parent

@@ -12,9 +12,12 @@ Item {
     property string appId:           ""
     property string label:           ""
     property string iconType:        "terminal" // "terminal"|"folder"|"gear"|"barchart"|"firefox"|"package"|"trash"
+    property string iconUrl:         ""
     property int    appState:        0          // 0=NotRunning 1=RunningBg 2=RunningFocused 3=Minimized
     property real   bounceOffset:    0.0
+    property real   pillFloorY:      0.0
     property bool   isHovered:       false
+    property bool   isPressed:       false
     property bool   isRunning:       false
     property bool   isActive:        false
     property bool   needsAttention:  false
@@ -26,16 +29,32 @@ Item {
     property bool isBeingDragged: false
     property int  itemIndex:      -1
     property bool isDraggable:    !isDeleted && iconType !== "separator" && iconType !== "trash"
+    property real dragOffsetX:    0.0
+    property real dragOffsetY:    0.0
+
+    Behavior on dragOffsetX {
+        enabled: !root.isBeingDragged
+        SpringAnimation { spring: 6.5; damping: 0.48; epsilon: 0.5 }
+    }
+    Behavior on dragOffsetY {
+        enabled: !root.isBeingDragged
+        SpringAnimation { spring: 6.5; damping: 0.48; epsilon: 0.5 }
+    }
+    transform: Translate {
+        x: root.dragOffsetX
+        y: root.dragOffsetY
+    }
 
     // ── Slice 6: Wayland File Drag-and-Drop Drop Target ─────────────────────
     property bool isDropTarget:   false
 
-    // ── Slice 4: Pure QML Fisheye Math Inputs ────────────────────────────────
+    // ── Slice 4: Unified Magnetic Physics Inputs ───────────────────────────
     property real cursorX:       -1.0
     property bool mouseInDock:   false
     property real centerX:       0.0
-    property real magnifySpread: 130.0
-    property real maxScale:      1.35
+    property real magnifySpread: 136.0
+    property real maxScale:      1.38
+    property real externalScale: 1.0
 
     signal clicked()
     signal contextMenuRequested()
@@ -45,36 +64,18 @@ Item {
     signal dragCanceled()
 
     opacity: isBeingDragged ? 0.20 : 1.0
-    scale:   isBeingDragged ? 0.85 : (isDropTarget ? 1.24 : 1.0)
+    scale:   isPressed ? 0.88 : (isBeingDragged ? 0.85 : (isDropTarget ? 1.24 : 1.0))
     Behavior on opacity { NumberAnimation { duration: 150 } }
     Behavior on scale {
-        NumberAnimation {
-            duration: 180
-            easing.type: Easing.OutBack
-            easing.overshoot: 1.4
+        SpringAnimation {
+            spring: 6.5
+            damping: 0.42
+            epsilon: 0.002
         }
     }
 
-    // ── 1. Pure QML Fisheye Math (Cosine curve, zero timers) ─────────────────
-    readonly property real distanceToCursor: mouseInDock ? Math.abs(centerX - cursorX) : 999999.0
-
-    readonly property real targetScale: {
-        if (!mouseInDock || distanceToCursor >= magnifySpread) return 1.0
-        // Normalized distance t in [0.0, 1.0] where 1.0 is directly under cursor
-        const t = 1.0 - (distanceToCursor / magnifySpread)
-        // Cosine bell curve: cos((1 - t) * PI * 0.5)
-        return 1.0 + (maxScale - 1.0) * Math.cos((1.0 - t) * Math.PI * 0.5)
-    }
-
-    // SmoothedAnimation applies natural physics-based lag behind cursor
-    property real scaleFactor: targetScale
-    Behavior on scaleFactor {
-        SmoothedAnimation {
-            velocity: 8.0
-            duration: 100
-            reversingMode: SmoothedAnimation.Immediate
-        }
-    }
+    // Direct 60Hz/120Hz lockstep scale driven by DockBridge parabolic spring math
+    readonly property real scaleFactor: Math.max(1.0, externalScale)
 
     // ── Derived geometry ─────────────────────────────────────────────────────
     property real baseIconSize:          48.0
@@ -215,12 +216,26 @@ Item {
             }
         }
 
-        // ── Glyphs ──────────────────────────────────────────────────────────
+        // ── High-DPI Real App Icon (from DockIconProvider / .desktop) ───────
+        Image {
+            id: realAppIcon
+            anchors.centerIn: parent
+            width:  iconSize * 0.78
+            height: iconSize * 0.78
+            source: root.iconUrl
+            sourceSize.width:  96
+            sourceSize.height: 96
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+            visible: root.iconUrl.length > 0 && status === Image.Ready
+        }
+
+        // ── Fallback Glyphs (only when theme icon unavailable) ──────────────
 
         // 1. Terminal: ">_" prompt
         Text {
             anchors.centerIn: parent
-            visible:     root.iconType === "terminal"
+            visible:     !realAppIcon.visible && root.iconType === "terminal"
             text:        ">_"
             color:       "#2ECC6A"
             font.family: "JetBrains Mono, Fira Mono, monospace"
@@ -233,7 +248,7 @@ Item {
             anchors.centerIn: parent
             width:   26 * root.scaleFactor
             height:  20 * root.scaleFactor
-            visible: root.iconType === "folder"
+            visible: !realAppIcon.visible && root.iconType === "folder"
 
             Rectangle {
                 x: 0; y: 0
@@ -254,7 +269,7 @@ Item {
         // 3. Settings: ⚙ gear
         Text {
             anchors.centerIn: parent
-            visible:        root.iconType === "gear"
+            visible:        !realAppIcon.visible && root.iconType === "gear"
             text:           "⚙"
             color:          "#FFFFFF"
             font.pixelSize: Math.max(8, Math.round(22 * root.scaleFactor))
@@ -263,7 +278,7 @@ Item {
         // 4. Activity Monitor: heartbeat pulse
         Canvas {
             anchors.fill: parent
-            visible: root.iconType === "barchart"
+            visible: !realAppIcon.visible && root.iconType === "barchart"
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
@@ -287,7 +302,7 @@ Item {
         // 5. App Store: bold "A"
         Text {
             anchors.centerIn: parent
-            visible:        root.iconType === "package"
+            visible:        !realAppIcon.visible && root.iconType === "package"
             text:           "A"
             color:          "#FFFFFF"
             font.bold:      true
@@ -297,7 +312,7 @@ Item {
         // 6. Firefox: globe + flame
         Canvas {
             anchors.fill: parent
-            visible: root.iconType === "firefox"
+            visible: !realAppIcon.visible && root.iconType === "firefox"
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
@@ -335,7 +350,7 @@ Item {
         // 7. Trash can
         Canvas {
             anchors.fill: parent
-            visible: root.iconType === "trash"
+            visible: !realAppIcon.visible && root.iconType === "trash"
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
@@ -495,15 +510,14 @@ Item {
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    // 5. Running Indicator Dots — below icon
+    // 5. Running Indicator Dots — anchored to dock pill floor
     // ────────────────────────────────────────────────────────────────────────
     Row {
         id: dotRow
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top:              parent.bottom
-        anchors.topMargin:        3
+        y:                        root.pillFloorY > 0 ? (root.pillFloorY - root.y - height / 2.0) : (root.height + 3)
         spacing:                  4
-        visible:                  root.isRunning
+        visible:                  root.isRunning && root.iconType !== "separator"
 
         Repeater {
             model: root.isRunning ? Math.min(3, Math.max(1, root.toplevelCount)) : 0
@@ -604,37 +618,64 @@ Item {
         z:               20
         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
-        property point pressOrigin: Qt.point(0, 0)
-        property bool  dragActive:  false
+        property point pressOrigin:      Qt.point(0, 0)
+        property point pressSceneOrigin: Qt.point(0, 0)
+        property bool  dragActive:       false
+
+        function resetDragState() {
+            dragActive = false
+            root.isPressed = false
+            root.isBeingDragged = false
+            root.dragOffsetX = 0.0
+            root.dragOffsetY = 0.0
+        }
+
+        Connections {
+            target: root
+            function onIsBeingDraggedChanged() {
+                if (!root.isBeingDragged && mouseArea.dragActive) {
+                    mouseArea.resetDragState()
+                }
+            }
+        }
 
         onPressed: function(mouse) {
             pressOrigin = Qt.point(mouse.x, mouse.y)
+            pressSceneOrigin = root.mapToItem(null, mouse.x, mouse.y)
             dragActive = false
+            root.isPressed = true
         }
 
         onPositionChanged: function(mouse) {
             if (mouse.buttons & Qt.LeftButton) {
+                const pt = root.mapToItem(null, mouse.x, mouse.y)
                 if (!dragActive && root.isDraggable) {
                     const dx = mouse.x - pressOrigin.x
                     const dy = mouse.y - pressOrigin.y
                     if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
                         dragActive = true
+                        root.isPressed = false
                         root.isBeingDragged = true
-                        const pt = root.mapToItem(null, mouse.x, mouse.y)
                         root.dragStarted(root.itemIndex, pt.x, pt.y, root.appId)
                     }
                 }
                 if (dragActive) {
-                    const pt = root.mapToItem(null, mouse.x, mouse.y)
+                    root.dragOffsetX = pt.x - pressSceneOrigin.x
+                    root.dragOffsetY = pt.y - pressSceneOrigin.y
                     root.dragMoved(pt.x, pt.y)
                 }
+            } else if (dragActive) {
+                // Failsafe if button release occurred during pointer transition
+                const pt = root.mapToItem(null, mouse.x, mouse.y)
+                resetDragState()
+                root.dragFinished(pt.x, pt.y)
             }
         }
 
         onReleased: function(mouse) {
-            if (dragActive) {
-                dragActive = false
-                root.isBeingDragged = false
+            const wasDragging = dragActive
+            resetDragState()
+            if (wasDragging) {
                 const pt = root.mapToItem(null, mouse.x, mouse.y)
                 root.dragFinished(pt.x, pt.y)
             } else if (mouse.button === Qt.RightButton || (mouse.modifiers & Qt.ControlModifier)) {
@@ -645,9 +686,9 @@ Item {
         }
 
         onCanceled: {
-            if (dragActive) {
-                dragActive = false
-                root.isBeingDragged = false
+            const wasDragging = dragActive
+            resetDragState()
+            if (wasDragging) {
                 root.dragCanceled()
             }
         }

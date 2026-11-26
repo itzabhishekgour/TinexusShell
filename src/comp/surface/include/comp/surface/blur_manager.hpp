@@ -74,10 +74,11 @@ public:
     void set_surface_blur_region(struct wlr_surface* surface, struct wl_resource* region_resource);
     void set_surface_corner_radius(struct wlr_surface* surface, float corner_radius);
     void commit_surface_blur(struct wlr_surface* surface);
-    void unregister_surface_blur(struct wlr_surface* surface);
+    void unregister_surface_blur(struct wlr_surface* surface, bool explicit_unset = false);
 
     // Queries
     bool is_surface_blurred(struct wlr_surface* surface) const;
+    bool is_surface_explicitly_unset(struct wlr_surface* surface) const;
     const BlurSurfaceState* get_surface_state(struct wlr_surface* surface) const;
     bool is_namespace_blurred(const std::string& ns) const;
 
@@ -124,6 +125,7 @@ private:
 
     BlurConfig m_config;
     std::unordered_map<struct wlr_surface*, std::unique_ptr<BlurSurfaceState>> m_surfaces;
+    std::unordered_set<struct wlr_surface*> m_explicitly_unset;
     std::unordered_set<std::string> m_blurred_namespaces{
         "topbar", "tinexus-shell", "tinexus-panel",
         "launcher", "tinexus-launcher",

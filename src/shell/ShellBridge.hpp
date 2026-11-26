@@ -10,8 +10,12 @@
 #include <QtCore/QVariantMap>
 #include <QtCore/QTimer>
 #include <QtCore/QDateTime>
+#include <QtCore/QPointer>
+#include <QtGui/QRegion>
 #include <atomic>
 #include <memory>
+
+class QQuickWindow;
 
 namespace tinexus::shell {
 
@@ -58,7 +62,10 @@ class ShellBridge : public QObject {
 
 public:
     explicit ShellBridge(QObject* parent = nullptr);
-    ~ShellBridge() override = default;
+    ~ShellBridge() override;
+
+    void setShellWindow(QQuickWindow* window);
+    void syncBlurRegion(const QRegion& region);
 
     // Getters
     QString currentTime() const { return m_currentTime; }
@@ -132,6 +139,7 @@ public:
     Q_INVOKABLE void openWifiSettings();
     Q_INVOKABLE void onNotchCenterClicked();
     Q_INVOKABLE void requestBlur(bool enable = true, int radius = 28);
+    Q_INVOKABLE void syncOverlayGeometry();
 
     // Power Actions
     Q_INVOKABLE void requestReboot();
@@ -158,6 +166,7 @@ signals:
     void mediaStateChanged();
     void toastVisibleChanged();
     void toastContentChanged();
+    void overlayGeometrySyncRequested();
 
 private slots:
     void updateClock();
@@ -205,8 +214,18 @@ private:
     QTimer       m_clockTimer;
     QTimer       m_batteryTimer;
     QTimer       m_audioTimer;
+    QTimer       m_volumeApplyTimer;
+    int          m_pendingVolume{-1};
     std::shared_ptr<std::atomic<bool>> m_audioPolling{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<bool>> m_audioWriting{std::make_shared<std::atomic<bool>>(false)};
     std::shared_ptr<std::atomic<bool>> m_appsScanning{std::make_shared<std::atomic<bool>>(false)};
+
+    struct BlurProtocolState;
+    std::unique_ptr<BlurProtocolState> m_blurState;
+    QPointer<QQuickWindow> m_shellWindow;
+    QRegion m_lastBlurRegion;
+    bool    m_blurEnabled{true};
+    int     m_blurRadius{28};
 };
 
 } // namespace tinexus::shell

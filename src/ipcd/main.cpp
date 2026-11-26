@@ -7,6 +7,7 @@
 #include "ipcd/registry/service_registry.hpp"
 #include "ipcd/broker/pubsub_broker.hpp"
 #include "ipcd/protocol/header.hpp"
+#include "ipcd/protocol/dock_protocol.hpp"
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -80,6 +81,21 @@ void dispatch_message(int sender_fd,
                       const std::vector<int>& fds) {
     using namespace tinexus::ipcd;
     using MT = protocol::MessageType;
+    using DM = protocol::DockMessageType;
+    if (hdr.msg_type >= static_cast<uint16_t>(DM::DOCK_QUERY_ICON_POSITION) &&
+        hdr.msg_type <= static_cast<uint16_t>(DM::DOCK_BLUR_REGION)) {
+        auto subscribers = broker::PubSubBroker::instance().get_subscribers(hdr.msg_type);
+        for (int sub_fd : subscribers) {
+            if (sub_fd == sender_fd) continue;
+            send_frame(sub_fd, static_cast<MT>(hdr.msg_type), hdr.sequence_id,
+                       payload.empty() ? nullptr : payload.data(),
+                       static_cast<uint32_t>(payload.size()));
+        }
+        tinexus::log::debug("[ipcd] Dock msg_type=0x{:04x} routed to {} subscriber(s)",
+                            hdr.msg_type, subscribers.size());
+        return;
+    }
+
     auto msg_type = static_cast<MT>(hdr.msg_type);
 
     switch (msg_type) {

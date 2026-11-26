@@ -16,6 +16,10 @@
 #include <QtCore/QVariantList>
 #include <QtCore/QVariantMap>
 #include <QtCore/QTimer>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QByteArray>
+#include <QtCore/QUrl>
+#include <QtCore/QRect>
 #include <QtCore/QFileSystemWatcher>
 #include <common/SpringStatePortable.hpp>
 #include <memory>
@@ -25,6 +29,7 @@
 
 QT_BEGIN_NAMESPACE
 class QDBusInterface;
+class QLocalSocket;
 QT_END_NAMESPACE
 
 namespace tinexus::dock {
@@ -43,6 +48,7 @@ struct DockIconItem {
     QString label;
     QString exec;
     QString iconType; // "terminal", "folder", "gear", "barchart", "package", "separator", "trash", "stack"
+    QUrl    iconUrl;
     DockIconAppState appState{DockIconAppState::NotRunning};
     int     toplevelCount{0};
     uint32_t badgeCount{0};
@@ -53,9 +59,9 @@ struct DockIconItem {
 
     double centerX{0.0};
 
-    DockIconItem(QString id, QString lbl, QString ex, QString icn, DockIconAppState st, int topCount = 0, uint32_t badge = 0, bool attention = false)
+    DockIconItem(QString id, QString lbl, QString ex, QString icn, DockIconAppState st, int topCount = 0, uint32_t badge = 0, bool attention = false, QUrl url = {})
         : appId(std::move(id)), label(std::move(lbl)), exec(std::move(ex)), iconType(std::move(icn)),
-          appState(st), toplevelCount(topCount), badgeCount(badge), needsAttention(attention) {}
+          iconUrl(std::move(url)), appState(st), toplevelCount(topCount), badgeCount(badge), needsAttention(attention) {}
 };
 
 class DockModel;
@@ -88,10 +94,10 @@ public:
     static constexpr double BASE_SIZE       = 48.0;
     static constexpr double GAP             = 14.0;
     static constexpr double DOCK_PAD        = 16.0;
-    static constexpr double DOCK_BOT_MARGIN = 8.0;
+    static constexpr double DOCK_BOT_MARGIN = 14.0;
     static constexpr double PILL_HEIGHT     = 68.0;
-    static constexpr double MAX_SCALE       = 1.35;
-    static constexpr double INFLUENCE_R     = 130.0;
+    static constexpr double MAX_SCALE       = 1.38;
+    static constexpr double INFLUENCE_R     = 136.0;
 
     explicit DockBridge(QObject* parent = nullptr);
     ~DockBridge() override;
@@ -123,7 +129,8 @@ public:
     Q_INVOKABLE void activateApp(const QString& appId);
     Q_INVOKABLE void requestContextMenu(int index);
     Q_INVOKABLE void updateLayout(double totalWindowWidth);
-    Q_INVOKABLE void updateScreenGeometry(double totalWindowWidth, double totalWindowHeight);
+    Q_INVOKABLE void updateScreenGeometry(double totalWindowWidth, double totalWindowHeight,
+                                          double screenX = 0.0, double screenY = 0.0);
     Q_INVOKABLE void minimizeApp(const QString& appId);
     Q_INVOKABLE void closeApp(const QString& appId);
     Q_INVOKABLE void forceQuitApp(const QString& appId);
@@ -196,12 +203,20 @@ public slots:
 
 private slots:
     void onAnimationTimer();
+    void onIpcdConnected();
+    void onIpcdReadyRead();
+    void tryConnectIpcd();
 
 private:
     void setupDBus();
+    void setupIpcdClient();
+    void sendIpcFrame(uint16_t msgType, const void* payload, uint32_t payloadLen);
+    void sendIconPosition(const QString& appId);
+    void sendAllIconPositions();
+    void publishBlurRegion(int x, int y, int w, int h, double cornerRadius, bool visible);
     void sendRaiseAndFocus(const QString& appId);
     void launchWithFiles(const QString& execLine, const QStringList& uris);
-    void recomputeLayout();
+    void recomputeLayout(bool syncIpc = true);
     void requestAnimation();
     void loadConfig();
     void saveConfig();
@@ -217,15 +232,28 @@ private:
     double m_mouseX{-1.0};
     double m_windowWidth{800.0};
     double m_screenHeight{1080.0};
+    double m_screenX{0.0};
+    double m_screenY{0.0};
     double m_pillWidth{0.0};
     bool   m_reducedMotion{false};
     bool   m_autoHideEnabled{false};
     int    m_autoHideState{0}; // 0=Visible, 1=Peaking, 2=Hidden
 
     QTimer m_animTimer;
+    QTimer m_hoverTimer;
+    QElapsedTimer m_animClock;
     QFileSystemWatcher m_trashWatcher;
     QDBusInterface* m_compIface{nullptr};
     DockAdaptor* m_dockAdaptor{nullptr};
+    QLocalSocket* m_ipcSocket{nullptr};
+    QTimer m_ipcReconnectTimer;
+    int m_ipcBackoffMs{500};
+    QByteArray m_ipcReadBuf;
+    uint32_t m_ipcSeq{0};
+    std::unordered_map<std::string, QRect> m_lastSentIconCoords;
+    QRect m_lastSentBlurRect{};
+    double m_lastSentBlurRadius{-1.0};
+    bool m_lastSentBlurVisible{false};
     std::unordered_map<std::string, uint32_t> m_badgeMap;
 };
 

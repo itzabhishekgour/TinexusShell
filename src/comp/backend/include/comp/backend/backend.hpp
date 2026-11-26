@@ -35,6 +35,8 @@ public:
     virtual bool toggle_launcher() noexcept { return false; }
     virtual void update_dock_icon_position(const std::string& app_id, int32_t x, int32_t y,
                                            int32_t w, int32_t h) noexcept {}
+    virtual void update_dock_blur_region(int32_t x, int32_t y, int32_t w, int32_t h,
+                                         float corner_radius, bool visible) noexcept {}
 
     virtual struct wl_display* display() = 0;
     [[nodiscard]] virtual BackendType type() const noexcept = 0;

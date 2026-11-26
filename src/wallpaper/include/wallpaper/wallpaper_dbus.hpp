@@ -26,15 +26,17 @@ class WallpaperDBus {
 public:
     using SetWallpaperHandler = std::function<void(const std::string& path, uint8_t mode, bool dynamic, uint16_t fade_ms)>;
     using StatusQueryHandler  = std::function<WallpaperStatus()>;
-    using AdvanceFrameHandler = std::function<void()>;
-    using ReloadHandler       = std::function<void()>;
+    using AdvanceFrameHandler       = std::function<void()>;
+    using ReloadHandler             = std::function<void()>;
+    using LauncherVisibilityHandler = std::function<void(bool visible)>;
 
     static WallpaperDBus& instance();
 
     bool init(SetWallpaperHandler on_set,
               StatusQueryHandler on_status,
               AdvanceFrameHandler on_advance,
-              ReloadHandler on_reload);
+              ReloadHandler on_reload,
+              LauncherVisibilityHandler on_launcher_visibility = nullptr);
     void shutdown();
 
     [[nodiscard]] sd_bus* bus() const noexcept { return m_bus; }
@@ -62,6 +64,7 @@ public:
                             const char* property, sd_bus_message* reply, void* userdata,
                             sd_bus_error* ret_error);
     static int on_settings_signal(sd_bus_message* m, void* userdata, sd_bus_error* ret_error);
+    static int on_launcher_signal(sd_bus_message* m, void* userdata, sd_bus_error* ret_error);
 
 private:
     WallpaperDBus() = default;
@@ -72,11 +75,13 @@ private:
     sd_bus_slot* m_slot_root{nullptr};
     sd_bus_slot* m_match_theme{nullptr};
     sd_bus_slot* m_match_config{nullptr};
+    sd_bus_slot* m_match_launcher{nullptr};
 
-    SetWallpaperHandler m_on_set;
-    StatusQueryHandler  m_on_status;
-    AdvanceFrameHandler m_on_advance;
-    ReloadHandler       m_on_reload;
+    SetWallpaperHandler       m_on_set;
+    StatusQueryHandler        m_on_status;
+    AdvanceFrameHandler       m_on_advance;
+    ReloadHandler             m_on_reload;
+    LauncherVisibilityHandler m_on_launcher_visibility;
 
     std::string m_current_path;
     uint8_t     m_fit_mode{0};

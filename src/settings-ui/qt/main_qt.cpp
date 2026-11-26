@@ -2,6 +2,7 @@
 #include <common/logger.hpp>
 #include <common/version.hpp>
 #include <common/DBusNames.hpp>
+#include <common/ui/TinexusAppIconProvider.hpp>
 #include <txui/core/SingleInstance.hpp>
 
 #include <QGuiApplication>
@@ -65,12 +66,21 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Wi-Fi periodic poller (500ms)
+    QQuickWindow* mainWindowPtr = nullptr;
+
+    // Wi-Fi periodic poller (throttled and gated to active Wi-Fi page for 0% idle CPU)
     QTimer wifiTimer;
-    QObject::connect(&wifiTimer, &QTimer::timeout, &bridge, &tinexus::settings_ui::SettingsBridge::pollWifiStatus);
-    wifiTimer.start(500);
+    QObject::connect(&wifiTimer, &QTimer::timeout, &bridge, [&bridge, &mainWindowPtr]() {
+        if (mainWindowPtr && mainWindowPtr->isVisible() &&
+            mainWindowPtr->visibility() != QWindow::Minimized &&
+            bridge.currentPage() == 3) {
+            bridge.pollWifiStatus();
+        }
+    });
+    wifiTimer.start(1000);
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("tinexus"), new tinexus::common::ui::AppIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("bridge"), &bridge);
 
     // Resolve QML location
@@ -111,7 +121,14 @@ int main(int argc, char* argv[]) {
     }
 
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+    mainWindowPtr = window;
     if (window) {
+        QObject::connect(&bridge, &tinexus::settings_ui::SettingsBridge::currentPageChanged,
+                         window, [&bridge]() {
+                             if (bridge.currentPage() == 3) {
+                                 bridge.pollWifiStatus();
+                             }
+                         });
         window->show();
         window->raise();
         window->requestActivate();

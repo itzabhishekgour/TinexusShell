@@ -120,8 +120,9 @@ ApplicationWindow {
                             Rectangle {
                                 width: 24
                                 height: 24
-                                radius: 5
-                                color: backArea.containsMouse ? "#20ffffff" : "#0dffffff"
+                                radius: 6
+                                color: backArea.pressed ? "#28ffffff" : (backArea.containsMouse ? "#20ffffff" : "#0dffffff")
+                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
                                 border.color: "#14ffffff"
                                 border.width: 1
                                 opacity: window.historyIndex > 0 ? 1.0 : 0.35
@@ -146,8 +147,9 @@ ApplicationWindow {
                             Rectangle {
                                 width: 24
                                 height: 24
-                                radius: 5
-                                color: fwdArea.containsMouse ? "#20ffffff" : "#0dffffff"
+                                radius: 6
+                                color: fwdArea.pressed ? "#28ffffff" : (fwdArea.containsMouse ? "#20ffffff" : "#0dffffff")
+                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
                                 border.color: "#14ffffff"
                                 border.width: 1
                                 opacity: window.historyIndex < window.navHistory.length - 1 ? 1.0 : 0.35

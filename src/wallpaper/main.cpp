@@ -41,6 +41,7 @@ extern "C" {
 #include <unordered_map>
 #include <ctime>
 #include <cmath>
+#include <algorithm>
 #include <memory>
 
 using namespace tinexus;
@@ -93,6 +94,11 @@ static wallpaper::ImageProvider   g_provider;
 static wallpaper::DynamicSchedule g_schedule;
 static wallpaper::DynamicTimer    g_solar_timer;
 static int                        g_fade_timer_fd = -1;
+static int                        g_zoom_timer_fd = -1;
+static double                     g_zoom_scale    = 1.0;
+static double                     g_zoom_target   = 1.0;
+static double                     g_zoom_vel      = 0.0;
+static constexpr double           kLauncherZoomScale = 1.025;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Signal handler
@@ -103,19 +109,15 @@ static void signal_handler(int sig) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cross-fade timerfd helpers — 60fps = 16ms period
+// On-demand 60fps timerfd helpers — disarmed when idle (0% CPU at rest)
 // ─────────────────────────────────────────────────────────────────────────────
-static void arm_fade_timerfd(int fd) {
+static void set_timerfd_60fps(int fd, bool active) {
     if (fd < 0) return;
     struct itimerspec ts{};
-    ts.it_value.tv_nsec    = 16'666'666;
-    ts.it_interval.tv_nsec = 16'666'666;
-    ::timerfd_settime(fd, 0, &ts, nullptr);
-}
-
-static void disarm_fade_timerfd(int fd) {
-    if (fd < 0) return;
-    struct itimerspec ts{};
+    if (active) {
+        ts.it_value.tv_nsec    = 16'666'666;
+        ts.it_interval.tv_nsec = 16'666'666;
+    }
     ::timerfd_settime(fd, 0, &ts, nullptr);
 }
 
@@ -123,6 +125,50 @@ static bool any_output_fading() {
     for (const auto& [_, o] : g_outputs)
         if (o.fade_frame > 0 && o.fade_frame <= o.fade_total) return true;
     return false;
+}
+
+static void apply_output_viewport_zoom(OutputSurface& out, double zoom) {
+    if (!out.viewport || !out.configured || out.phys_w == 0 || out.phys_h == 0 ||
+        out.logical_w == 0 || out.logical_h == 0) {
+        return;
+    }
+
+    const double z = std::clamp(zoom, 1.0, 1.08);
+    if (z <= 1.0001) {
+        if (out.phys_w == out.logical_w && out.phys_h == out.logical_h) {
+            wp_viewport_set_source(out.viewport,
+                wl_fixed_from_int(-1), wl_fixed_from_int(-1),
+                wl_fixed_from_int(-1), wl_fixed_from_int(-1));
+            wp_viewport_set_destination(out.viewport, -1, -1);
+        } else {
+            wp_viewport_set_source(out.viewport, 0, 0,
+                wl_fixed_from_int(static_cast<int32_t>(out.phys_w)),
+                wl_fixed_from_int(static_cast<int32_t>(out.phys_h)));
+            wp_viewport_set_destination(out.viewport,
+                static_cast<int32_t>(out.logical_w),
+                static_cast<int32_t>(out.logical_h));
+        }
+        return;
+    }
+
+    const double bw = static_cast<double>(out.phys_w);
+    const double bh = static_cast<double>(out.phys_h);
+    const double sw = std::clamp(bw / z, 1.0, bw);
+    const double sh = std::clamp(bh / z, 1.0, bh);
+    const double sx = std::max(0.0, 0.5 * (bw - sw));
+    const double sy = std::max(0.0, 0.5 * (bh - sh));
+
+    const wl_fixed_t fx = wl_fixed_from_double(sx);
+    const wl_fixed_t fy = wl_fixed_from_double(sy);
+    const wl_fixed_t fw = std::max<wl_fixed_t>(wl_fixed_from_int(1),
+        std::min(wl_fixed_from_double(sw), wl_fixed_from_int(static_cast<int32_t>(out.phys_w)) - fx));
+    const wl_fixed_t fh = std::max<wl_fixed_t>(wl_fixed_from_int(1),
+        std::min(wl_fixed_from_double(sh), wl_fixed_from_int(static_cast<int32_t>(out.phys_h)) - fy));
+
+    wp_viewport_set_source(out.viewport, fx, fy, fw, fh);
+    wp_viewport_set_destination(out.viewport,
+        static_cast<int32_t>(out.logical_w),
+        static_cast<int32_t>(out.logical_h));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -472,8 +518,10 @@ static void render_and_commit(OutputSurface& out, const std::string& path) {
     auto buf = g_provider.render_buffer(out.phys_w, out.phys_h, out.fit_mode);
     if (out.buf_a->data() && !buf.pixels.empty()) {
         std::copy(buf.pixels.begin(), buf.pixels.end(), out.buf_a->data());
+        apply_output_viewport_zoom(out, g_zoom_scale);
         out.buf_a->present();
         std::copy(buf.pixels.begin(), buf.pixels.end(), out.buf_a->data());
+        apply_output_viewport_zoom(out, g_zoom_scale);
         out.buf_a->present();
         out.active_path = actual_path;
         log::info("[wallpaper] Committed '{}' ({}x{})", actual_path, out.phys_w, out.phys_h);
@@ -521,6 +569,7 @@ static void advance_fade_frame() {
             out.buf_a->data(), out.buf_b->data(), out.fade_blend.data(), px, t);
 
         std::copy(out.fade_blend.begin(), out.fade_blend.end(), out.buf_a->data());
+        apply_output_viewport_zoom(out, g_zoom_scale);
         out.buf_a->present();
 
         if (out.fade_frame >= out.fade_total) {
@@ -534,7 +583,36 @@ static void advance_fade_frame() {
         }
     }
     if (g_display) wl_display_flush(g_display);
-    if (!still_fading) disarm_fade_timerfd(g_fade_timer_fd);
+    if (!still_fading) set_timerfd_60fps(g_fade_timer_fd, false);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// advance_zoom_frame — damped spring reaction to Launcher open/close
+// ─────────────────────────────────────────────────────────────────────────────
+static void advance_zoom_frame() {
+    constexpr double dt        = 1.0 / 60.0;
+    constexpr double stiffness = 320.0;
+    constexpr double damping   = 28.0;
+
+    const double disp  = g_zoom_target - g_zoom_scale;
+    const double accel = stiffness * disp - damping * g_zoom_vel;
+    g_zoom_vel   += accel * dt;
+    g_zoom_scale += g_zoom_vel * dt;
+
+    bool settled = false;
+    if (std::abs(g_zoom_target - g_zoom_scale) < 0.0002 && std::abs(g_zoom_vel) < 0.001) {
+        g_zoom_scale = g_zoom_target;
+        g_zoom_vel   = 0.0;
+        settled      = true;
+    }
+
+    for (auto& [_, out] : g_outputs) {
+        if (!out.viewport || !out.configured || !out.buf_a || !out.buf_a->surface()) continue;
+        apply_output_viewport_zoom(out, g_zoom_scale);
+        wl_surface_commit(out.buf_a->surface());
+    }
+    if (g_display) wl_display_flush(g_display);
+    if (settled) set_timerfd_60fps(g_zoom_timer_fd, false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -552,10 +630,14 @@ int main() {
     log::set_component_name("wallpaper");
     log::info("[wallpaper] tinexus-wallpaper starting (D-Bus {})...", tinexus::common::dbus::service::Wallpaper);
 
-    // ── Cross-fade timerfd (60fps, disarmed when no fade is active) ──
+    // ── Cross-fade & spring zoom timerfds (60fps, disarmed at rest) ──
     g_fade_timer_fd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (g_fade_timer_fd < 0)
         log::warn("[wallpaper] timerfd_create(MONOTONIC) failed: {} (fades disabled)",
+                  std::strerror(errno));
+    g_zoom_timer_fd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (g_zoom_timer_fd < 0)
+        log::warn("[wallpaper] zoom timerfd_create(MONOTONIC) failed: {}",
                   std::strerror(errno));
 
     // ── Wayland connection ──
@@ -646,7 +728,7 @@ int main() {
                 out.fit_mode = current_mode;
                 begin_crossfade(out, target, current_fade_ms);
             }
-            if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+            if (any_output_fading()) set_timerfd_60fps(g_fade_timer_fd, true);
 
             wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
                 target, mode, dynamic);
@@ -683,7 +765,7 @@ int main() {
                 current_path = frame->path;
                 for (auto& [_, out] : g_outputs)
                     begin_crossfade(out, frame->path, 1000);
-                if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+                if (any_output_fading()) set_timerfd_60fps(g_fade_timer_fd, true);
                 wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
                     frame->path, static_cast<uint8_t>(current_mode), true);
             }
@@ -694,9 +776,20 @@ int main() {
             log::info("[wallpaper] Settings signal received -> crossfade to '{}'", current_path);
             for (auto& [_, out] : g_outputs)
                 begin_crossfade(out, current_path, current_fade_ms);
-            if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+            if (any_output_fading()) set_timerfd_60fps(g_fade_timer_fd, true);
             wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
                 current_path, static_cast<uint8_t>(current_mode), false);
+        },
+        // on_launcher_visibility (io.tinexus.shell.Launcher LauncherVisibilityChanged signal)
+        [](bool visible) {
+            const double next_target = visible ? kLauncherZoomScale : 1.0;
+            if (std::abs(g_zoom_target - next_target) < 0.0001 &&
+                std::abs(g_zoom_scale - next_target) < 0.0001) {
+                return;
+            }
+            g_zoom_target = next_target;
+            set_timerfd_60fps(g_zoom_timer_fd, true);
+            log::debug("[wallpaper] Launcher visible={} -> zoom target {:.3f}", visible, g_zoom_target);
         }
     );
 
@@ -720,7 +813,7 @@ int main() {
             log::info("[wallpaper] SIGUSR1 reload → '{}'", current_path);
             for (auto& [_, out] : g_outputs)
                 begin_crossfade(out, current_path, current_fade_ms);
-            if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+            if (any_output_fading()) set_timerfd_60fps(g_fade_timer_fd, true);
             wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
                 current_path, static_cast<uint8_t>(current_mode), false);
         }
@@ -731,7 +824,7 @@ int main() {
 
         const int bus_fd = wallpaper::WallpaperDBus::instance().fd();
 
-        struct pollfd fds[4];
+        struct pollfd fds[5];
         int nfds = 0;
         fds[nfds++] = { .fd = wayland_fd, .events = POLLIN, .revents = 0 };
         if (bus_fd >= 0) {
@@ -740,6 +833,8 @@ int main() {
         }
         if (g_fade_timer_fd >= 0)
             fds[nfds++] = { .fd = g_fade_timer_fd, .events = POLLIN, .revents = 0 };
+        if (g_zoom_timer_fd >= 0)
+            fds[nfds++] = { .fd = g_zoom_timer_fd, .events = POLLIN, .revents = 0 };
         if (g_solar_timer.is_valid())
             fds[nfds++] = { .fd = g_solar_timer.fd(), .events = POLLIN, .revents = 0 };
 
@@ -780,6 +875,16 @@ int main() {
             }
         }
 
+        // Spring zoom timer
+        for (int i = 0; i < nfds; ++i) {
+            if (fds[i].fd == g_zoom_timer_fd && (fds[i].revents & POLLIN)) {
+                uint64_t count = 0;
+                static_cast<void>(::read(g_zoom_timer_fd, &count, sizeof(count)));
+                advance_zoom_frame();
+                break;
+            }
+        }
+
         // Solar schedule timer
         if (g_solar_timer.is_valid()) {
             for (int i = 0; i < nfds; ++i) {
@@ -792,7 +897,7 @@ int main() {
                         current_path = frame->path;
                         for (auto& [_, out] : g_outputs)
                             begin_crossfade(out, frame->path, 2000); // 2-second solar fade
-                        if (any_output_fading()) arm_fade_timerfd(g_fade_timer_fd);
+                        if (any_output_fading()) set_timerfd_60fps(g_fade_timer_fd, true);
                         wallpaper::WallpaperDBus::instance().emit_wallpaper_changed(
                             frame->path, static_cast<uint8_t>(current_mode), true);
                     }
@@ -815,6 +920,7 @@ int main() {
     }
     g_outputs.clear();
     if (g_fade_timer_fd >= 0) ::close(g_fade_timer_fd);
+    if (g_zoom_timer_fd >= 0) ::close(g_zoom_timer_fd);
     wallpaper::WallpaperDBus::instance().shutdown();
     wallpaper::ImageProvider::cache().clear();
     if (g_display) wl_display_disconnect(g_display);

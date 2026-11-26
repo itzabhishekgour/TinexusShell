@@ -82,42 +82,44 @@ QVariantList FilesBridge::sidebarLocations() const {
     QVariantList locations;
     QString home = homePath();
 
-    auto addLoc = [&](const QString& label, const QString& path, const QString& iconKind, bool isHeader) {
+    auto addLoc = [&](const QString& label, const QString& path, const QString& iconKind, bool isHeader,
+                      const QString& iconName = QString()) {
         QVariantMap m;
         m[QStringLiteral("label")] = label;
         m[QStringLiteral("path")] = path;
         m[QStringLiteral("iconKind")] = iconKind;
+        m[QStringLiteral("iconName")] = iconName;
         m[QStringLiteral("isHeader")] = isHeader;
         locations.append(m);
     };
 
     // FAVORITES
     addLoc(QStringLiteral("FAVORITES"), QString(), QString(), true);
-    addLoc(QStringLiteral("Home"), home, QStringLiteral("folder"), false);
-    addLoc(QStringLiteral("Desktop"), home + QStringLiteral("/Desktop"), QStringLiteral("folder"), false);
-    addLoc(QStringLiteral("Documents"), home + QStringLiteral("/Documents"), QStringLiteral("folder"), false);
-    addLoc(QStringLiteral("Downloads"), home + QStringLiteral("/Downloads"), QStringLiteral("folder"), false);
-    addLoc(QStringLiteral("Pictures"), home + QStringLiteral("/Pictures"), QStringLiteral("image"), false);
-    addLoc(QStringLiteral("Videos"), home + QStringLiteral("/Videos"), QStringLiteral("video"), false);
-    addLoc(QStringLiteral("Apps"), QStringLiteral("/opt/tinexus-apps"), QStringLiteral("code"), false);
+    addLoc(QStringLiteral("Home"), home, QStringLiteral("folder"), false, QStringLiteral("user-home"));
+    addLoc(QStringLiteral("Desktop"), home + QStringLiteral("/Desktop"), QStringLiteral("folder"), false, QStringLiteral("user-desktop"));
+    addLoc(QStringLiteral("Documents"), home + QStringLiteral("/Documents"), QStringLiteral("folder"), false, QStringLiteral("folder-documents"));
+    addLoc(QStringLiteral("Downloads"), home + QStringLiteral("/Downloads"), QStringLiteral("folder"), false, QStringLiteral("folder-downloads"));
+    addLoc(QStringLiteral("Pictures"), home + QStringLiteral("/Pictures"), QStringLiteral("image"), false, QStringLiteral("folder-pictures"));
+    addLoc(QStringLiteral("Videos"), home + QStringLiteral("/Videos"), QStringLiteral("video"), false, QStringLiteral("folder-videos"));
+    addLoc(QStringLiteral("Apps"), QStringLiteral("/opt/tinexus-apps"), QStringLiteral("code"), false, QStringLiteral("system-software-install"));
 
     // LOCATIONS
     addLoc(QStringLiteral("LOCATIONS"), QString(), QString(), true);
-    addLoc(QStringLiteral("File System"), QStringLiteral("/"), QStringLiteral("folder"), false);
+    addLoc(QStringLiteral("File System"), QStringLiteral("/"), QStringLiteral("folder"), false, QStringLiteral("drive-harddisk"));
 
     for (const auto& rootLoc : {QStringLiteral("/media"), QStringLiteral("/mnt")}) {
         QDir rootDir(rootLoc);
         if (rootDir.exists()) {
             const auto list = rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
             for (const auto& d : list) {
-                addLoc(d.fileName(), d.absoluteFilePath(), QStringLiteral("archive"), false);
+                addLoc(d.fileName(), d.absoluteFilePath(), QStringLiteral("archive"), false, QStringLiteral("drive-removable-media"));
             }
         }
     }
 
     // TRASH
     addLoc(QStringLiteral("TRASH"), QString(), QString(), true);
-    addLoc(QStringLiteral("Trash"), home + QStringLiteral("/.local/share/Trash/files"), QStringLiteral("file"), false);
+    addLoc(QStringLiteral("Trash"), home + QStringLiteral("/.local/share/Trash/files"), QStringLiteral("file"), false, QStringLiteral("user-trash"));
 
     return locations;
 }

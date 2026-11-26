@@ -96,7 +96,10 @@ chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
     systemd systemd-sysv libpam-systemd calamares calamares-settings-ubuntu-common \
     linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin xdg-desktop-portal-wlr \
     libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers libegl-mesa0 libgbm1 zstd initramfs-tools \
-    fonts-inter fonts-jetbrains-mono fonts-dejavu-core libqt6opengl6 qml6-module-qtquick-effects
+    fonts-inter fonts-jetbrains-mono fonts-dejavu-core libqt6opengl6 qml6-module-qtquick-effects \
+    papirus-icon-theme librsvg2-common gtk-update-icon-cache
+chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends qt6-svg-plugins || \
+    chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends qt6-image-formats-plugins || true
 
 [ -f /mnt/rootfs/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so ] || fatal "liblayer-shell.so missing after install!"
 [ -f /mnt/rootfs/sbin/dhclient ] || [ -f /mnt/rootfs/usr/sbin/dhclient ] || fatal "dhclient missing after install!"
@@ -282,7 +285,7 @@ info "Compiling updated Tinexus desktop binaries..."
 mkdir -p /mnt/rootfs/tmp/build_apps
 chmod 1777 /mnt/rootfs/tmp /mnt/rootfs/tmp/build_apps 2>/dev/null || true
 MOC_BIN="/usr/lib/qt6/libexec/moc"
-QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps"
+QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtSvg -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps"
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
 # 80. libtinexus_common
@@ -339,6 +342,18 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   -o /workspace/build/bin/tinexus-serviced
 [ -f /workspace/build/bin/tinexus-serviced ] || fatal "tinexus-serviced compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-serviced)" -ge "$BUILD_START_SERVICED" ] || fatal "tinexus-serviced mtime is older than build start! Stale binary."
+
+# 80c. tinexus-ipcd
+info "Compiling tinexus-ipcd..."
+rm -f /workspace/build/bin/tinexus-ipcd
+BUILD_START_IPCD=$(date +%s)
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+  -I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include \
+  /workspace/src/ipcd/main.cpp \
+  -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lsystemd -lpthread \
+  -o /workspace/build/bin/tinexus-ipcd
+[ -f /workspace/build/bin/tinexus-ipcd ] || fatal "tinexus-ipcd compilation FAILED!"
+[ "$(stat -c %Y /workspace/build/bin/tinexus-ipcd)" -ge "$BUILD_START_IPCD" ] || fatal "tinexus-ipcd mtime is older than build start! Stale binary."
 
 # 8a. tinexus-session
 info "Compiling tinexus-session..."
@@ -410,7 +425,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /tmp/build_apps/moc_AboutController.cpp \
   /tmp/build_apps/moc_PrivacyController.cpp \
   /tmp/build_apps/moc_SearchController.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network -lQt6DBus -lcrypto \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network -lQt6DBus -lcrypto \
   -o /workspace/build/bin/tinexus-settings-ui
 [ -f /workspace/build/bin/tinexus-settings-ui ] || fatal "tinexus-settings-ui compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-settings-ui)" -ge "$BUILD_START_SETTINGS" ] || fatal "tinexus-settings-ui mtime is older than build start! Stale binary."
@@ -465,7 +480,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $MON_SRC/process_controller.cpp \
   $MON_SRC/resource_monitor.cpp \
   /tmp/build_apps/moc_MonitorBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network \
   -o /workspace/build/bin/tinexus-monitor
 [ -f /workspace/build/bin/tinexus-monitor ] || fatal "tinexus-monitor compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-monitor)" -ge "$BUILD_START_MON" ] || fatal "tinexus-monitor mtime is older than build start! Stale binary."
@@ -486,7 +501,7 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $FILES_SRC/file_model.cpp \
   $FILES_SRC/column_view_model.cpp \
   $FILES_SRC/file_operations.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Network \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network \
   -o /workspace/build/bin/tinexus-files
 [ -f /workspace/build/bin/tinexus-files ] || fatal "tinexus-files compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-files)" -ge "$BUILD_START_FILES" ] || fatal "tinexus-files mtime is older than build start! Stale binary."
@@ -637,6 +652,24 @@ EOF_TTYS0
     success "Verified tinexus-hardware-probe binary is staged and executable."
 fi
 
+# Hide duplicate distro & non-app utility .desktop entries from app menus
+info "Cleaning duplicate/system .desktop entries in /usr/share/applications..."
+for clutter in \
+    calamares.desktop \
+    footclient.desktop \
+    foot-server.desktop \
+    org.kde.kded6.desktop \
+    org.kde.kiod6.desktop \
+    org.kde.ksecretd.desktop \
+    ktelnetservice6.desktop \
+    org.freedesktop.Xwayland.desktop \
+    python3.14.desktop; do
+    df="/mnt/rootfs/usr/share/applications/$clutter"
+    if [ -f "$df" ] && ! grep -q "^NoDisplay=true" "$df"; then
+        sed -i '/^\[Desktop Entry\]/a NoDisplay=true' "$df"
+    fi
+done
+
 # Stage Install Tinexus OS shortcut on user desktop
 info "Staging Install Tinexus OS shortcut on live user Desktop..."
 mkdir -p /mnt/rootfs/home/tinexus/Desktop /mnt/rootfs/etc/skel/Desktop
@@ -684,6 +717,8 @@ cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/tinexus/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/pixmaps/tinexus-logo.png
 cp -f /workspace/assets/logo/tinexus-logo.png /mnt/rootfs/usr/share/icons/hicolor/32x32/apps/tinexus-logo.png
+chroot /mnt/rootfs gtk-update-icon-cache -f -t /usr/share/icons/Papirus 2>/dev/null || true
+chroot /mnt/rootfs gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 
 mkdir -p /mnt/rootfs/usr/share/sounds/tinexus
 cp -a /workspace/assets/sounds/* /mnt/rootfs/usr/share/sounds/tinexus/ 2>/dev/null || true

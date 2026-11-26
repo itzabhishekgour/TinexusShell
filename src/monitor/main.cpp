@@ -3,6 +3,7 @@
 // ============================================================================
 #include "MonitorBridge.hpp"
 #include <common/logger.hpp>
+#include <common/ui/TinexusAppIconProvider.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
@@ -22,6 +23,7 @@ int main(int argc, char* argv[]) {
     tinexus::monitor::MonitorBridge monitorBridge;
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("tinexus"), new tinexus::common::ui::AppIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("monitorBridge"), &monitorBridge);
 
     QString qmlPath;

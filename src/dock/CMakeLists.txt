@@ -7,6 +7,8 @@ find_package(Qt6 REQUIRED COMPONENTS
     Quick
     Qml
     DBus
+    Network
+    Svg
     WaylandClient
 )
 
@@ -37,6 +39,7 @@ add_executable(tinexus-dock
     include/dock/StacksPopup.hpp
     DockIpcClient.cpp
     include/dock/DockIpcClient.hpp
+    include/dock/DockIconProvider.hpp
     DockAdaptor.cpp
     DockAdaptor.hpp
     include/dock/DockAdaptor.hpp
@@ -62,6 +65,8 @@ target_link_libraries(tinexus-dock PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::DBus
+    Qt6::Network
+    Qt6::Svg
     Qt6::WaylandClient
     tinexus_warnings
 )
@@ -98,6 +103,7 @@ add_executable(test-dock-render
     include/dock/StacksPopup.hpp
     DockIpcClient.cpp
     include/dock/DockIpcClient.hpp
+    include/dock/DockIconProvider.hpp
     DockAdaptor.cpp
     DockAdaptor.hpp
     include/dock/DockAdaptor.hpp
@@ -123,6 +129,8 @@ target_link_libraries(test-dock-render PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::DBus
+    Qt6::Network
+    Qt6::Svg
     Qt6::WaylandClient
     tinexus_warnings
 )
