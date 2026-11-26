@@ -37,6 +37,16 @@ public:
                                            int32_t w, int32_t h) noexcept {}
     virtual void update_dock_blur_region(int32_t x, int32_t y, int32_t w, int32_t h,
                                          float corner_radius, bool visible) noexcept {}
+    virtual bool apply_display_config(const std::string& connector,
+                                      int32_t width,
+                                      int32_t height,
+                                      int32_t refresh_mhz,
+                                      float scale,
+                                      bool vrr_enabled,
+                                      bool night_light,
+                                      uint8_t flags) noexcept {
+        return false;
+    }
 
     virtual struct wl_display* display() = 0;
     [[nodiscard]] virtual BackendType type() const noexcept = 0;

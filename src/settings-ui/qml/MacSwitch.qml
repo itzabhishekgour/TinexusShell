@@ -2,58 +2,66 @@ import QtQuick
 
 Item {
     id: root
-    width: 38
+    width: 40
     height: 22
 
     property bool checked: false
+    property bool enabled: true
     signal toggled(bool checked)
+
+    opacity: enabled ? 1.0 : 0.45
 
     Rectangle {
         id: track
         anchors.fill: parent
         radius: 11
-        // Flat matte Apple green for dark mode (no glow, no oversaturation)
-        color: root.checked ? "#30d158" : "#39393d"
-        border.color: root.checked ? "#24a143" : "#48484c"
+        color: root.checked ? (typeof bridge !== "undefined" ? bridge.accentColor : "#30d158") : "#39393d"
+        border.color: root.checked ? Qt.rgba(1, 1, 1, 0.22) : "#505056"
         border.width: 1
 
         Behavior on color {
-            ColorAnimation { duration: 150; easing.type: Easing.OutQuad }
+            ColorAnimation { duration: 140; easing.type: Easing.OutCubic }
         }
 
-        // Thumb subtle drop shadow (matte macOS style)
+        // Thumb contact shadow
         Rectangle {
             x: thumb.x
             y: thumb.y + 1
             width: thumb.width
             height: thumb.height
             radius: thumb.radius
-            color: Qt.rgba(0, 0, 0, 0.25)
-            visible: true
+            color: Qt.rgba(0, 0, 0, 0.28)
         }
 
-        // Thumb
         Rectangle {
             id: thumb
-            width: 18
+            width: mouseArea.pressed ? 20 : 18
             height: 18
             radius: 9
             y: 2
-            x: root.checked ? 18 : 2
+            x: root.checked ? (root.width - width - 2) : 2
             color: "#ffffff"
-
-            border.color: Qt.rgba(0, 0, 0, 0.10)
+            border.color: Qt.rgba(0, 0, 0, 0.12)
             border.width: 1
 
+            Behavior on width {
+                NumberAnimation { duration: 90; easing.type: Easing.OutQuad }
+            }
             Behavior on x {
-                NumberAnimation { duration: 150; easing.type: Easing.OutQuad }
+                SpringAnimation {
+                    spring: 5.8
+                    damping: 0.72
+                    epsilon: 0.05
+                }
             }
         }
     }
 
     MouseArea {
+        id: mouseArea
         anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
+        enabled: root.enabled
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: {
             root.checked = !root.checked
             root.toggled(root.checked)

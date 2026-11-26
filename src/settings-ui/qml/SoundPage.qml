@@ -14,7 +14,7 @@ ScrollView {
 
         Item { height: 4 }
 
-        // Section Title: Output
+        // ── Section 1: Output ─────────────────────────────────────────────
         Text {
             text: "OUTPUT"
             color: "#86868b"
@@ -23,7 +23,6 @@ ScrollView {
             Layout.leftMargin: 6
         }
 
-        // ── Grouped Card: Sound Output Controls ───────────────────────────
         MacCard {
             Layout.fillWidth: true
             implicitHeight: outputCol.implicitHeight
@@ -33,7 +32,6 @@ ScrollView {
                 anchors.fill: parent
                 spacing: 0
 
-                // Row 1: Output Volume with inline slider
                 Item {
                     Layout.fillWidth: true
                     height: 48
@@ -48,7 +46,6 @@ ScrollView {
                             text: "Output Volume"
                             color: "#f5f5f7"
                             font.pixelSize: 13
-                            font.weight: Font.Normal
                             Layout.fillWidth: true
                         }
 
@@ -56,30 +53,16 @@ ScrollView {
                             spacing: 8
                             Layout.alignment: Qt.AlignVCenter
 
-                            // Low volume speaker
-                            Item {
-                                width: 12; height: 12
-                                Rectangle { x: 1; y: 4; width: 3; height: 4; color: "#86868b" }
-                                Canvas {
-                                    anchors.fill: parent
-                                    onPaint: {
-                                        var ctx = getContext("2d");
-                                        ctx.reset();
-                                        ctx.fillStyle = "#86868b";
-                                        ctx.beginPath();
-                                        ctx.moveTo(4, 4);
-                                        ctx.lineTo(8, 1);
-                                        ctx.lineTo(8, 11);
-                                        ctx.lineTo(4, 8);
-                                        ctx.closePath();
-                                        ctx.fill();
-                                    }
-                                }
+                            Image {
+                                width: 15; height: 15
+                                source: "image://tinexus/" + (bridge.muted ? "audio-volume-muted-symbolic" : "audio-volume-low-symbolic")
+                                sourceSize: Qt.size(15, 15)
+                                opacity: 0.7
                             }
 
                             MacSlider {
                                 id: volumeSlider
-                                width: 220
+                                width: 210
                                 from: 0
                                 to: 100
                                 value: bridge.volume
@@ -87,30 +70,10 @@ ScrollView {
                                 onMoved: (val) => bridge.setVolume(Math.round(val))
                             }
 
-                            // High volume speaker
-                            Item {
-                                width: 14; height: 12
-                                Rectangle { x: 1; y: 4; width: 3; height: 4; color: "#f5f5f7" }
-                                Canvas {
-                                    anchors.fill: parent
-                                    onPaint: {
-                                        var ctx = getContext("2d");
-                                        ctx.reset();
-                                        ctx.fillStyle = "#f5f5f7";
-                                        ctx.beginPath();
-                                        ctx.moveTo(4, 4);
-                                        ctx.lineTo(8, 1);
-                                        ctx.lineTo(8, 11);
-                                        ctx.lineTo(4, 8);
-                                        ctx.closePath();
-                                        ctx.fill();
-                                        ctx.strokeStyle = "#f5f5f7";
-                                        ctx.lineWidth = 1.2;
-                                        ctx.beginPath();
-                                        ctx.arc(8, 6, 4, -0.6, 0.6);
-                                        ctx.stroke();
-                                    }
-                                }
+                            Image {
+                                width: 16; height: 16
+                                source: "image://tinexus/audio-volume-high-symbolic"
+                                sourceSize: Qt.size(16, 16)
                             }
 
                             Text {
@@ -123,7 +86,6 @@ ScrollView {
                         }
                     }
 
-                    // Hairline separator
                     Rectangle {
                         anchors.left: parent.left
                         anchors.leftMargin: 16
@@ -134,7 +96,6 @@ ScrollView {
                     }
                 }
 
-                // Row 2: Mute Output
                 MacSettingRow {
                     title: "Mute Output"
                     subtitle: "Silence all desktop audio streams"
@@ -146,10 +107,9 @@ ScrollView {
                     }
                 }
 
-                // Row 3: Output Device Dropdown
                 MacSettingRow {
                     title: "Output Device"
-                    subtitle: "Active PipeWire / ALSA audio sink"
+                    subtitle: "Active PipeWire / PulseAudio sink"
                     showSeparator: false
 
                     MacComboBox {
@@ -162,7 +122,109 @@ ScrollView {
             }
         }
 
-        // Section Title: Sound Effects
+        // ── Section 2: Input / Microphone ─────────────────────────────────
+        Text {
+            text: "INPUT"
+            color: "#86868b"
+            font.pixelSize: 11
+            font.weight: Font.Medium
+            Layout.leftMargin: 6
+        }
+
+        MacCard {
+            Layout.fillWidth: true
+            implicitHeight: inputCol.implicitHeight
+
+            ColumnLayout {
+                id: inputCol
+                anchors.fill: parent
+                spacing: 0
+
+                Item {
+                    Layout.fillWidth: true
+                    height: 48
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+                        spacing: 12
+
+                        Text {
+                            text: "Input Volume"
+                            color: "#f5f5f7"
+                            font.pixelSize: 13
+                            Layout.fillWidth: true
+                        }
+
+                        RowLayout {
+                            spacing: 8
+                            Layout.alignment: Qt.AlignVCenter
+
+                            Image {
+                                width: 15; height: 15
+                                source: "image://tinexus/" + (bridge.inputMuted ? "microphone-sensitivity-muted-symbolic" : "audio-input-microphone-symbolic")
+                                sourceSize: Qt.size(15, 15)
+                                opacity: 0.75
+                            }
+
+                            MacSlider {
+                                id: inputSlider
+                                width: 210
+                                from: 0
+                                to: 100
+                                value: bridge.inputVolume
+                                enabled: !bridge.inputMuted
+                                onMoved: (val) => bridge.setInputVolume(Math.round(val))
+                            }
+
+                            Text {
+                                width: 44
+                                horizontalAlignment: Text.AlignRight
+                                text: bridge.inputMuted ? "Muted" : (Math.round(inputSlider.value) + "%")
+                                color: bridge.inputMuted ? "#ff453a" : "#86868b"
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 16
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 1
+                        color: "#12ffffff"
+                    }
+                }
+
+                MacSettingRow {
+                    title: "Mute Microphone"
+                    subtitle: "Mute default PipeWire audio capture source"
+                    showSeparator: true
+
+                    MacSwitch {
+                        checked: bridge.inputMuted
+                        onToggled: (val) => bridge.setInputMuted(val)
+                    }
+                }
+
+                MacSettingRow {
+                    title: "Input Device"
+                    subtitle: "Active microphone / capture source"
+                    showSeparator: false
+
+                    MacComboBox {
+                        model: (bridge.inputDevices && bridge.inputDevices.length > 0) ? bridge.inputDevices : ["No Audio Input Devices Available"]
+                        currentIndex: bridge.currentInputIndex
+                        enabled: (bridge.inputDevices && bridge.inputDevices.length > 0 && bridge.inputDevices[0] !== "No Audio Input Devices Available")
+                        onActivated: (index) => bridge.setInputDevice(index)
+                    }
+                }
+            }
+        }
+
+        // ── Section 3: Sound Effects ──────────────────────────────────────
         Text {
             text: "SOUND EFFECTS"
             color: "#86868b"
@@ -171,7 +233,6 @@ ScrollView {
             Layout.leftMargin: 6
         }
 
-        // ── Grouped Card: Alert Sounds ────────────────────────────────────
         MacCard {
             Layout.fillWidth: true
             implicitHeight: effectsCol.implicitHeight
@@ -183,12 +244,20 @@ ScrollView {
 
                 MacSettingRow {
                     title: "Alert & Notification Sounds"
-                    subtitle: "Auditory feedback on system events"
+                    subtitle: "Auditory feedback via PipeWire / PulseAudio"
                     showSeparator: false
 
-                    MacButton {
-                        text: "Play Test Sound"
-                        onClicked: bridge.playTestSound()
+                    RowLayout {
+                        spacing: 8
+                        MacButton {
+                            text: "Refresh"
+                            onClicked: bridge.refreshAudioDevices()
+                        }
+                        MacButton {
+                            text: "Play Test Sound"
+                            primary: true
+                            onClicked: bridge.playTestSound()
+                        }
                     }
                 }
             }

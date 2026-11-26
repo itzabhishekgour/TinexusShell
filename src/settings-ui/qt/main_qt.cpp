@@ -3,6 +3,7 @@
 #include <common/version.hpp>
 #include <common/DBusNames.hpp>
 #include <common/ui/TinexusAppIconProvider.hpp>
+#include <common/ui/WaylandBlurHelper.hpp>
 #include <txui/core/SingleInstance.hpp>
 
 #include <QGuiApplication>
@@ -60,6 +61,10 @@ int main(int argc, char* argv[]) {
                 bridge.selectPage(6);
             } else if (page == QStringLiteral("about")) {
                 bridge.selectPage(7);
+            } else if (page == QStringLiteral("bluetooth") || page == QStringLiteral("bt")) {
+                bridge.selectPage(8);
+            } else if (page == QStringLiteral("users") || page == QStringLiteral("accounts")) {
+                bridge.selectPage(9);
             }
         } else if (arg == QStringLiteral("-n") || arg == QStringLiteral("--network") || arg == QStringLiteral("--wifi")) {
             bridge.selectPage(3);
@@ -120,16 +125,32 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    tinexus::common::ui::WaylandBlurHelper blurHelper;
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
     mainWindowPtr = window;
     if (window) {
+        auto updateSidebarBlur = [window, &blurHelper]() {
+            if (!window) return;
+            const int sidebarW = std::min(240, window->width());
+            const int h = std::max(1, window->height());
+            blurHelper.applyToWindow(window, true, QRegion(0, 0, sidebarW, h));
+        };
         QObject::connect(&bridge, &tinexus::settings_ui::SettingsBridge::currentPageChanged,
                          window, [&bridge]() {
                              if (bridge.currentPage() == 3) {
                                  bridge.pollWifiStatus();
+                             } else if (bridge.currentPage() == 8) {
+                                 bridge.refreshBluetoothDevices();
+                             } else if (bridge.currentPage() == 4) {
+                                 bridge.refreshPowerStatus();
+                             } else if (bridge.currentPage() == 9) {
+                                 bridge.refreshUsers();
                              }
                          });
+        QObject::connect(window, &QWindow::widthChanged, window, [updateSidebarBlur](int) { updateSidebarBlur(); });
+        QObject::connect(window, &QWindow::heightChanged, window, [updateSidebarBlur](int) { updateSidebarBlur(); });
         window->show();
+        updateSidebarBlur();
         window->raise();
         window->requestActivate();
         tinexus::log::info("[settings-ui-qt6] Window presented successfully: title='{}' size={}x{}",

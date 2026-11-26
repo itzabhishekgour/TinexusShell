@@ -110,6 +110,7 @@ SRCS=(
 
 MAX_JOBS=8
 OBJS=()
+PIDS=()
 
 rm -f "$OBJ_DIR/org-kde-kwin-blur-protocol.o" "$OBJ_DIR/blur_manager.o"
 NEWEST_HDR_EPOCH=$(find /mnt/rootfs/workspace/src/comp -type f \( -name '*.hpp' -o -name '*.h' \) -printf '%T@\n' | sort -nr | head -n1 | cut -d. -f1)
@@ -130,6 +131,7 @@ for src in "${SRCS[@]}"; do
     fi
   fi
 
+  rm -f "$obj_host"
   while [ $(jobs -rp | wc -l) -ge $MAX_JOBS ]; do
     sleep 0.05
   done
@@ -137,13 +139,20 @@ for src in "${SRCS[@]}"; do
   if [[ "$src" == *.c ]]; then
     echo "  [CC]  $bname"
     chroot /mnt/rootfs /usr/bin/gcc -fPIC -fPIE -I/workspace/build/protocols -I/usr/include -c "$src" -o "$obj_chroot" &
+    PIDS+=($!)
   else
     echo "  [CXX] $bname"
     chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 -fPIE "${INCLUDES[@]}" -c "$src" -o "$obj_chroot" &
+    PIDS+=($!)
   fi
 done
 
-wait
+for pid in "${PIDS[@]}"; do
+  if ! wait "$pid"; then
+    echo "[FATAL] tinexus-comp object compilation failed!" >&2
+    exit 1
+  fi
+done
 
 echo "[INFO] Linking tinexus-comp..."
 mkdir -p /workspace/build/bin

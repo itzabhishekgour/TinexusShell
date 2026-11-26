@@ -4,9 +4,9 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     Layout.fillWidth: true
-    radius: 10
-    color: "#28282a" // macOS grouped list background (neutral dark graphite, no purple tint)
-    border.color: "#14ffffff"
+    radius: 12
+    color: Qt.rgba(0.16, 0.17, 0.21, 0.78)
+    border.color: Qt.rgba(1, 1, 1, 0.11)
     border.width: 1
 
     default property alias content: innerContainer.data
@@ -18,6 +18,18 @@ Rectangle {
     property alias rightMargin: innerContainer.anchors.rightMargin
 
     implicitHeight: innerContainer.implicitHeight + innerContainer.anchors.topMargin + innerContainer.anchors.bottomMargin
+
+    // Subtle 1px top inner specular highlight
+    Rectangle {
+        anchors.top: parent.top
+        anchors.topMargin: 1
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: 10
+        anchors.rightMargin: 10
+        height: 1
+        color: Qt.rgba(1, 1, 1, 0.08)
+    }
 
     Item {
         id: innerContainer

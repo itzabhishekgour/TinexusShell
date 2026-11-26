@@ -13,34 +13,21 @@ Window {
     // Dynamically expand window height when a flyout is open or closing, toast arrives, or AuraNotch expands
     readonly property bool anyFlyoutOpen: typeof bridge !== "undefined" && (
         bridge.logoMenuOpen || bridge.appMenuOpen || bridge.calendarOpen || bridge.notificationsOpen ||
-        bridge.volumeFlyoutOpen || bridge.brightnessFlyoutOpen ||
+        bridge.volumeFlyoutOpen || bridge.brightnessFlyoutOpen || bridge.wifiFlyoutOpen ||
         bridge.rebootConfirmationOpen || bridge.shutdownConfirmationOpen
     )
     readonly property bool anyFlyoutVisible: anyFlyoutOpen ||
         logoFlyoutHost.animatingVisible || appsFlyoutHost.animatingVisible ||
         calFlyoutHost.animatingVisible || notifFlyoutHost.animatingVisible ||
         volFlyoutHost.animatingVisible || briFlyoutHost.animatingVisible ||
-        powerDialogHost.animatingVisible
+        wifiFlyoutHost.animatingVisible || powerDialogHost.animatingVisible
     readonly property bool toastVisible: typeof bridge !== "undefined" && bridge.toastVisible
     readonly property bool notchExpanded: topBar.notchExpanded
 
-    height: anyFlyoutVisible ? 490 : (toastVisible ? 148 : (notchExpanded ? 84 : 36))
-
-    onAnyFlyoutVisibleChanged: {
-        Qt.callLater(function() {
-            if (typeof bridge !== "undefined" && typeof bridge.syncOverlayGeometry === "function") {
-                bridge.syncOverlayGeometry();
-            }
-        });
-    }
-
-    onAnyFlyoutOpenChanged: {
-        Qt.callLater(function() {
-            if (typeof bridge !== "undefined" && typeof bridge.syncOverlayGeometry === "function") {
-                bridge.syncOverlayGeometry();
-            }
-        });
-    }
+    // Keep root layer-shell height fixed at 440px at all times so Qt Wayland RHI
+    // never destroys/reallocates the backing swapchain when flyovers open or close.
+    // Input routing and Dual-Kawase blur still shrink to the 32px TopBar when idle.
+    height: 440
 
     Shortcut {
         sequence: "Escape"
@@ -251,9 +238,10 @@ Window {
         // ── Calendar Flyout (Spring-animated) ───────────────────────
         FlyoutHost {
             id: calFlyoutHost
+            readonly property real pad: 18
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.horizontalCenterOffset: 60
-            y: 48
+            y: topBar.height + 4 - pad
             open: typeof bridge !== "undefined" && bridge.calendarOpen
             sourceComponent: Component {
                 CalendarFlyout {
@@ -267,10 +255,12 @@ Window {
         // ── Notifications Flyout (Spring-animated) ──────────────────
         FlyoutHost {
             id: notifFlyoutHost
-            x: topBar.notifTriggerItem
-               ? Math.min(container.width - width - 16, Math.max(8, Math.round(topBar.notifTriggerItem.mapToItem(container, 0, 0).x + (topBar.notifTriggerItem.width / 2) - (width / 2))))
-               : (container.width - width - 16)
-            y: topBar.height + 4
+            readonly property real pad: 18
+            readonly property real cardW: width > pad * 2 ? (width - pad * 2) : 360
+            x: (topBar.notifTriggerItem
+                ? Math.min(container.width - cardW - 16, Math.max(8, Math.round(topBar.notifTriggerItem.mapToItem(container, 0, 0).x + (topBar.notifTriggerItem.width / 2) - (cardW / 2))))
+                : (container.width - cardW - 16)) - pad
+            y: topBar.height + 4 - pad
             open: typeof bridge !== "undefined" && bridge.notificationsOpen
             sourceComponent: Component {
                 NotificationFlyout {
@@ -285,7 +275,7 @@ Window {
         FlyoutHost {
             id: volFlyoutHost
             readonly property real pad: 18
-            readonly property real cardW: width > pad * 2 ? (width - pad * 2) : 256
+            readonly property real cardW: width > pad * 2 ? (width - pad * 2) : 272
             x: (topBar.volTriggerItem
                 ? Math.min(container.width - cardW - 16, Math.max(8, Math.round(topBar.volTriggerItem.mapToItem(container, 0, 0).x + (topBar.volTriggerItem.width / 2) - (cardW / 2))))
                 : (container.width - cardW - 40)) - pad
@@ -303,15 +293,36 @@ Window {
         // ── Brightness Flyout (Spring-animated) ─────────────────────
         FlyoutHost {
             id: briFlyoutHost
-            x: topBar.briTriggerItem
-               ? Math.min(container.width - width - 16, Math.max(8, Math.round(topBar.briTriggerItem.mapToItem(container, 0, 0).x + (topBar.briTriggerItem.width / 2) - (width / 2))))
-               : (container.width - width - 70)
-            y: topBar.height + 4
+            readonly property real pad: 18
+            readonly property real cardW: width > pad * 2 ? (width - pad * 2) : 272
+            x: (topBar.briTriggerItem
+                ? Math.min(container.width - cardW - 16, Math.max(8, Math.round(topBar.briTriggerItem.mapToItem(container, 0, 0).x + (topBar.briTriggerItem.width / 2) - (cardW / 2))))
+                : (container.width - cardW - 70)) - pad
+            y: topBar.height + 4 - pad
             open: typeof bridge !== "undefined" && bridge.brightnessFlyoutOpen
             sourceComponent: Component {
                 BrightnessFlyout {
                     id: briFlyout
                     objectName: "briFlyout"
+                    visible: true
+                }
+            }
+        }
+
+        // ── Wi-Fi Quick Flyout (Spring-animated) ────────────────────
+        FlyoutHost {
+            id: wifiFlyoutHost
+            readonly property real pad: 18
+            readonly property real cardW: width > pad * 2 ? (width - pad * 2) : 300
+            x: (topBar.wifiTriggerItem
+                ? Math.min(container.width - cardW - 16, Math.max(8, Math.round(topBar.wifiTriggerItem.mapToItem(container, 0, 0).x + (topBar.wifiTriggerItem.width / 2) - (cardW / 2))))
+                : (container.width - cardW - 48)) - pad
+            y: topBar.height + 4 - pad
+            open: typeof bridge !== "undefined" && bridge.wifiFlyoutOpen
+            sourceComponent: Component {
+                WifiQuickFlyout {
+                    id: wifiFlyout
+                    objectName: "wifiFlyout"
                     visible: true
                 }
             }

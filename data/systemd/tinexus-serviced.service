@@ -11,7 +11,7 @@ PartOf=tinexus-session.target
 Type=simple
 User=tinexus
 Group=tinexus
-SupplementaryGroups=video input render seat
+SupplementaryGroups=audio video input render seat netdev
 
 RuntimeDirectory=user/1000 tinexus
 RuntimeDirectoryMode=0700

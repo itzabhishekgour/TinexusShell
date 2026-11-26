@@ -182,6 +182,22 @@ void SearchController::buildIndex() {
             "CPU model, core topology, DRM backend, and Vulkan/OpenGL engine",
             7, "about", "#8E8E93",
             {"processor", "cpu", "graphics", "gpu", "vulkan", "opengl", "compositor"}
+        },
+
+        // ── 8. Bluetooth ──────────────────────────────────────────────────────
+        {
+            "Bluetooth",
+            "Pair and connect wireless headphones, keyboards, mice, and devices",
+            8, "bluetooth", "#0A84FF",
+            {"bluetooth", "wireless", "pair", "pairing", "headphones", "audio", "mouse", "keyboard", "bluez", "adapter"}
+        },
+
+        // ── 9. Users & Accounts ───────────────────────────────────────────────
+        {
+            "Users & Accounts",
+            "Manage local user accounts, passwords, and administrator roles",
+            9, "users", "#5E5CE6",
+            {"users", "accounts", "password", "admin", "administrator", "create user", "delete user", "profile", "login"}
         }
     };
 }

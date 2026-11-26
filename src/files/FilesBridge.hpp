@@ -26,6 +26,8 @@ class FilesBridge : public QObject {
     Q_PROPERTY(QString currentPath READ currentPath NOTIFY currentPathChanged)
     Q_PROPERTY(QString currentDirName READ currentDirName NOTIFY currentPathChanged)
     Q_PROPERTY(QString homePath READ homePath CONSTANT)
+    Q_PROPERTY(bool isInTrash READ isInTrash NOTIFY currentPathChanged)
+    Q_PROPERTY(QVariantList breadcrumbs READ breadcrumbs NOTIFY currentPathChanged)
     Q_PROPERTY(QVariantList sidebarLocations READ sidebarLocations CONSTANT)
     Q_PROPERTY(QVariantList fileList READ fileList NOTIFY fileListChanged)
     Q_PROPERTY(QVariantList columnsData READ columnsData NOTIFY columnsDataChanged)
@@ -77,6 +79,8 @@ public:
     QString currentPath() const { return m_currentPath; }
     QString currentDirName() const;
     QString homePath() const;
+    bool isInTrash() const;
+    QVariantList breadcrumbs() const;
     QVariantList sidebarLocations() const;
     QVariantList fileList() const { return m_isSearching ? m_searchResults : m_fileList; }
     QVariantList columnsData() const { return m_columnsData; }
@@ -160,6 +164,8 @@ public:
     Q_INVOKABLE bool moveItem(const QString& srcPath, const QString& destDir);
     Q_INVOKABLE bool deleteItem(const QString& path);
     Q_INVOKABLE bool deleteSelected();
+    Q_INVOKABLE bool restoreItem(const QString& path);
+    Q_INVOKABLE bool emptyTrash();
     Q_INVOKABLE void copyItem(const QString& path);
     Q_INVOKABLE void copyItems(const QStringList& paths);
     Q_INVOKABLE void cutItem(const QString& path);

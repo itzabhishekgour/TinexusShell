@@ -1,0 +1,9 @@
+// /etc/polkit-1/rules.d/50-tinexus-network.rules
+// Allow Tinexus desktop users to toggle Wi-Fi, scan, and manage NetworkManager connections without password prompts
+
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        (subject.isInGroup("netdev") || subject.isInGroup("sudo") || subject.user === "tinexus")) {
+        return polkit.Result.YES;
+    }
+});

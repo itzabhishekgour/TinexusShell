@@ -82,6 +82,29 @@ public:
      * @brief Changes the active audio output device/routing.
      */
     static bool set_output_device_by_index(int index);
+
+    /**
+     * @brief Enumerates active PipeWire/PulseAudio input sources (microphones).
+     */
+    static std::vector<std::string> get_input_devices();
+
+    /**
+     * @brief Gets current active input source index.
+     */
+    static int get_current_input_device_index();
+
+    /**
+     * @brief Switches the default PipeWire/PulseAudio input source.
+     */
+    static bool set_input_device_by_index(int index);
+
+    /**
+     * @brief Gets/sets/mutes the default audio input source volume [0 - 100%].
+     */
+    static int get_input_volume_percent();
+    static bool set_input_volume_percent(int pct);
+    static bool is_input_muted();
+    static bool toggle_input_mute();
 };
 
 } // namespace tinexus::hardware

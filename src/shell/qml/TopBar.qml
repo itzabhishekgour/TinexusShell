@@ -259,7 +259,8 @@ Item {
             width: 28
             height: 24
             radius: 5
-            color: wifiMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.15) : "transparent"
+            color: wifiMouse.containsMouse || (typeof bridge !== "undefined" && bridge.wifiFlyoutOpen)
+                   ? Qt.rgba(1, 1, 1, 0.15) : "transparent"
             anchors.verticalCenter: parent.verticalCenter
 
             readonly property bool connected: typeof bridge !== "undefined" ? bridge.networkConnected : false
@@ -288,7 +289,7 @@ Item {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                     if (typeof bridge !== "undefined") {
-                        bridge.openWifiSettings();
+                        bridge.toggleWifiFlyout();
                     }
                 }
             }

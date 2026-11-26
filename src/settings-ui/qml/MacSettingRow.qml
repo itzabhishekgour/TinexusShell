@@ -39,6 +39,7 @@ Item {
         ColumnLayout {
             spacing: 1
             Layout.fillWidth: true
+            Layout.minimumWidth: 110
             Layout.alignment: Qt.AlignVCenter
 
             Text {
@@ -64,9 +65,11 @@ Item {
         // Right control slot
         Item {
             id: controlSlot
-            implicitWidth: childrenRect.width
+            implicitWidth: Math.min(childrenRect.width, Math.max(120, Math.round(root.width * 0.56)))
             implicitHeight: childrenRect.height
+            Layout.maximumWidth: Math.max(120, Math.round(root.width * 0.56))
             Layout.alignment: Qt.AlignVCenter
+            clip: true
         }
     }
 

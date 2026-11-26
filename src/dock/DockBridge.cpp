@@ -543,6 +543,10 @@ void DockBridge::launchWithUris(const QString& appId, const QStringList& uris) {
 
 static void enrichEnvironmentWithRuntime(QProcessEnvironment& env) {
     env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    env.remove(QStringLiteral("QSG_RHI_BACKEND"));
+    if (!QFile::exists(QStringLiteral("/run/tinexus/safe_graphics_mode"))) {
+        env.remove(QStringLiteral("LIBGL_ALWAYS_SOFTWARE"));
+    }
     if (!env.contains(QStringLiteral("DISPLAY")) || !env.contains(QStringLiteral("WAYLAND_DISPLAY"))) {
         QFile envFile(QStringLiteral("/run/tinexus/env"));
         if (envFile.open(QIODevice::ReadOnly | QIODevice::Text)) {

@@ -6,18 +6,20 @@ ApplicationWindow {
     id: window
     visible: true
     visibility: Window.Windowed
-    width: 840
-    height: 520
-    minimumWidth: 720
-    minimumHeight: 460
+    width: 880
+    height: 560
+    minimumWidth: 740
+    minimumHeight: 480
     title: "Tinexus Settings"
-    color: "#161618"
+    color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint
 
     // ── Navigation History Tracking ────────────────────────────────────────
-    property var navHistory: [3] // Default to Wi-Fi/Network
+    property var navHistory: [3]
     property int historyIndex: 0
     property bool internalNav: false
+    property real pageTransitionOpacity: 1.0
+    property real pageTransitionOffsetX: 0.0
 
     function getPageTitle(pageIndex) {
         switch (pageIndex) {
@@ -29,7 +31,34 @@ ApplicationWindow {
             case 5: return "Keyboard Shortcuts"
             case 6: return "Privacy & Security"
             case 7: return "About Tinexus"
+            case 8: return "Bluetooth"
+            case 9: return "Users & Accounts"
             default: return "Settings"
+        }
+    }
+
+    function openSystemReport() {
+        bridge.refreshSystemReport()
+        reportModal.visible = true
+    }
+
+    ParallelAnimation {
+        id: pageEnterAnim
+        NumberAnimation {
+            target: window
+            property: "pageTransitionOpacity"
+            from: 0.0
+            to: 1.0
+            duration: 140
+            easing.type: Easing.OutCubic
+        }
+        NumberAnimation {
+            target: window
+            property: "pageTransitionOffsetX"
+            from: 10.0
+            to: 0.0
+            duration: 140
+            easing.type: Easing.OutCubic
         }
     }
 
@@ -37,10 +66,10 @@ ApplicationWindow {
         target: bridge
         function onCurrentPageChanged() {
             toastBanner.opacity = 0.0
+            pageEnterAnim.restart()
             if (internalNav) return
             var p = bridge.currentPage
             if (navHistory.length > 0 && navHistory[historyIndex] === p) return
-            // Truncate forward history and push new
             var newHist = navHistory.slice(0, historyIndex + 1)
             newHist.push(p)
             navHistory = newHist
@@ -66,150 +95,166 @@ ApplicationWindow {
         }
     }
 
-    // ── Main UI Layout ─────────────────────────────────────────────────────
-    RowLayout {
+    // ── Main Rounded Glass Window Frame ────────────────────────────────────
+    Rectangle {
         anchors.fill: parent
-        spacing: 0
+        radius: 12
+        color: "transparent"
+        border.color: Qt.rgba(1, 1, 1, 0.14)
+        border.width: 1
+        clip: true
 
-        // Left Sidebar (with traffic lights and search)
-        Sidebar {
-            id: sidebar
-            Layout.fillHeight: true
-            Layout.preferredWidth: 240
-        }
+        RowLayout {
+            anchors.fill: parent
+            spacing: 0
 
-        // Right Content Area
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            color: "#1e1e1e" // macOS Dark Mode main canvas (neutral dark graphite, no purple tint)
+            // Left Frosted LiquidGlass Sidebar
+            Sidebar {
+                id: sidebar
+                Layout.fillHeight: true
+                Layout.preferredWidth: 240
+            }
 
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 0
+            // Right Content Area
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#1b1c22"
 
-                // ── macOS Content Top Header Bar (Translucent Frosted Bar) ───
-                Rectangle {
-                    Layout.fillWidth: true
-                    height: 48
-                    color: Qt.rgba(0.12, 0.12, 0.12, 0.85) // Frosted glass translucent header
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
 
-                    // Drag area to move window
-                    MouseArea {
-                        anchors.fill: parent
-                        onPressed: window.startSystemMove()
-                        onDoubleClicked: {
-                            if (window.visibility === Window.Maximized) {
-                                window.showNormal()
-                            } else {
-                                window.showMaximized()
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 20
-                        anchors.rightMargin: 20
-                        spacing: 12
-
-                        // macOS Back/Forward Chevrons
-                        Row {
-                            spacing: 4
-
-                            Rectangle {
-                                width: 24
-                                height: 24
-                                radius: 6
-                                color: backArea.pressed ? "#28ffffff" : (backArea.containsMouse ? "#20ffffff" : "#0dffffff")
-                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
-                                border.color: "#14ffffff"
-                                border.width: 1
-                                opacity: window.historyIndex > 0 ? 1.0 : 0.35
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "‹"
-                                    color: "#f5f5f7"
-                                    font.pixelSize: 16
-                                    font.bold: true
-                                }
-
-                                MouseArea {
-                                    id: backArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: window.historyIndex > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                    onClicked: window.goBack()
-                                }
-                            }
-
-                            Rectangle {
-                                width: 24
-                                height: 24
-                                radius: 6
-                                color: fwdArea.pressed ? "#28ffffff" : (fwdArea.containsMouse ? "#20ffffff" : "#0dffffff")
-                                Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
-                                border.color: "#14ffffff"
-                                border.width: 1
-                                opacity: window.historyIndex < window.navHistory.length - 1 ? 1.0 : 0.35
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "›"
-                                    color: "#f5f5f7"
-                                    font.pixelSize: 16
-                                    font.bold: true
-                                }
-
-                                MouseArea {
-                                    id: fwdArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: window.historyIndex < window.navHistory.length - 1 ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                    onClicked: window.goForward()
-                                }
-                            }
-                        }
-
-                        // Page Title (bold center-left next to arrows)
-                        Text {
-                            text: window.getPageTitle(bridge.currentPage)
-                            color: "#f5f5f7"
-                            font.pixelSize: 14
-                            font.weight: Font.DemiBold
-                        }
-
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    // Hairline bottom divider
+                    // ── Content Top Header Bar ─────────────────────────────
                     Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: 1
-                        color: "#14ffffff"
-                    }
-                }
+                        Layout.fillWidth: true
+                        height: 48
+                        color: Qt.rgba(0.11, 0.12, 0.15, 0.90)
 
-                // ── Stack of Pages ─────────────────────────────────────────
-                StackLayout {
-                    id: contentStack
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    currentIndex: bridge.currentPage
+                        MouseArea {
+                            anchors.fill: parent
+                            onPressed: window.startSystemMove()
+                            onDoubleClicked: {
+                                if (window.visibility === Window.Maximized) {
+                                    window.showNormal()
+                                } else {
+                                    window.showMaximized()
+                                }
+                            }
+                        }
 
-                    DisplayPage {}
-                    SoundPage {}
-                    PersonalizationPage {}
-                    NetworkPage {
-                        onRequestWifiPassword: (ssid) => wifiModal.openModal(ssid)
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 20
+                            anchors.rightMargin: 20
+                            spacing: 12
+
+                            Row {
+                                spacing: 4
+
+                                Rectangle {
+                                    width: 24
+                                    height: 24
+                                    radius: 6
+                                    color: backArea.pressed ? "#28ffffff" : (backArea.containsMouse ? "#20ffffff" : "#0dffffff")
+                                    Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                                    border.color: "#14ffffff"
+                                    border.width: 1
+                                    opacity: window.historyIndex > 0 ? 1.0 : 0.35
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "‹"
+                                        color: "#f5f5f7"
+                                        font.pixelSize: 16
+                                        font.bold: true
+                                    }
+
+                                    MouseArea {
+                                        id: backArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: window.historyIndex > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: window.goBack()
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 24
+                                    height: 24
+                                    radius: 6
+                                    color: fwdArea.pressed ? "#28ffffff" : (fwdArea.containsMouse ? "#20ffffff" : "#0dffffff")
+                                    Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                                    border.color: "#14ffffff"
+                                    border.width: 1
+                                    opacity: window.historyIndex < window.navHistory.length - 1 ? 1.0 : 0.35
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "›"
+                                        color: "#f5f5f7"
+                                        font.pixelSize: 16
+                                        font.bold: true
+                                    }
+
+                                    MouseArea {
+                                        id: fwdArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: window.historyIndex < window.navHistory.length - 1 ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: window.goForward()
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: window.getPageTitle(bridge.currentPage)
+                                color: "#f5f5f7"
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 1
+                            color: "#14ffffff"
+                        }
                     }
-                    SystemPage {}
-                    ShortcutsPage {}
-                    PrivacyPage {}
-                    AboutPage {}
+
+                    // ── Smooth Transitioning Page Stack ────────────────────
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+
+                        StackLayout {
+                            id: contentStack
+                            anchors.fill: parent
+                            currentIndex: bridge.currentPage
+                            opacity: window.pageTransitionOpacity
+                            transform: Translate { x: window.pageTransitionOffsetX }
+
+                            DisplayPage {}
+                            SoundPage {}
+                            PersonalizationPage {}
+                            NetworkPage {
+                                onRequestWifiPassword: (ssid) => wifiModal.openModal(ssid)
+                            }
+                            SystemPage {}
+                            ShortcutsPage {}
+                            PrivacyPage {}
+                            AboutPage {
+                                onRequestSystemReport: window.openSystemReport()
+                            }
+                            BluetoothPage {}
+                            UsersPage {}
+                        }
+                    }
                 }
             }
         }
@@ -220,6 +265,77 @@ ApplicationWindow {
         id: wifiModal
         anchors.fill: parent
         z: 99
+    }
+
+    // ── System Report Sheet Modal ──────────────────────────────────────────
+    Rectangle {
+        id: reportModal
+        anchors.fill: parent
+        visible: false
+        color: Qt.rgba(0, 0, 0, 0.62)
+        z: 98
+
+        MouseArea { anchors.fill: parent; onClicked: reportModal.visible = false }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 64, 580)
+            height: Math.min(parent.height - 64, 420)
+            radius: 12
+            color: "#22242c"
+            border.color: "#26ffffff"
+            border.width: 1
+
+            MouseArea { anchors.fill: parent }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 18
+                spacing: 12
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "System Diagnostic Report"
+                        color: "#f5f5f7"
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                        Layout.fillWidth: true
+                    }
+                    MacButton {
+                        text: "Copy Report"
+                        primary: true
+                        onClicked: bridge.copySystemReport()
+                    }
+                    MacButton {
+                        text: "Close"
+                        onClicked: reportModal.visible = false
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 8
+                    color: "#15161c"
+                    border.color: "#16ffffff"
+                    border.width: 1
+
+                    ScrollView {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        TextArea {
+                            text: bridge.systemReportText
+                            readOnly: true
+                            color: "#d1d5db"
+                            font.family: "JetBrains Mono"
+                            font.pixelSize: 11
+                            background: null
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── Toast Notification Banner ──────────────────────────────────────────

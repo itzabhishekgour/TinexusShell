@@ -21,8 +21,16 @@
 #include <QtNetwork/QLocalSocket>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusArgument>
+#include <QtDBus/QDBusPendingCall>
+#include <QtDBus/QDBusPendingCallWatcher>
+#include <QtDBus/QDBusPendingReply>
 
 #include <sys/reboot.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <linux/reboot.h>
 #include <unistd.h>
 #include <cctype>
@@ -39,6 +47,108 @@ namespace tinexus::shell {
 
 struct ShellBridge::BlurProtocolState : public tinexus::common::ui::WaylandBlurHelper {};
 
+namespace {
+std::string run_shell_nmcli(const std::vector<std::string>& args, int timeout_ms = 5000, int* rc_out = nullptr) {
+    if (!fs::exists("/usr/bin/nmcli")) {
+        if (rc_out) *rc_out = 127;
+        return {};
+    }
+    int pipefd[2]{-1, -1};
+    if (::pipe2(pipefd, O_CLOEXEC) != 0) {
+        if (rc_out) *rc_out = 1;
+        return {};
+    }
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        if (rc_out) *rc_out = 1;
+        return {};
+    }
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        int devnull = ::open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDIN_FILENO);
+            if (devnull > 2) ::close(devnull);
+        }
+        if (pipefd[1] > 2) ::close(pipefd[1]);
+        std::vector<char*> c_args;
+        c_args.reserve(args.size() + 2);
+        c_args.push_back(const_cast<char*>("/usr/bin/nmcli"));
+        for (const auto& a : args) c_args.push_back(const_cast<char*>(a.c_str()));
+        c_args.push_back(nullptr);
+        ::execv("/usr/bin/nmcli", c_args.data());
+        _exit(127);
+    }
+    ::close(pipefd[1]);
+    int flags = ::fcntl(pipefd[0], F_GETFL, 0);
+    if (flags >= 0) ::fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+
+    std::string out;
+    char buf[1024];
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    bool eof = false;
+    while (!eof) {
+        int rem = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count());
+        if (rem <= 0) {
+            ::kill(pid, SIGKILL);
+            break;
+        }
+        struct pollfd pfd{pipefd[0], POLLIN, 0};
+        int pr = ::poll(&pfd, 1, rem);
+        if (pr > 0) {
+            while (true) {
+                ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+                if (n > 0) out.append(buf, static_cast<size_t>(n));
+                else if (n == 0) { eof = true; break; }
+                else if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                else if (errno == EINTR) continue;
+                else { eof = true; break; }
+            }
+        } else if (pr == 0) {
+            ::kill(pid, SIGKILL);
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    ::close(pipefd[0]);
+    int st = 0;
+    while (::waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (rc_out) *rc_out = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    return out;
+}
+
+std::vector<std::string> split_nmcli_line(const std::string& line) {
+    std::vector<std::string> cols;
+    std::string cur;
+    for (size_t i = 0; i < line.size(); ++i) {
+        if (line[i] == '\\' && i + 1 < line.size() && (line[i + 1] == ':' || line[i + 1] == '\\')) {
+            cur.push_back(line[i + 1]);
+            ++i;
+        } else if (line[i] == ':') {
+            cols.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(line[i]);
+        }
+    }
+    cols.push_back(cur);
+    return cols;
+}
+
+std::string trim_shell_str(std::string s) {
+    auto b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return {};
+    auto e = s.find_last_not_of(" \t\r\n");
+    return s.substr(b, e - b + 1);
+}
+} // namespace
+
 ShellBridge::ShellBridge(QObject* parent)
     : QObject(parent)
     , m_blurState(std::make_unique<BlurProtocolState>())
@@ -53,8 +163,8 @@ ShellBridge::ShellBridge(QObject* parent)
     // Defer all I/O, subprocess audio probing, .desktop scanning, and D-Bus subscription
     // until immediately after the TopBar maps cleanly onto the compositor output.
     QTimer::singleShot(0, this, [this]() {
-        // Subscribe to notification signals from tinexus-notifications daemon
-        bool connected = QDBusConnection::sessionBus().connect(
+        auto bus = QDBusConnection::sessionBus();
+        bool addedOk = bus.connect(
             QString(),
             QStringLiteral("/org/freedesktop/Notifications"),
             QStringLiteral("org.freedesktop.Notifications"),
@@ -62,14 +172,24 @@ ShellBridge::ShellBridge(QObject* parent)
             this,
             SLOT(onNotificationAdded(uint,QString,QString,QString,QString,int))
         );
-        if (!connected) {
+        bus.connect(
+            QString(),
+            QStringLiteral("/org/freedesktop/Notifications"),
+            QStringLiteral("org.freedesktop.Notifications"),
+            QStringLiteral("NotificationClosed"),
+            this,
+            SLOT(onNotificationClosed(uint,uint))
+        );
+        if (!addedOk) {
             tinexus::log::warn("[Shell] Failed to connect to org.freedesktop.Notifications NotificationAdded signal");
         } else {
-            tinexus::log::info("[Shell] Connected to org.freedesktop.Notifications NotificationAdded signal");
+            tinexus::log::info("[Shell] Connected to org.freedesktop.Notifications signals");
         }
 
+        syncActiveNotifications();
         pollBattery();
         syncAudioState();
+        syncWifiState(false);
         scanApplications();
 
         QPointer<ShellBridge> self(this);
@@ -78,39 +198,13 @@ ShellBridge::ShellBridge(QObject* parent)
             if (!self) return;
             QMetaObject::invokeMethod(self, [self, bri]() {
                 if (!self) return;
-                if (self->m_brightness != bri) {
+                if (!self->m_draggingBrightness && self->m_brightness != bri) {
                     self->m_brightness = bri;
                     emit self->brightnessChanged();
                 }
             }, Qt::QueuedConnection);
         }).detach();
     });
-
-    // Populate standard notifications for desktop notification flyout
-    QVariantMap n1;
-    n1[QStringLiteral("title")]   = QStringLiteral("System Update");
-    n1[QStringLiteral("message")] = QStringLiteral("Tinexus Platform v1.1 update ready to install.");
-    n1[QStringLiteral("time")]    = QStringLiteral("10m ago");
-    n1[QStringLiteral("appId")]   = QStringLiteral("tinexus-settings");
-    n1[QStringLiteral("icon")]    = QStringLiteral("system-software-update-symbolic");
-
-    QVariantMap n2;
-    n2[QStringLiteral("title")]   = QStringLiteral("Power & Battery");
-    n2[QStringLiteral("message")] = QStringLiteral("Fast charging enabled. Power adapter connected.");
-    n2[QStringLiteral("time")]    = QStringLiteral("25m ago");
-    n2[QStringLiteral("appId")]   = QStringLiteral("tinexus-monitor");
-    n2[QStringLiteral("icon")]    = QStringLiteral("battery-level-100-charged-symbolic");
-
-    QVariantMap n3;
-    n3[QStringLiteral("title")]   = QStringLiteral("Sound & Media");
-    n3[QStringLiteral("message")] = QStringLiteral("Audio output switched to High-Definition Speakers.");
-    n3[QStringLiteral("time")]    = QStringLiteral("1h ago");
-    n3[QStringLiteral("appId")]   = QStringLiteral("tinexus-media");
-    n3[QStringLiteral("icon")]    = QStringLiteral("audio-volume-high-symbolic");
-
-    m_notifications.append(n1);
-    m_notifications.append(n2);
-    m_notifications.append(n3);
 
     updateClock();
     connect(&m_clockTimer, &QTimer::timeout, this, &ShellBridge::updateClock);
@@ -122,6 +216,11 @@ ShellBridge::ShellBridge(QObject* parent)
     connect(&m_audioTimer, &QTimer::timeout, this, &ShellBridge::syncAudioState);
     m_audioTimer.start(8000);
 
+    connect(&m_wifiTimer, &QTimer::timeout, this, [this]() {
+        syncWifiState(m_wifiFlyoutOpen);
+    });
+    m_wifiTimer.start(15000);
+
     m_volumeApplyTimer.setSingleShot(true);
     m_volumeApplyTimer.setInterval(40);
     connect(&m_volumeApplyTimer, &QTimer::timeout, this, [this]() {
@@ -132,11 +231,12 @@ ShellBridge::ShellBridge(QObject* parent)
             return;
         }
         const int targetVol = m_pendingVolume;
+        const bool dragActive = m_draggingVolume;
         m_pendingVolume = -1;
         QPointer<ShellBridge> self(this);
         auto writingFlag = m_audioWriting;
-        std::thread([self, writingFlag, targetVol]() {
-            hardware::AudioUtils::set_volume_percent(targetVol, /*persist=*/true, /*throttle=*/false);
+        std::thread([self, writingFlag, targetVol, dragActive]() {
+            hardware::AudioUtils::set_volume_percent(targetVol, /*persist=*/!dragActive, /*throttle=*/dragActive);
             const int actualVol = hardware::AudioUtils::get_volume_percent();
             const bool actualMuted = hardware::AudioUtils::is_muted() || (actualVol == 0);
             if (!self) {
@@ -150,10 +250,43 @@ ShellBridge::ShellBridge(QObject* parent)
                     self->m_volumeApplyTimer.start(0);
                     return;
                 }
+                if (self->m_draggingVolume) {
+                    return;
+                }
                 if (self->m_volume != actualVol || self->m_soundMuted != actualMuted) {
                     self->m_volume = actualVol;
                     self->m_soundMuted = actualMuted;
                     emit self->volumeChanged();
+                }
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
+
+    m_brightnessApplyTimer.setSingleShot(true);
+    m_brightnessApplyTimer.setInterval(40);
+    connect(&m_brightnessApplyTimer, &QTimer::timeout, this, [this]() {
+        if (m_pendingBrightness < 0 || m_brightnessWriting->exchange(true)) {
+            if (m_pendingBrightness >= 0 && !m_brightnessApplyTimer.isActive()) {
+                m_brightnessApplyTimer.start(40);
+            }
+            return;
+        }
+        const int targetBri = m_pendingBrightness;
+        const bool dragActive = m_draggingBrightness;
+        m_pendingBrightness = -1;
+        QPointer<ShellBridge> self(this);
+        auto writingFlag = m_brightnessWriting;
+        std::thread([self, writingFlag, targetBri, dragActive]() {
+            hardware::BacklightUtils::set_brightness_percent(targetBri, /*persist=*/!dragActive, /*throttle=*/false);
+            if (!self) {
+                writingFlag->store(false);
+                return;
+            }
+            QMetaObject::invokeMethod(self, [self, writingFlag]() {
+                writingFlag->store(false);
+                if (!self) return;
+                if (self->m_pendingBrightness >= 0 && !self->m_brightnessApplyTimer.isActive()) {
+                    self->m_brightnessApplyTimer.start(0);
                 }
             }, Qt::QueuedConnection);
         }).detach();
@@ -521,7 +654,7 @@ void ShellBridge::pollBattery() {
 }
 
 void ShellBridge::syncAudioState() {
-    if (m_audioPolling->exchange(true)) {
+    if (m_draggingVolume || m_audioWriting->load() || m_audioPolling->exchange(true)) {
         return;
     }
 
@@ -531,16 +664,26 @@ void ShellBridge::syncAudioState() {
     std::thread([self, pollingFlag]() {
         int cur_vol = hardware::AudioUtils::get_volume_percent();
         bool cur_muted = hardware::AudioUtils::is_muted() || (cur_vol == 0);
+        QString dev_name = QStringLiteral("Audio Output");
+        auto devs = hardware::AudioUtils::get_output_devices();
+        int idx = hardware::AudioUtils::get_current_output_device_index();
+        if (!devs.empty() && idx >= 0 && idx < static_cast<int>(devs.size())) {
+            const auto& d = devs[static_cast<size_t>(idx)];
+            if (!d.empty() && d != "No Audio Output Devices Available") {
+                dev_name = QString::fromStdString(d);
+            }
+        }
         if (!self) {
             pollingFlag->store(false);
             return;
         }
-        QMetaObject::invokeMethod(self, [self, pollingFlag, cur_vol, cur_muted]() {
+        QMetaObject::invokeMethod(self, [self, pollingFlag, cur_vol, cur_muted, dev_name]() {
             pollingFlag->store(false);
-            if (!self) return;
-            if (self->m_volume != cur_vol || self->m_soundMuted != cur_muted) {
+            if (!self || self->m_draggingVolume) return;
+            if (self->m_volume != cur_vol || self->m_soundMuted != cur_muted || self->m_outputDeviceName != dev_name) {
                 self->m_volume = cur_vol;
                 self->m_soundMuted = cur_muted;
+                self->m_outputDeviceName = dev_name;
                 emit self->volumeChanged();
             }
         }, Qt::QueuedConnection);
@@ -601,8 +744,36 @@ void ShellBridge::setBrightness(int bri) {
         m_brightness = bri;
         emit brightnessChanged();
     }
-    // Set hardware backlight with throttling enabled to avoid GUI stutter
-    hardware::BacklightUtils::set_brightness_percent(bri, /*persist=*/false, /*throttle=*/true);
+    m_pendingBrightness = bri;
+    if (!m_brightnessApplyTimer.isActive()) {
+        m_brightnessApplyTimer.start(40);
+    }
+}
+
+void ShellBridge::beginVolumeDrag() {
+    m_draggingVolume = true;
+}
+
+void ShellBridge::endVolumeDrag() {
+    m_draggingVolume = false;
+    const int targetVol = m_volume;
+    QPointer<ShellBridge> self(this);
+    std::thread([self, targetVol]() {
+        hardware::AudioUtils::set_volume_percent(targetVol, /*persist=*/true, /*throttle=*/false);
+    }).detach();
+}
+
+void ShellBridge::beginBrightnessDrag() {
+    m_draggingBrightness = true;
+}
+
+void ShellBridge::endBrightnessDrag() {
+    m_draggingBrightness = false;
+    const int targetBri = m_brightness;
+    QPointer<ShellBridge> self(this);
+    std::thread([self, targetBri]() {
+        hardware::BacklightUtils::set_brightness_percent(targetBri, /*persist=*/true, /*throttle=*/false);
+    }).detach();
 }
 
 void ShellBridge::setActiveAppName(const QString& name) {
@@ -614,10 +785,14 @@ void ShellBridge::setActiveAppName(const QString& name) {
 
 void ShellBridge::closeAllFlyouts() {
     bool changed = m_logoMenuOpen || m_appMenuOpen || m_calendarOpen || m_notificationsOpen ||
-                   m_volumeFlyoutOpen || m_brightnessFlyoutOpen || m_rebootConfirmationOpen || m_shutdownConfirmationOpen;
+                   m_volumeFlyoutOpen || m_brightnessFlyoutOpen || m_wifiFlyoutOpen ||
+                   m_rebootConfirmationOpen || m_shutdownConfirmationOpen;
 
     if (m_brightnessFlyoutOpen) {
-        hardware::BacklightUtils::set_brightness_percent(m_brightness, /*persist=*/true, /*throttle=*/false);
+        const int targetBri = m_brightness;
+        std::thread([targetBri]() {
+            hardware::BacklightUtils::set_brightness_percent(targetBri, /*persist=*/true, /*throttle=*/false);
+        }).detach();
     }
 
     m_logoMenuOpen             = false;
@@ -626,6 +801,7 @@ void ShellBridge::closeAllFlyouts() {
     m_notificationsOpen        = false;
     m_volumeFlyoutOpen         = false;
     m_brightnessFlyoutOpen     = false;
+    m_wifiFlyoutOpen           = false;
     m_rebootConfirmationOpen   = false;
     m_shutdownConfirmationOpen = false;
 
@@ -670,6 +846,15 @@ void ShellBridge::setVolumeFlyoutOpen(bool open) {
 void ShellBridge::setBrightnessFlyoutOpen(bool open) {
     if (open) closeAllFlyouts();
     m_brightnessFlyoutOpen = open;
+    emit flyoutStateChanged();
+}
+
+void ShellBridge::setWifiFlyoutOpen(bool open) {
+    if (open) {
+        closeAllFlyouts();
+        syncWifiState(true);
+    }
+    m_wifiFlyoutOpen = open;
     emit flyoutStateChanged();
 }
 
@@ -730,9 +915,292 @@ void ShellBridge::toggleBrightness() {
     emit flyoutStateChanged();
 }
 
+void ShellBridge::toggleWifiFlyout() {
+    bool next = !m_wifiFlyoutOpen;
+    closeAllFlyouts();
+    if (next) {
+        syncWifiState(true);
+    }
+    m_wifiFlyoutOpen = next;
+    emit flyoutStateChanged();
+}
+
+void ShellBridge::syncWifiState(bool activeRescan) {
+    if (m_wifiPolling->exchange(true)) return;
+    if (activeRescan && !m_wifiScanning) {
+        m_wifiScanning = true;
+        emit wifiChanged();
+    }
+
+    QPointer<ShellBridge> self(this);
+    auto pollingFlag = m_wifiPolling;
+
+    std::thread([self, pollingFlag, activeRescan]() {
+        int rc = 1;
+        std::string gen = run_shell_nmcli({"-t", "-f", "RUNNING", "general"}, 1200, &rc);
+        if (rc != 0 || gen.find("running") == std::string::npos) {
+            if (self) {
+                QMetaObject::invokeMethod(self, [self, pollingFlag]() {
+                    pollingFlag->store(false);
+                    if (!self) return;
+                    self->m_wifiScanning = false;
+                    self->m_wifiStatusMessage = QStringLiteral("NetworkManager unavailable");
+                    emit self->wifiChanged();
+                }, Qt::QueuedConnection);
+            } else {
+                pollingFlag->store(false);
+            }
+            return;
+        }
+
+        std::string radio = trim_shell_str(run_shell_nmcli({"radio", "wifi"}, 1200, &rc));
+        bool enabled = (radio != "disabled");
+
+        // Check if any ethernet/wifi device is connected
+        bool anyConnected = false;
+        int bestBars = 0;
+        std::string dev_raw = run_shell_nmcli({"-t", "-f", "TYPE,STATE", "dev"}, 1200, &rc);
+        if (rc == 0) {
+            std::istringstream diss(dev_raw);
+            std::string dline;
+            while (std::getline(diss, dline)) {
+                auto cols = split_nmcli_line(dline);
+                if (cols.size() >= 2 && cols[1] == "connected") {
+                    anyConnected = true;
+                    if (cols[0] == "ethernet") bestBars = std::max(bestBars, 4);
+                }
+            }
+        }
+
+        QVariantList nets;
+        QString activeSsid;
+        QString ipAddr;
+        QString statusMsg;
+
+        if (!enabled) {
+            statusMsg = QStringLiteral("Wi-Fi is turned off");
+        } else {
+            std::vector<std::string> listArgs = {"-t", "-f", "ACTIVE,SSID,BSSID,SIGNAL,SECURITY", "dev", "wifi", "list"};
+            if (activeRescan) {
+                listArgs.push_back("--rescan");
+                listArgs.push_back("yes");
+            }
+            std::string raw = run_shell_nmcli(listArgs, activeRescan ? 6500 : 2500, &rc);
+            if (rc == 0) {
+                struct NetTmp {
+                    QString ssid;
+                    QString bssid;
+                    int signal{0};
+                    int bars{1};
+                    bool secured{false};
+                    QString security;
+                    bool connected{false};
+                };
+                std::vector<NetTmp> parsed;
+                std::istringstream iss(raw);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    if (line.empty()) continue;
+                    auto cols = split_nmcli_line(line);
+                    if (cols.size() < 5) continue;
+                    const bool isAct = (cols[0] == "yes");
+                    const std::string ssid = cols[1];
+                    if (ssid.empty()) continue;
+                    int sig = 50;
+                    try { sig = std::clamp(std::stoi(cols[3]), 0, 100); } catch (...) {}
+                    int bars = (sig >= 75) ? 4 : (sig >= 50) ? 3 : (sig >= 25) ? 2 : 1;
+                    QString sec = QString::fromStdString((cols[4].empty() || cols[4] == "--") ? "Open" : cols[4]);
+                    bool isSec = (sec != QStringLiteral("Open"));
+                    QString qSsid = QString::fromStdString(ssid);
+
+                    if (isAct) {
+                        activeSsid = qSsid;
+                        anyConnected = true;
+                        bestBars = std::max(bestBars, bars);
+                    }
+
+                    auto it = std::find_if(parsed.begin(), parsed.end(), [&](const NetTmp& n) { return n.ssid == qSsid; });
+                    if (it == parsed.end()) {
+                        parsed.push_back({qSsid, QString::fromStdString(cols[2]), sig, bars, isSec, sec, isAct});
+                    } else if (isAct || (!it->connected && sig > it->signal)) {
+                        it->bssid = QString::fromStdString(cols[2]);
+                        it->signal = sig;
+                        it->bars = bars;
+                        it->secured = isSec;
+                        it->security = sec;
+                        it->connected = it->connected || isAct;
+                    }
+                }
+                std::sort(parsed.begin(), parsed.end(), [](const NetTmp& a, const NetTmp& b) {
+                    if (a.connected != b.connected) return a.connected > b.connected;
+                    return a.signal > b.signal;
+                });
+                for (const auto& n : parsed) {
+                    QVariantMap m;
+                    m[QStringLiteral("ssid")] = n.ssid;
+                    m[QStringLiteral("bssid")] = n.bssid;
+                    m[QStringLiteral("signal")] = n.signal;
+                    m[QStringLiteral("bars")] = n.bars;
+                    m[QStringLiteral("secured")] = n.secured;
+                    m[QStringLiteral("security")] = n.security;
+                    m[QStringLiteral("connected")] = n.connected;
+                    nets.append(m);
+                }
+            }
+
+            if (!activeSsid.isEmpty()) {
+                int drc = 1;
+                std::string ifaces = run_shell_nmcli({"-t", "-f", "DEVICE,TYPE,STATE", "dev"}, 1200, &drc);
+                std::istringstream iss(ifaces);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    auto cols = split_nmcli_line(line);
+                    if (cols.size() >= 3 && cols[1] == "wifi" && cols[2] == "connected") {
+                        std::string ip_raw = run_shell_nmcli({"-t", "-f", "IP4.ADDRESS", "dev", "show", cols[0]}, 1200, &drc);
+                        auto col = ip_raw.find(':');
+                        if (col != std::string::npos) {
+                            std::string ip = trim_shell_str(ip_raw.substr(col + 1));
+                            auto slash = ip.find('/');
+                            if (slash != std::string::npos) ip = ip.substr(0, slash);
+                            ipAddr = QString::fromStdString(ip);
+                        }
+                        break;
+                    }
+                }
+                statusMsg = ipAddr.isEmpty() ? QStringLiteral("Connected") : (QStringLiteral("Connected • ") + ipAddr);
+            } else {
+                statusMsg = nets.isEmpty() ? QStringLiteral("No Wi-Fi networks found") : QStringLiteral("Not connected");
+            }
+        }
+
+        if (!self) {
+            pollingFlag->store(false);
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, pollingFlag, enabled, anyConnected, bestBars, activeSsid, ipAddr, statusMsg, nets]() {
+            pollingFlag->store(false);
+            if (!self) return;
+            self->m_wifiScanning = false;
+            self->m_wifiEnabled = enabled;
+            if (self->m_networkConnected != anyConnected || self->m_networkBars != bestBars) {
+                self->m_networkConnected = anyConnected;
+                self->m_networkBars = bestBars;
+                emit self->networkChanged();
+            }
+            self->m_connectedSsid = activeSsid;
+            self->m_wifiIpAddress = ipAddr;
+            self->m_wifiStatusMessage = statusMsg;
+            self->m_wifiNetworks = nets;
+            emit self->wifiChanged();
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void ShellBridge::setWifiEnabled(bool enabled) {
+    if (m_wifiEnabled != enabled) {
+        m_wifiEnabled = enabled;
+        m_wifiStatusMessage = enabled ? QStringLiteral("Turning Wi-Fi on...") : QStringLiteral("Wi-Fi is turned off");
+        if (!enabled) {
+            m_connectedSsid.clear();
+            m_wifiNetworks.clear();
+        }
+        emit wifiChanged();
+    }
+    QPointer<ShellBridge> self(this);
+    std::thread([self, enabled]() {
+        int rc = 1;
+        run_shell_nmcli({"radio", "wifi", enabled ? "on" : "off"}, 2500, &rc);
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, enabled]() {
+            if (!self) return;
+            self->syncWifiState(enabled);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void ShellBridge::scanWifiNetworks() {
+    syncWifiState(true);
+}
+
+void ShellBridge::connectWifi(const QString& ssid, const QString& password) {
+    if (ssid.isEmpty() || m_wifiConnectingFlag->exchange(true)) return;
+    m_wifiConnecting = true;
+    m_connectingSsid = ssid;
+    m_wifiStatusMessage = QStringLiteral("Connecting to ") + ssid + QStringLiteral("...");
+    emit wifiChanged();
+
+    QPointer<ShellBridge> self(this);
+    auto connFlag = m_wifiConnectingFlag;
+    std::string s_ssid = ssid.toStdString();
+    std::string s_pw = password.toStdString();
+
+    std::thread([self, connFlag, s_ssid, s_pw]() {
+        int rc = 1;
+        std::vector<std::string> args = {"dev", "wifi", "connect", s_ssid};
+        if (!s_pw.empty()) {
+            args.push_back("password");
+            args.push_back(s_pw);
+        }
+        std::string res = run_shell_nmcli(args, 15000, &rc);
+        if (rc != 0 && !s_pw.empty()) {
+            (void)run_shell_nmcli({"con", "delete", "id", s_ssid}, 2500, nullptr);
+            res = run_shell_nmcli(args, 15000, &rc);
+        }
+        QString errMsg = QString::fromStdString(trim_shell_str(res));
+        if (!self) {
+            connFlag->store(false);
+            return;
+        }
+        QMetaObject::invokeMethod(self, [self, connFlag, rc, errMsg]() {
+            connFlag->store(false);
+            if (!self) return;
+            self->m_wifiConnecting = false;
+            self->m_connectingSsid.clear();
+            if (rc != 0) {
+                self->m_wifiStatusMessage = errMsg.isEmpty() ? QStringLiteral("Connection failed") : errMsg;
+            }
+            emit self->wifiChanged();
+            self->syncWifiState(false);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void ShellBridge::disconnectWifi() {
+    QPointer<ShellBridge> self(this);
+    std::thread([self]() {
+        int rc = 1;
+        std::string ifaces = run_shell_nmcli({"-t", "-f", "DEVICE,TYPE,STATE", "dev"}, 1200, &rc);
+        std::istringstream iss(ifaces);
+        std::string line;
+        while (std::getline(iss, line)) {
+            auto cols = split_nmcli_line(line);
+            if (cols.size() >= 3 && cols[1] == "wifi" && cols[2] == "connected") {
+                run_shell_nmcli({"dev", "disconnect", cols[0]}, 3000, &rc);
+                break;
+            }
+        }
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self]() {
+            if (!self) return;
+            self->m_connectedSsid.clear();
+            self->m_wifiIpAddress.clear();
+            self->m_wifiStatusMessage = QStringLiteral("Disconnected");
+            emit self->wifiChanged();
+            self->syncWifiState(false);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
 void ShellBridge::clearNotifications() {
     m_notifications.clear();
     emit notificationsChanged();
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.Notifications"),
+        QStringLiteral("/org/freedesktop/Notifications"),
+        QStringLiteral("org.freedesktop.Notifications"),
+        QStringLiteral("ClearAll")
+    );
+    QDBusConnection::sessionBus().asyncCall(msg);
 }
 
 void ShellBridge::launchApp(const QString& execCmd) {
@@ -753,6 +1221,10 @@ void ShellBridge::launchApp(const QString& execCmd) {
     QProcess proc;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.remove(QStringLiteral("QT_WAYLAND_SHELL_INTEGRATION"));
+    env.remove(QStringLiteral("QSG_RHI_BACKEND"));
+    if (!fs::exists("/run/tinexus/safe_graphics_mode")) {
+        env.remove(QStringLiteral("LIBGL_ALWAYS_SOFTWARE"));
+    }
     QString pathEnv = env.value(QStringLiteral("PATH"));
     if (pathEnv.isEmpty()) {
         env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"));
@@ -765,8 +1237,8 @@ void ShellBridge::launchApp(const QString& execCmd) {
 }
 
 void ShellBridge::openWifiSettings() {
-    tinexus::log::info("[Shell] Wi-Fi icon clicked -> launching tinexus-settings-ui");
-    launchApp(QStringLiteral("tinexus-settings-ui"));
+    tinexus::log::info("[Shell] Opening Network Settings in tinexus-settings-ui");
+    launchApp(QStringLiteral("tinexus-settings-ui --page wifi"));
     closeAllFlyouts();
 }
 
@@ -874,6 +1346,9 @@ void ShellBridge::powerSleep() {
 }
 
 void ShellBridge::requestBlur(bool enable, int radius) {
+    if (m_blurEnabled == enable && m_blurRadius == radius) {
+        return;
+    }
     m_blurEnabled = enable;
     m_blurRadius = radius;
     tinexus::log::debug("[Shell] Surface requested compositor backdrop blur: enable={}, radius={}", enable, radius);
@@ -887,10 +1362,77 @@ void ShellBridge::setNotchExpanded(bool exp) {
     }
 }
 
+void ShellBridge::syncActiveNotifications() {
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.Notifications"),
+        QStringLiteral("/org/freedesktop/Notifications"),
+        QStringLiteral("org.freedesktop.Notifications"),
+        QStringLiteral("GetActiveNotifications")
+    );
+    auto pending = QDBusConnection::sessionBus().asyncCall(msg);
+    auto* watcher = new QDBusPendingCallWatcher(pending, this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher* w) {
+        w->deleteLater();
+        QDBusMessage reply = w->reply();
+        if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+            return;
+        }
+        const QDBusArgument arg = reply.arguments().at(0).value<QDBusArgument>();
+        QVariantList loaded;
+        arg.beginArray();
+        while (!arg.atEnd()) {
+            arg.beginStructure();
+            quint32 id = 0;
+            QString appName, appIcon, summary, body;
+            qint32 expireTimeout = 0;
+            arg >> id >> appName >> appIcon >> summary >> body >> expireTimeout;
+            arg.endStructure();
+
+            QVariantMap item;
+            item[QStringLiteral("id")] = id;
+            item[QStringLiteral("title")] = summary.isEmpty() ? (appName.isEmpty() ? QStringLiteral("Notification") : appName) : summary;
+            item[QStringLiteral("message")] = body;
+            item[QStringLiteral("time")] = QStringLiteral("Active");
+            item[QStringLiteral("appId")] = appName;
+            item[QStringLiteral("icon")] = appIcon.isEmpty() ? QStringLiteral("dialog-information-symbolic") : appIcon;
+            loaded.prepend(item);
+        }
+        arg.endArray();
+        if (!loaded.isEmpty()) {
+            m_notifications = loaded;
+            emit notificationsChanged();
+        }
+    });
+}
+
 void ShellBridge::dismissNotification(int index) {
     if (index >= 0 && index < m_notifications.size()) {
+        const QVariantMap item = m_notifications.at(index).toMap();
+        const uint id = item.value(QStringLiteral("id")).toUInt();
         m_notifications.removeAt(index);
         emit notificationsChanged();
+
+        if (id > 0) {
+            QDBusMessage msg = QDBusMessage::createMethodCall(
+                QStringLiteral("org.freedesktop.Notifications"),
+                QStringLiteral("/org/freedesktop/Notifications"),
+                QStringLiteral("org.freedesktop.Notifications"),
+                QStringLiteral("CloseNotification")
+            );
+            msg << id;
+            QDBusConnection::sessionBus().asyncCall(msg);
+        }
+    }
+}
+
+void ShellBridge::onNotificationClosed(uint id, uint /*reason*/) {
+    if (id == 0) return;
+    for (int i = 0; i < m_notifications.size(); ++i) {
+        if (m_notifications.at(i).toMap().value(QStringLiteral("id")).toUInt() == id) {
+            m_notifications.removeAt(i);
+            emit notificationsChanged();
+            break;
+        }
     }
 }
 
@@ -917,9 +1459,17 @@ void ShellBridge::onNotificationAdded(uint id, const QString& appName, const QSt
     item[QStringLiteral("id")] = id;
     item[QStringLiteral("title")] = summary.isEmpty() ? (appName.isEmpty() ? QStringLiteral("Notification") : appName) : summary;
     item[QStringLiteral("message")] = body;
-    item[QStringLiteral("time")] = QStringLiteral("Just now");
+    item[QStringLiteral("time")] = QDateTime::currentDateTime().toString(QStringLiteral("h:mm AP"));
     item[QStringLiteral("appId")] = appName;
     item[QStringLiteral("icon")] = appIcon.isEmpty() ? QStringLiteral("dialog-information-symbolic") : appIcon;
+
+    // Replace existing notification with same ID if replaces_id was used
+    for (int i = 0; i < m_notifications.size(); ++i) {
+        if (m_notifications.at(i).toMap().value(QStringLiteral("id")).toUInt() == id) {
+            m_notifications.removeAt(i);
+            break;
+        }
+    }
 
     m_notifications.prepend(item);
     emit notificationsChanged();

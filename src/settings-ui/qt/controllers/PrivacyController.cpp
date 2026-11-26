@@ -85,4 +85,24 @@ void PrivacyController::trustApp(const QString& hash) {
     emit toastRequested(QStringLiteral("Application binary hash trusted and allowed"), false);
 }
 
+void PrivacyController::setGuardEnabled(bool enabled) {
+    if (m_guardEnabled != enabled) {
+        m_guardEnabled = enabled;
+        emit securityPolicyChanged();
+        emit settingModified(QStringLiteral("guard_enabled"), enabled);
+        emit toastRequested(enabled ? QStringLiteral("Platform Guard Ed25519 verification enabled")
+                                    : QStringLiteral("Platform Guard verification disabled"), false);
+    }
+}
+
+void PrivacyController::setSandboxEnabled(bool enabled) {
+    if (m_sandboxEnabled != enabled) {
+        m_sandboxEnabled = enabled;
+        emit securityPolicyChanged();
+        emit settingModified(QStringLiteral("sandbox_enabled"), enabled);
+        emit toastRequested(enabled ? QStringLiteral("Application sandbox enforcement enabled")
+                                    : QStringLiteral("Application sandbox enforcement relaxed"), false);
+    }
+}
+
 } // namespace tinexus::settings_ui

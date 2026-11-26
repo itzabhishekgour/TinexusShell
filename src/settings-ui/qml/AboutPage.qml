@@ -7,6 +7,8 @@ ScrollView {
     clip: true
     contentWidth: availableWidth
 
+    signal requestSystemReport()
+
     ColumnLayout {
         width: Math.min(parent.width - 48, 680)
         anchors.horizontalCenter: parent.horizontalCenter
@@ -69,10 +71,17 @@ ScrollView {
                             }
                         }
 
-                        MacButton {
-                            text: "Save Config"
-                            primary: true
-                            onClicked: bridge.saveConfig()
+                        RowLayout {
+                            spacing: 8
+                            MacButton {
+                                text: "System Report..."
+                                onClicked: root.requestSystemReport()
+                            }
+                            MacButton {
+                                text: "Save Config"
+                                primary: true
+                                onClicked: bridge.saveConfig()
+                            }
                         }
                     }
 
@@ -88,10 +97,14 @@ ScrollView {
 
                 // Specs Rows with hairline dividers
                 MacSettingRow {
+                    id: rowOs
                     title: "Operating System"
                     showSeparator: true
 
                     Text {
+                        width: rowOs.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.osVersion : "Tinexus Linux (x86_64)"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -99,10 +112,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowCpu
                     title: "Processor"
                     showSeparator: true
 
                     Text {
+                        width: rowCpu.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.cpuModel : "Processor"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -110,10 +127,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowMem
                     title: "Memory (RAM)"
                     showSeparator: true
 
                     Text {
+                        width: rowMem.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.memInfo : "RAM"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -121,10 +142,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowStorage
                     title: "System Storage"
                     showSeparator: true
 
                     Text {
+                        width: rowStorage.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.storageInfo : "Storage"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -132,10 +157,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowDisplay
                     title: "Display"
                     showSeparator: true
 
                     Text {
+                        width: rowDisplay.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.displayInfo : "Display"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -143,10 +172,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowComp
                     title: "Wayland Compositor"
                     showSeparator: true
 
                     Text {
+                        width: rowComp.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.compositorInfo : "tinexus-comp"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -154,10 +187,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowGfx
                     title: "Graphics Engine"
                     showSeparator: true
 
                     Text {
+                        width: rowGfx.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: typeof bridge !== "undefined" ? bridge.graphicsEngine : "Graphics Engine"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -165,10 +202,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowIpc
                     title: "IPC Architecture"
                     showSeparator: true
 
                     Text {
+                        width: rowIpc.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: "D-Bus Architecture (sd-bus / io.tinexus.shell.*)"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -176,10 +217,14 @@ ScrollView {
                 }
 
                 MacSettingRow {
+                    id: rowLicense
                     title: "License"
                     showSeparator: false
 
                     Text {
+                        width: rowLicense.controlItem.Layout.maximumWidth
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         text: "GPL-2.0 / Apache-2.0"
                         color: "#86868b"
                         font.pixelSize: 12
@@ -209,11 +254,12 @@ ScrollView {
 
                 MacSettingRow {
                     title: "Software Update"
-                    subtitle: "Tinexus Platform v" + bridge.platformVersion + " is up to date"
+                    subtitle: typeof bridge !== "undefined" ? bridge.updateStatus : ("Tinexus Platform v" + bridge.platformVersion)
                     showSeparator: false
 
                     MacButton {
-                        text: "Check for Updates"
+                        text: bridge.updateChecking ? "Checking..." : "Check for Updates"
+                        enabled: !bridge.updateChecking
                         onClicked: bridge.checkForUpdates()
                     }
                 }

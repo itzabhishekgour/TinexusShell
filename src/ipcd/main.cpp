@@ -8,6 +8,7 @@
 #include "ipcd/broker/pubsub_broker.hpp"
 #include "ipcd/protocol/header.hpp"
 #include "ipcd/protocol/dock_protocol.hpp"
+#include "ipcd/protocol/display_protocol.hpp"
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -82,8 +83,10 @@ void dispatch_message(int sender_fd,
     using namespace tinexus::ipcd;
     using MT = protocol::MessageType;
     using DM = protocol::DockMessageType;
-    if (hdr.msg_type >= static_cast<uint16_t>(DM::DOCK_QUERY_ICON_POSITION) &&
-        hdr.msg_type <= static_cast<uint16_t>(DM::DOCK_BLUR_REGION)) {
+    using DSM = protocol::DisplayMessageType;
+    if ((hdr.msg_type >= static_cast<uint16_t>(DM::DOCK_QUERY_ICON_POSITION) &&
+         hdr.msg_type <= static_cast<uint16_t>(DM::DOCK_BLUR_REGION)) ||
+        hdr.msg_type == static_cast<uint16_t>(DSM::DISPLAY_SET_CONFIG)) {
         auto subscribers = broker::PubSubBroker::instance().get_subscribers(hdr.msg_type);
         for (int sub_fd : subscribers) {
             if (sub_fd == sender_fd) continue;
@@ -91,7 +94,7 @@ void dispatch_message(int sender_fd,
                        payload.empty() ? nullptr : payload.data(),
                        static_cast<uint32_t>(payload.size()));
         }
-        tinexus::log::debug("[ipcd] Dock msg_type=0x{:04x} routed to {} subscriber(s)",
+        tinexus::log::debug("[ipcd] Routed msg_type=0x{:04x} to {} subscriber(s)",
                             hdr.msg_type, subscribers.size());
         return;
     }

@@ -39,7 +39,8 @@ ScrollView {
                     showSeparator: true
 
                     MacSwitch {
-                        checked: true
+                        checked: bridge.guardEnabled
+                        onToggled: (val) => bridge.setGuardEnabled(val)
                     }
                 }
 
@@ -49,7 +50,8 @@ ScrollView {
                     showSeparator: true
 
                     MacSwitch {
-                        checked: true
+                        checked: bridge.sandboxEnabled
+                        onToggled: (val) => bridge.setSandboxEnabled(val)
                     }
                 }
 

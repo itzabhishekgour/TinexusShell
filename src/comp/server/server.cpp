@@ -26,6 +26,7 @@
 
 #include "ipcd/protocol/header.hpp"
 #include "ipcd/protocol/dock_protocol.hpp"
+#include "ipcd/protocol/display_protocol.hpp"
 #include "comp/focus/focus_manager.hpp"
 
 #include <wayland-server-core.h>
@@ -433,12 +434,13 @@ void TinexusServer::setup_ipc_connection() {
             wl_event_loop_add_fd(m_wl_loop, m_ipc_socket, WL_EVENT_READABLE, handle_ipc_fd, this);
             log::info("[Server] Connected to ipcd at {}", addr.sun_path);
             
-            // Subscribe to dock messages
+            // Subscribe to dock & display control messages
             uint16_t sub_types[] = {
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_ICON_POSITION),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RESTORE_REQUEST),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS),
-                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_BLUR_REGION)
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_BLUR_REGION),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::DISPLAY_SET_CONFIG)
             };
             
             for (uint16_t t : sub_types) {
@@ -496,6 +498,18 @@ int TinexusServer::handle_ipc_fd(int fd, uint32_t mask, void* data) {
 
 void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, uint32_t payload_len) {
     using namespace tinexus::ipcd::protocol;
+    if (msg_type == static_cast<uint16_t>(DisplayMessageType::DISPLAY_SET_CONFIG) &&
+        payload_len >= sizeof(DisplayApplyPayload)) {
+        const auto* p = static_cast<const DisplayApplyPayload*>(payload);
+        char safe_conn[65]{};
+        std::memcpy(safe_conn, p->connector, sizeof(p->connector));
+        if (m_backend) {
+            m_backend->apply_display_config(
+                safe_conn, p->width, p->height, p->refresh_mhz, p->scale,
+                p->vrr_enabled != 0, p->night_light != 0, p->flags);
+        }
+        return;
+    }
     if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_ICON_POSITION) &&
         payload_len >= sizeof(DockIconPositionPayload)) {
         const auto* p = static_cast<const DockIconPositionPayload*>(payload);

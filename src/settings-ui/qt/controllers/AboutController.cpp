@@ -1,8 +1,15 @@
 #include "AboutController.hpp"
+#include <common/AudioUtils.hpp>
 #include <common/DisplayUtils.hpp>
+#include <common/PlatformServices.hpp>
 #include <common/version.hpp>
 #include <common/logger.hpp>
 
+#include <QtCore/QMetaObject>
+#include <QtCore/QPointer>
+#include <QtCore/QProcess>
+#include <QtGui/QClipboard>
+#include <QtGui/QGuiApplication>
 #include <sys/utsname.h>
 #include <sys/sysinfo.h>
 #include <sys/statvfs.h>
@@ -10,6 +17,7 @@
 #include <pwd.h>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 namespace tinexus::settings_ui {
 
@@ -19,6 +27,7 @@ AboutController::AboutController(QObject* parent)
     m_platformVersion = QString::fromUtf8(tinexus::VERSION_STRING.data(), tinexus::VERSION_STRING.size());
     refreshSystemInfo();
     refreshUserInfo();
+    refreshSystemReport();
 }
 
 void AboutController::refreshUserInfo() {
@@ -40,7 +49,6 @@ void AboutController::refreshUserInfo() {
         m_currentUserRealName = m_currentUserName;
     }
 
-    // Generate dynamic avatar initials from real name
     QStringList parts = m_currentUserRealName.split(' ', Qt::SkipEmptyParts);
     if (parts.size() >= 2) {
         m_userInitials = QString(parts[0].at(0).toUpper()) + QString(parts[1].at(0).toUpper());
@@ -115,8 +123,84 @@ void AboutController::refreshSystemInfo() {
     emit aboutInfoChanged();
 }
 
+void AboutController::refreshSystemReport() {
+    refreshSystemInfo();
+    std::ostringstream rep;
+    rep << "Tinexus OS System Report (v" << m_platformVersion.toStdString() << ")\n"
+        << "==================================================\n"
+        << "OS & Kernel : " << m_osVersion.toStdString() << "\n"
+        << "Processor   : " << m_cpuModel.toStdString() << "\n"
+        << "Memory      : " << m_memInfo.toStdString() << "\n"
+        << "Root Storage: " << m_storageInfo.toStdString() << "\n"
+        << "Display     : " << m_displayInfo.toStdString() << "\n"
+        << "Graphics    : " << m_graphicsEngine.toStdString() << "\n"
+        << "Compositor  : " << m_compositorInfo.toStdString() << "\n\n"
+        << "Audio Outputs:\n";
+    for (const auto& sink : hardware::AudioUtils::get_output_devices()) {
+        rep << "  - " << sink << "\n";
+    }
+    rep << "\nPlatform Daemons:\n";
+    for (const auto& svc : tinexus::platform::PlatformServices::query_supervised_services()) {
+        rep << "  - " << svc.name << ": " << svc.status_str << "\n";
+    }
+    m_systemReportText = QString::fromStdString(rep.str());
+    emit systemReportChanged();
+}
+
+void AboutController::copySystemReport() {
+    refreshSystemReport();
+    if (auto* cb = QGuiApplication::clipboard()) {
+        cb->setText(m_systemReportText);
+    }
+    emit toastRequested(QStringLiteral("System diagnostic report copied to clipboard"), false);
+}
+
 void AboutController::checkForUpdates() {
-    emit toastRequested(QStringLiteral("Checking repository for Tinexus OS updates... system is up to date"), false);
+    if (m_updateChecking) return;
+    m_updateChecking = true;
+    m_updateStatus = QStringLiteral("Checking local APT metadata & Tinexus packages...");
+    emit updateStateChanged();
+
+    QPointer<AboutController> self(this);
+    std::thread([self]() {
+        QProcess apt;
+        apt.start(QStringLiteral("/usr/bin/apt-get"),
+                  {QStringLiteral("-s"), QStringLiteral("-q"), QStringLiteral("upgrade")});
+        QString msg;
+        bool isErr = false;
+        if (!apt.waitForFinished(6000)) {
+            apt.kill();
+            msg = QStringLiteral("Package manager timed out");
+            isErr = true;
+        } else {
+            const QString out = QString::fromUtf8(apt.readAllStandardOutput());
+            int upgradable = 0;
+            for (const QString& line : out.split(QLatin1Char('\n'))) {
+                if (line.startsWith(QStringLiteral("Inst "))) ++upgradable;
+            }
+            if (upgradable > 0) {
+                msg = QStringLiteral("%1 package update(s) staged in APT cache").arg(upgradable);
+            } else {
+                QProcess dpkg;
+                dpkg.start(QStringLiteral("/usr/bin/dpkg-query"),
+                           {QStringLiteral("-f"), QStringLiteral("${binary:Package}=${Version}\n"), QStringLiteral("-W"), QStringLiteral("tinexus-core")});
+                QString coreVer = QStringLiteral("v1.1");
+                if (dpkg.waitForFinished(2000) && dpkg.exitCode() == 0) {
+                    const QString dv = QString::fromUtf8(dpkg.readAllStandardOutput()).trimmed();
+                    if (!dv.isEmpty()) coreVer = dv;
+                }
+                msg = QStringLiteral("Tinexus OS is up to date (%1)").arg(coreVer);
+            }
+        }
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, msg, isErr]() {
+            if (!self) return;
+            self->m_updateChecking = false;
+            self->m_updateStatus = msg;
+            emit self->updateStateChanged();
+            emit self->toastRequested(msg, isErr);
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 } // namespace tinexus::settings_ui

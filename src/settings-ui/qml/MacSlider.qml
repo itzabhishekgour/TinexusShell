@@ -41,7 +41,7 @@ Item {
         anchors.right: parent.right
         height: 6
         radius: 3
-        color: "#38383c"
+        color: "#383a42"
 
         // Filled progress track
         Rectangle {
@@ -55,17 +55,21 @@ Item {
                 var pct = Math.max(0, Math.min(1.0, (root.value - root.from) / range))
                 return pct * parent.width
             }
-            color: bridge ? bridge.accentColor : "#007aff"
+            color: typeof bridge !== "undefined" ? bridge.accentColor : "#0A84FF"
         }
     }
 
-    // Thumb
+    // Thumb with spring hover/press scale
     Rectangle {
         id: thumb
         width: 18
         height: 18
         radius: 9
         anchors.verticalCenter: parent.verticalCenter
+        scale: sliderMouse.pressed ? 1.16 : (sliderMouse.containsMouse ? 1.08 : 1.0)
+        Behavior on scale {
+            SpringAnimation { spring: 6.0; damping: 0.72; epsilon: 0.005 }
+        }
         x: {
             var range = root.to - root.from
             if (range <= 0) return 0
@@ -75,17 +79,10 @@ Item {
         color: "#ffffff"
         border.color: "#c8c8cc"
         border.width: 1
-
-        Rectangle {
-            anchors.fill: parent
-            radius: 9
-            color: "transparent"
-            border.color: Qt.rgba(0, 0, 0, 0.2)
-            border.width: 1
-        }
     }
 
     MouseArea {
+        id: sliderMouse
         anchors.fill: parent
         hoverEnabled: root.enabled
         cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor

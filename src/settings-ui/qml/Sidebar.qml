@@ -5,28 +5,39 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     width: 240
-    color: "#252526" // Subtle contrast against main content #1e1e1e (macOS dark sidebar)
+    color: Qt.rgba(0.08, 0.09, 0.13, 0.72) // Frosted LiquidGlass sidebar backed by compositor Dual-Kawase blur
 
-    // Subtle right border separator
+    // Top 1px specular glass sheen
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 1
+        color: Qt.rgba(1, 1, 1, 0.14)
+    }
+
+    // Subtle right hairline separator
     Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: 1
-        color: "#14ffffff"
+        color: Qt.rgba(1, 1, 1, 0.12)
     }
 
     property string searchText: ""
 
     property var navItems: [
-        { name: "Wi-Fi", iconId: "wifi", iconColor: "#0A84FF", page: 3 },
-        { name: "Sound", iconId: "sound", iconColor: "#FF2D55", page: 1 },
-        { name: "Appearance", iconId: "appearance", iconColor: "#AF52DE", page: 2 },
-        { name: "Displays", iconId: "display", iconColor: "#0A84FF", page: 0 },
-        { name: "Battery & Power", iconId: "power", iconColor: "#30D158", page: 4 },
-        { name: "Keyboard", iconId: "keyboard", iconColor: "#636366", page: 5 },
-        { name: "Privacy & Security", iconId: "privacy", iconColor: "#34C759", page: 6 },
-        { name: "General", iconId: "about", iconColor: "#8E8E93", page: 7 }
+        { name: "Wi-Fi",              papirusIcon: "network-wireless",            page: 3 },
+        { name: "Bluetooth",          papirusIcon: "bluetooth",                   page: 8 },
+        { name: "Sound",              papirusIcon: "preferences-desktop-sound",   page: 1 },
+        { name: "Appearance",         papirusIcon: "preferences-desktop-theme",   page: 2 },
+        { name: "Displays",           papirusIcon: "preferences-desktop-display", page: 0 },
+        { name: "Battery & Power",    papirusIcon: "battery-full-charged",        page: 4 },
+        { name: "Users & Accounts",   papirusIcon: "system-users",                page: 9 },
+        { name: "Keyboard",           papirusIcon: "preferences-desktop-keyboard",page: 5 },
+        { name: "Privacy & Security", papirusIcon: "preferences-system-privacy",  page: 6 },
+        { name: "General",            papirusIcon: "preferences-system",          page: 7 }
     ]
 
     ColumnLayout {
@@ -67,13 +78,13 @@ Rectangle {
             }
         }
 
-        // ── Search Bar (macOS Interactive Spotlight-style Search) ────────
+        // ── Search Bar (macOS Spotlight-style Search) ────────────────────
         Rectangle {
             Layout.fillWidth: true
-            height: 28
-            radius: 6
-            color: "#1c1c1e"
-            border.color: searchInput.activeFocus ? "#0A84FF" : "#14ffffff"
+            height: 30
+            radius: 8
+            color: Qt.rgba(0, 0, 0, 0.30)
+            border.color: searchInput.activeFocus ? (typeof bridge !== "undefined" ? bridge.accentColor : "#0A84FF") : Qt.rgba(1, 1, 1, 0.12)
             border.width: 1
 
             RowLayout {
@@ -82,41 +93,36 @@ Rectangle {
                 anchors.rightMargin: 8
                 spacing: 6
 
-                Canvas {
-                    width: 12
-                    height: 12
-                    onPaint: {
-                        var ctx = getContext("2d");
-                        ctx.reset();
-                        ctx.strokeStyle = searchInput.activeFocus ? "#0A84FF" : "#86868b";
-                        ctx.lineWidth = 1.4;
-                        ctx.beginPath();
-                        ctx.arc(4.5, 4.5, 3.2, 0, 2 * Math.PI);
-                        ctx.stroke();
-                        ctx.beginPath();
-                        ctx.moveTo(7, 7);
-                        ctx.lineTo(11, 11);
-                        ctx.stroke();
-                    }
+                Image {
+                    Layout.preferredWidth: 14
+                    Layout.preferredHeight: 14
+                    Layout.alignment: Qt.AlignVCenter
+                    sourceSize.width: 14
+                    sourceSize.height: 14
+                    source: "image://tinexus/edit-find"
+                    fillMode: Image.PreserveAspectFit
+                    opacity: searchInput.activeFocus ? 1.0 : 0.72
                 }
 
                 TextInput {
                     id: searchInput
                     Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    verticalAlignment: TextInput.AlignVCenter
                     font.pixelSize: 12
                     color: "#f5f5f7"
                     selectByMouse: true
                     clip: true
                     onTextChanged: {
-                        root.searchText = text
                         if (typeof bridge !== "undefined") {
                             bridge.setSearchQuery(text)
                         }
+                        root.searchText = text
                     }
                     Keys.onEscapePressed: {
                         text = ""
-                        root.searchText = ""
                         if (typeof bridge !== "undefined") bridge.clearSearch()
+                        root.searchText = ""
                     }
                     Keys.onReturnPressed: {
                         if (typeof bridge !== "undefined" && bridge.searchResults.length > 0) {
@@ -129,6 +135,8 @@ Rectangle {
                         text: "Search Settings..."
                         color: "#86868b"
                         font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
                         visible: !searchInput.text && !searchInput.activeFocus
                     }
                 }
@@ -153,12 +161,12 @@ Rectangle {
             }
         }
 
-        // ── Real User Profile Card (Dynamic Linux User Info) ───────────────
+        // ── Real User Profile Card ───────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
             height: 48
-            radius: 7
-            color: profileArea.containsMouse ? "#0cffffff" : "transparent"
+            radius: 8
+            color: profileArea.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
 
             RowLayout {
                 anchors.fill: parent
@@ -166,13 +174,12 @@ Rectangle {
                 anchors.rightMargin: 6
                 spacing: 9
 
-                // Circular Avatar with Real Dynamic Initials
                 Rectangle {
                     width: 32
                     height: 32
                     radius: 16
                     gradient: Gradient {
-                        GradientStop { position: 0.0; color: "#0A84FF" }
+                        GradientStop { position: 0.0; color: typeof bridge !== "undefined" ? bridge.accentColor : "#0A84FF" }
                         GradientStop { position: 1.0; color: "#0062CC" }
                     }
                     border.color: Qt.rgba(1, 1, 1, 0.25)
@@ -191,7 +198,6 @@ Rectangle {
                     spacing: 1
                     Layout.fillWidth: true
 
-                    // Real Real-Name from GECOS
                     Text {
                         text: typeof bridge !== "undefined" ? bridge.currentUserRealName : "Tinexus User"
                         color: "#f5f5f7"
@@ -201,17 +207,15 @@ Rectangle {
                         Layout.fillWidth: true
                     }
 
-                    // Real Username
                     Text {
                         text: "Local Account (" + (typeof bridge !== "undefined" ? bridge.currentUserName : "tinexus") + ")"
-                        color: "#86868b"
+                        color: "#9898a0"
                         font.pixelSize: 11
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
                 }
 
-                // Security / Unverified App Badge (visible only if real issues exist)
                 Rectangle {
                     width: 16
                     height: 16
@@ -234,7 +238,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: bridge.selectPage(7) // Go to General/About
+                onClicked: bridge.selectPage(9) // Users & Accounts
             }
         }
 
@@ -242,10 +246,10 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             height: 1
-            color: "#12ffffff"
+            color: Qt.rgba(1, 1, 1, 0.10)
         }
 
-        // ── Navigation Categories List with Instant Search Matching ────────
+        // ── Navigation Categories List with Papirus Icons ────────────────
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -254,12 +258,11 @@ Rectangle {
 
             ColumnLayout {
                 width: parent.width
-                spacing: 2 // Tight list feel
+                spacing: 3
 
-                // Section header when searching
                 Text {
                     text: root.searchText.trim() ? "MATCHING CATEGORIES" : ""
-                    color: "#0A84FF"
+                    color: typeof bridge !== "undefined" ? bridge.accentColor : "#0A84FF"
                     font.pixelSize: 10
                     font.weight: Font.DemiBold
                     visible: root.searchText.trim().length > 0
@@ -270,6 +273,9 @@ Rectangle {
 
                 Repeater {
                     model: {
+                        if (typeof bridge !== "undefined") {
+                            void(bridge.searchResults)
+                        }
                         if (!root.searchText.trim()) return root.navItems
                         var filtered = []
                         for (var i = 0; i < root.navItems.length; ++i) {
@@ -286,26 +292,20 @@ Rectangle {
                     delegate: Rectangle {
                         id: itemDelegate
                         Layout.fillWidth: true
-                        height: 32
+                        height: 34
                         radius: 8
 
-                        property bool isSelected: bridge.currentPage === modelData.page
+                        property bool isSelected: typeof bridge !== "undefined" && bridge.currentPage === modelData.page
 
-                        // Selected: soft macOS blue gradient (#0A84FF to #0071E3)
-                        gradient: isSelected ? selectedGrad : null
-                        color: !isSelected ? (itemArea.pressed ? "#18ffffff" : (itemArea.containsMouse ? "#10ffffff" : "transparent")) : "transparent"
+                        color: isSelected
+                               ? (typeof bridge !== "undefined" ? bridge.accentColor : "#0A84FF")
+                               : (itemArea.pressed ? Qt.rgba(1, 1, 1, 0.14) : (itemArea.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent"))
 
                         Behavior on color {
                             ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
                         }
 
-                        Gradient {
-                            id: selectedGrad
-                            GradientStop { position: 0.0; color: "#0A84FF" }
-                            GradientStop { position: 1.0; color: "#0071E3" }
-                        }
-
-                        border.color: isSelected ? Qt.rgba(1, 1, 1, 0.16) : (itemArea.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : "transparent")
+                        border.color: isSelected ? Qt.rgba(1, 1, 1, 0.20) : "transparent"
                         border.width: 1
 
                         RowLayout {
@@ -314,20 +314,20 @@ Rectangle {
                             anchors.rightMargin: 8
                             spacing: 9
 
-                            MacSquircleIcon {
-                                iconSize: 20
-                                glyphSize: 11
-                                iconColor: modelData.iconColor
-                                iconId: modelData.iconId ? modelData.iconId : ""
-                                iconText: modelData.iconText ? modelData.iconText : ""
+                            Image {
+                                width: 20
+                                height: 20
+                                source: "image://tinexus/" + modelData.papirusIcon
+                                sourceSize: Qt.size(20, 20)
+                                fillMode: Image.PreserveAspectFit
                             }
 
                             Text {
                                 text: modelData.name
-                                color: itemDelegate.isSelected ? "#ffffff" : "#e5e5ea"
+                                color: itemDelegate.isSelected ? "#ffffff" : "#ebebf0"
                                 font.family: "Inter"
                                 font.pixelSize: 13
-                                font.weight: itemDelegate.isSelected ? Font.Medium : Font.Normal
+                                font.weight: itemDelegate.isSelected ? Font.DemiBold : Font.Normal
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                             }
@@ -362,7 +362,7 @@ Rectangle {
                         Layout.fillWidth: true
                         height: 40
                         radius: 8
-                        color: subArea.pressed ? "#1cffffff" : (subArea.containsMouse ? "#12ffffff" : "transparent")
+                        color: subArea.pressed ? Qt.rgba(1, 1, 1, 0.14) : (subArea.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent")
                         Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                         RowLayout {
@@ -386,7 +386,7 @@ Rectangle {
 
                                 Text {
                                     text: modelData.subtitle
-                                    color: "#86868b"
+                                    color: "#9898a0"
                                     font.pixelSize: 10
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
@@ -410,7 +410,6 @@ Rectangle {
                     }
                 }
 
-                // Empty search result notice
                 Text {
                     text: "No settings matching \"" + root.searchText + "\""
                     color: "#86868b"
@@ -422,11 +421,10 @@ Rectangle {
             }
         }
 
-        // ── Bottom Platform Version ────────────────────────────────────────
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: "Tinexus OS v" + bridge.platformVersion
-            color: "#636366"
+            color: "#7a7a82"
             font.pixelSize: 11
         }
     }

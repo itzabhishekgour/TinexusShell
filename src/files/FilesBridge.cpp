@@ -4,6 +4,7 @@
 #include "FilesBridge.hpp"
 #include <common/logger.hpp>
 #include <files/TagManager.hpp>
+#include <files/trash_manager.hpp>
 #include <files/file_operations.hpp>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -11,8 +12,75 @@
 #include <QtCore/QProcess>
 #include <QtCore/QDateTime>
 #include <algorithm>
+#include <filesystem>
 
 namespace tinexus::files {
+
+namespace {
+void classify_file_icon(const QFileInfo& info, const QString& home, QString& iconKindOut, QString& iconNameOut) {
+    if (info.isDir()) {
+        iconKindOut = QStringLiteral("folder");
+        const QString abs = info.absoluteFilePath();
+        if (abs == home) iconNameOut = QStringLiteral("user-home");
+        else if (abs == home + QStringLiteral("/Desktop")) iconNameOut = QStringLiteral("user-desktop");
+        else if (abs == home + QStringLiteral("/Documents")) iconNameOut = QStringLiteral("folder-documents");
+        else if (abs == home + QStringLiteral("/Downloads")) iconNameOut = QStringLiteral("folder-downloads");
+        else if (abs == home + QStringLiteral("/Pictures")) iconNameOut = QStringLiteral("folder-pictures");
+        else if (abs == home + QStringLiteral("/Videos")) iconNameOut = QStringLiteral("folder-videos");
+        else if (abs == home + QStringLiteral("/.local/share/Trash/files")) iconNameOut = QStringLiteral("user-trash");
+        else iconNameOut = QStringLiteral("inode-directory");
+        return;
+    }
+
+    const QString ext = info.suffix().toLower();
+    if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "bmp" || ext == "gif" || ext == "svg") {
+        iconKindOut = QStringLiteral("image");
+        iconNameOut = QStringLiteral("image-x-generic");
+    } else if (ext == "mp4" || ext == "mkv" || ext == "mov" || ext == "avi" || ext == "webm") {
+        iconKindOut = QStringLiteral("video");
+        iconNameOut = QStringLiteral("video-x-generic");
+    } else if (ext == "mp3" || ext == "wav" || ext == "flac" || ext == "ogg" || ext == "m4a") {
+        iconKindOut = QStringLiteral("audio");
+        iconNameOut = QStringLiteral("audio-x-generic");
+    } else if (ext == "pdf") {
+        iconKindOut = QStringLiteral("pdf");
+        iconNameOut = QStringLiteral("application-pdf");
+    } else if (ext == "zip" || ext == "tar" || ext == "gz" || ext == "xz" || ext == "7z" || ext == "bz2" || ext == "zst" || ext == "deb") {
+        iconKindOut = QStringLiteral("archive");
+        iconNameOut = QStringLiteral("application-x-archive");
+    } else if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "c") {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("text-x-c++src");
+    } else if (ext == "hpp" || ext == "h") {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("text-x-c++hdr");
+    } else if (ext == "py") {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("text-x-python");
+    } else if (ext == "json" || ext == "toml" || ext == "yaml" || ext == "yml" || ext == "xml") {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("application-json");
+    } else if (ext == "md") {
+        iconKindOut = QStringLiteral("file");
+        iconNameOut = QStringLiteral("text-markdown");
+    } else if (ext == "sh" || ext == "bash" || ext == "qml" || ext == "js" || ext == "ts") {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("text-x-script");
+    } else if (ext == "desktop") {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("application-x-desktop");
+    } else if (ext == "txt" || ext == "log") {
+        iconKindOut = QStringLiteral("file");
+        iconNameOut = QStringLiteral("text-x-generic");
+    } else if (info.isExecutable()) {
+        iconKindOut = QStringLiteral("code");
+        iconNameOut = QStringLiteral("application-x-executable");
+    } else {
+        iconKindOut = QStringLiteral("file");
+        iconNameOut = QStringLiteral("text-x-generic");
+    }
+}
+} // namespace
 
 FilesBridge::FilesBridge(const QString& initialPath, QObject* parent)
     : QObject(parent)
@@ -76,6 +144,65 @@ QString FilesBridge::homePath() const {
         return QString::fromUtf8(h);
     }
     return QDir::homePath();
+}
+
+bool FilesBridge::isInTrash() const {
+    const QString trashFiles = homePath() + QStringLiteral("/.local/share/Trash/files");
+    return m_currentPath == trashFiles || m_currentPath.startsWith(trashFiles + QStringLiteral("/"));
+}
+
+QVariantList FilesBridge::breadcrumbs() const {
+    QVariantList list;
+    const QString home = homePath();
+    const QString trashFiles = home + QStringLiteral("/.local/share/Trash/files");
+
+    if (m_currentPath == trashFiles || m_currentPath.startsWith(trashFiles + QStringLiteral("/"))) {
+        QVariantMap t;
+        t[QStringLiteral("label")] = QStringLiteral("Trash");
+        t[QStringLiteral("path")] = trashFiles;
+        list.append(t);
+        QString rem = m_currentPath.mid(trashFiles.length());
+        QString acc = trashFiles;
+        for (const auto& seg : rem.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+            acc += QStringLiteral("/") + seg;
+            QVariantMap m;
+            m[QStringLiteral("label")] = seg;
+            m[QStringLiteral("path")] = acc;
+            list.append(m);
+        }
+        return list;
+    }
+
+    if (!home.isEmpty() && (m_currentPath == home || m_currentPath.startsWith(home + QStringLiteral("/")))) {
+        QVariantMap h;
+        h[QStringLiteral("label")] = QStringLiteral("Home");
+        h[QStringLiteral("path")] = home;
+        list.append(h);
+        QString rem = m_currentPath.mid(home.length());
+        QString acc = home;
+        for (const auto& seg : rem.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+            acc += QStringLiteral("/") + seg;
+            QVariantMap m;
+            m[QStringLiteral("label")] = seg;
+            m[QStringLiteral("path")] = acc;
+            list.append(m);
+        }
+        return list;
+    }
+
+    QVariantMap root;
+    root[QStringLiteral("label")] = QStringLiteral("/");
+    root[QStringLiteral("path")] = QStringLiteral("/");
+    list.append(root);
+    QString acc;
+    for (const auto& seg : m_currentPath.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+        acc += QStringLiteral("/") + seg;
+        QVariantMap m;
+        m[QStringLiteral("label")] = seg;
+        m[QStringLiteral("path")] = acc;
+        list.append(m);
+    }
+    return list;
 }
 
 QVariantList FilesBridge::sidebarLocations() const {
@@ -372,25 +499,12 @@ void FilesBridge::loadDirectory(const QString& path, bool addToHistory) {
 
         item[QStringLiteral("modified")] = info.lastModified().toString(QStringLiteral("MMM d, yyyy h:mm AP"));
 
-        // Icon hint based on extension
-        QString ext = info.suffix().toLower();
-        QString iconKind = QStringLiteral("file");
-        if (info.isDir()) {
-            iconKind = QStringLiteral("folder");
-        } else if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "svg" || ext == "bmp") {
-            iconKind = QStringLiteral("image");
-        } else if (ext == "mp4" || ext == "mkv" || ext == "mov" || ext == "avi") {
-            iconKind = QStringLiteral("video");
-        } else if (ext == "mp3" || ext == "wav" || ext == "flac" || ext == "ogg") {
-            iconKind = QStringLiteral("audio");
-        } else if (ext == "pdf") {
-            iconKind = QStringLiteral("pdf");
-        } else if (ext == "txt" || ext == "md" || ext == "log" || ext == "cpp" || ext == "hpp" || ext == "py" || ext == "sh" || ext == "json") {
-            iconKind = QStringLiteral("code");
-        } else if (ext == "zip" || ext == "tar" || ext == "gz" || ext == "xz" || ext == "7z") {
-            iconKind = QStringLiteral("archive");
-        }
+        // Icon hint based on extension & folder role
+        QString iconKind;
+        QString iconName;
+        classify_file_icon(info, homePath(), iconKind, iconName);
         item[QStringLiteral("iconKind")] = iconKind;
+        item[QStringLiteral("iconName")] = iconName;
 
         // Phase 1: embed current tag name so model is self-contained after restart
         {
@@ -575,8 +689,22 @@ bool FilesBridge::renameItem(const QString& oldPath, const QString& newName) {
 
 bool FilesBridge::deleteItem(const QString& path) {
     if (path.isEmpty()) return false;
-    auto res = FileOperations::trash_path(path.toStdString());
-    if (res.success) {
+    bool ok = false;
+    if (isInTrash()) {
+        std::error_code ec;
+        std::filesystem::path target(path.toStdString());
+        std::filesystem::remove_all(target, ec);
+        ok = !ec;
+        std::filesystem::path infoFile = TrashManager::instance().get_trash_dir() / "info" / (target.filename().string() + ".trashinfo");
+        std::filesystem::remove(infoFile, ec);
+    } else {
+        auto res = FileOperations::trash_path(path.toStdString());
+        ok = res.success;
+        if (!ok) {
+            tinexus::log::warn("[files] Failed to trash item: {}", res.error_message);
+        }
+    }
+    if (ok) {
         if (m_selectedPaths.contains(path)) {
             m_selectedPaths.removeAll(path);
             if (m_activeTabIndex >= 0 && m_activeTabIndex < static_cast<int>(m_tabs.size())) {
@@ -588,7 +716,6 @@ bool FilesBridge::deleteItem(const QString& path) {
         refresh();
         return true;
     }
-    tinexus::log::warn("[files] Failed to trash item: {}", res.error_message);
     return false;
 }
 
@@ -596,16 +723,53 @@ bool FilesBridge::deleteSelected() {
     if (m_selectedPaths.isEmpty()) return false;
     QStringList toDelete = m_selectedPaths;
     bool allOk = true;
+    const bool permanent = isInTrash();
     for (const auto& p : toDelete) {
-        auto res = FileOperations::trash_path(p.toStdString());
-        if (!res.success) {
-            allOk = false;
-            tinexus::log::warn("[files] Failed to trash '{}': {}", p.toStdString(), res.error_message);
+        if (permanent) {
+            std::error_code ec;
+            std::filesystem::path target(p.toStdString());
+            std::filesystem::remove_all(target, ec);
+            if (ec) allOk = false;
+            std::filesystem::path infoFile = TrashManager::instance().get_trash_dir() / "info" / (target.filename().string() + ".trashinfo");
+            std::filesystem::remove(infoFile, ec);
+        } else {
+            auto res = FileOperations::trash_path(p.toStdString());
+            if (!res.success) {
+                allOk = false;
+                tinexus::log::warn("[files] Failed to trash '{}': {}", p.toStdString(), res.error_message);
+            }
         }
     }
     clearSelection();
     refresh();
     return allOk;
+}
+
+bool FilesBridge::restoreItem(const QString& path) {
+    if (path.isEmpty()) return false;
+    const QString name = QFileInfo(path).fileName();
+    bool ok = TrashManager::instance().restore_from_trash(name.toStdString());
+    if (ok) {
+        clearSelection();
+        refresh();
+    }
+    return ok;
+}
+
+bool FilesBridge::emptyTrash() {
+    const auto trashDir = TrashManager::instance().get_trash_dir();
+    std::error_code ec;
+    for (const char* sub : {"files", "info"}) {
+        const auto dir = trashDir / sub;
+        if (std::filesystem::exists(dir, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                std::filesystem::remove_all(entry.path(), ec);
+            }
+        }
+    }
+    clearSelection();
+    refresh();
+    return true;
 }
 
 bool FilesBridge::moveItem(const QString& srcPath, const QString& destDir) {
@@ -889,15 +1053,17 @@ QVariantList FilesBridge::getFolderContents(const QString& folderPath) {
     if (!dir.exists()) return list;
 
     QFileInfoList entries = dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+    const QString home = homePath();
     for (const auto& info : entries) {
         QVariantMap item;
         item[QStringLiteral("name")] = info.fileName();
         item[QStringLiteral("path")] = info.absoluteFilePath();
         item[QStringLiteral("isDir")] = info.isDir();
-        QString ext = info.suffix().toLower();
-        QString iconKind = info.isDir() ? QStringLiteral("folder") :
-                           ((ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp") ? QStringLiteral("image") : QStringLiteral("file"));
+        QString iconKind;
+        QString iconName;
+        classify_file_icon(info, home, iconKind, iconName);
         item[QStringLiteral("iconKind")] = iconKind;
+        item[QStringLiteral("iconName")] = iconName;
         list.append(item);
     }
     return list;
@@ -958,8 +1124,11 @@ QVariantMap FilesBridge::getFileDetails(const QString& path) {
         else map[QStringLiteral("sizeStr")] = QStringLiteral("%1 GB").arg(static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
     }
 
+    QString iconName;
+    classify_file_icon(fi, homePath(), iconKind, iconName);
     map[QStringLiteral("kind")] = kind;
     map[QStringLiteral("iconKind")] = iconKind;
+    map[QStringLiteral("iconName")] = iconName;
     map[QStringLiteral("modified")] = fi.lastModified().toString(QStringLiteral("MMM d, yyyy h:mm AP"));
     map[QStringLiteral("created")] = fi.birthTime().isValid() ? fi.birthTime().toString(QStringLiteral("MMM d, yyyy h:mm AP")) : fi.lastModified().toString(QStringLiteral("MMM d, yyyy h:mm AP"));
     map[QStringLiteral("owner")] = fi.owner().isEmpty() ? QStringLiteral("user") : fi.owner();

@@ -29,25 +29,32 @@ void SettingsBridge::initControllers() {
     m_about = std::make_unique<AboutController>(this);
     m_privacy = std::make_unique<PrivacyController>(this);
     m_search = std::make_unique<SearchController>(this);
+    m_bluetooth = std::make_unique<BluetoothController>(this);
+    m_users = std::make_unique<UsersController>(this);
 
-    // Forward Display signals
+    // Display
     connect(m_display.get(), &DisplayController::displayScaleIndexChanged, this, &SettingsBridge::displayScaleIndexChanged);
     connect(m_display.get(), &DisplayController::brightnessChanged, this, &SettingsBridge::brightnessChanged);
     connect(m_display.get(), &DisplayController::nightLightChanged, this, &SettingsBridge::nightLightChanged);
     connect(m_display.get(), &DisplayController::vrrEnabledChanged, this, &SettingsBridge::vrrEnabledChanged);
     connect(m_display.get(), &DisplayController::compositorInfoChanged, this, &SettingsBridge::compositorInfoChanged);
     connect(m_display.get(), &DisplayController::displayHardwareChanged, this, &SettingsBridge::displayHardwareChanged);
+    connect(m_display.get(), &DisplayController::toastRequested, this, &SettingsBridge::toastNotification);
     connect(m_display.get(), &DisplayController::settingModified, this, &SettingsBridge::syncSettingToDaemon);
 
-    // Forward Audio signals
+    // Audio
     connect(m_audio.get(), &AudioController::volumeChanged, this, &SettingsBridge::volumeChanged);
     connect(m_audio.get(), &AudioController::mutedChanged, this, &SettingsBridge::mutedChanged);
     connect(m_audio.get(), &AudioController::outputDevicesChanged, this, &SettingsBridge::outputDevicesChanged);
     connect(m_audio.get(), &AudioController::outputDeviceChanged, this, &SettingsBridge::outputDeviceChanged);
+    connect(m_audio.get(), &AudioController::inputVolumeChanged, this, &SettingsBridge::inputVolumeChanged);
+    connect(m_audio.get(), &AudioController::inputMutedChanged, this, &SettingsBridge::inputMutedChanged);
+    connect(m_audio.get(), &AudioController::inputDevicesChanged, this, &SettingsBridge::inputDevicesChanged);
+    connect(m_audio.get(), &AudioController::inputDeviceChanged, this, &SettingsBridge::inputDeviceChanged);
     connect(m_audio.get(), &AudioController::toastRequested, this, &SettingsBridge::toastNotification);
     connect(m_audio.get(), &AudioController::settingModified, this, &SettingsBridge::syncSettingToDaemon);
 
-    // Forward Personalization signals
+    // Personalization
     connect(m_personalization.get(), &PersonalizationController::accentIndexChanged, this, &SettingsBridge::accentIndexChanged);
     connect(m_personalization.get(), &PersonalizationController::accentColorChanged, this, &SettingsBridge::accentColorChanged);
     connect(m_personalization.get(), &PersonalizationController::themeModeChanged, this, &SettingsBridge::themeModeChanged);
@@ -56,7 +63,7 @@ void SettingsBridge::initControllers() {
     connect(m_personalization.get(), &PersonalizationController::toastRequested, this, &SettingsBridge::toastNotification);
     connect(m_personalization.get(), &PersonalizationController::settingModified, this, &SettingsBridge::syncSettingToDaemon);
 
-    // Forward Network signals
+    // Network
     connect(m_network.get(), &NetworkController::wifiEnabledChanged, this, &SettingsBridge::wifiEnabledChanged);
     connect(m_network.get(), &NetworkController::isScanningChanged, this, &SettingsBridge::isScanningChanged);
     connect(m_network.get(), &NetworkController::isConnectingChanged, this, &SettingsBridge::isConnectingChanged);
@@ -71,26 +78,40 @@ void SettingsBridge::initControllers() {
     connect(m_network.get(), &NetworkController::toastRequested, this, &SettingsBridge::toastNotification);
     connect(m_network.get(), &NetworkController::settingModified, this, &SettingsBridge::syncSettingToDaemon);
 
-    // Forward System signals
+    // Bluetooth
+    connect(m_bluetooth.get(), &BluetoothController::bluetoothStateChanged, this, &SettingsBridge::bluetoothStateChanged);
+    connect(m_bluetooth.get(), &BluetoothController::devicesChanged, this, &SettingsBridge::bluetoothDevicesChanged);
+    connect(m_bluetooth.get(), &BluetoothController::toastRequested, this, &SettingsBridge::toastNotification);
+
+    // System & Power
     connect(m_system.get(), &SystemController::screenTimeoutMinChanged, this, &SettingsBridge::screenTimeoutMinChanged);
     connect(m_system.get(), &SystemController::sleepAfterMinChanged, this, &SettingsBridge::sleepAfterMinChanged);
     connect(m_system.get(), &SystemController::powerProfileIndexChanged, this, &SettingsBridge::powerProfileIndexChanged);
     connect(m_system.get(), &SystemController::lockOnSleepChanged, this, &SettingsBridge::lockOnSleepChanged);
     connect(m_system.get(), &SystemController::pamAuthChanged, this, &SettingsBridge::pamAuthChanged);
     connect(m_system.get(), &SystemController::clipboardHistorySizeChanged, this, &SettingsBridge::clipboardHistorySizeChanged);
+    connect(m_system.get(), &SystemController::batteryStatusChanged, this, &SettingsBridge::batteryStatusChanged);
     connect(m_system.get(), &SystemController::toastRequested, this, &SettingsBridge::toastNotification);
     connect(m_system.get(), &SystemController::settingModified, this, &SettingsBridge::syncSettingToDaemon);
 
-    // Forward Privacy signals
+    // Privacy
     connect(m_privacy.get(), &PrivacyController::unverifiedAppsChanged, this, &SettingsBridge::unverifiedAppsChanged);
+    connect(m_privacy.get(), &PrivacyController::securityPolicyChanged, this, &SettingsBridge::securityPolicyChanged);
     connect(m_privacy.get(), &PrivacyController::toastRequested, this, &SettingsBridge::toastNotification);
+    connect(m_privacy.get(), &PrivacyController::settingModified, this, &SettingsBridge::syncSettingToDaemon);
 
-    // Forward About & User signals
+    // Users
+    connect(m_users.get(), &UsersController::usersChanged, this, &SettingsBridge::systemUsersChanged);
+    connect(m_users.get(), &UsersController::toastRequested, this, &SettingsBridge::toastNotification);
+
+    // About & User
     connect(m_about.get(), &AboutController::aboutInfoChanged, this, &SettingsBridge::aboutInfoChanged);
+    connect(m_about.get(), &AboutController::systemReportChanged, this, &SettingsBridge::systemReportChanged);
+    connect(m_about.get(), &AboutController::updateStateChanged, this, &SettingsBridge::updateStateChanged);
     connect(m_about.get(), &AboutController::userInfoChanged, this, &SettingsBridge::userInfoChanged);
     connect(m_about.get(), &AboutController::toastRequested, this, &SettingsBridge::toastNotification);
 
-    // Forward Search signals
+    // Search
     connect(m_search.get(), &SearchController::searchQueryChanged, this, &SettingsBridge::searchQueryChanged);
     connect(m_search.get(), &SearchController::searchResultsChanged, this, &SettingsBridge::searchResultsChanged);
 }
@@ -106,7 +127,6 @@ void SettingsBridge::initDbusClient() {
             this,
             SLOT(onDaemonConfigChanged(QString,QDBusVariant))
         );
-        // Connect to legacy endpoints as well
         bus.connect(
             tinexus::common::dbus::qservice::legacy::Settings(),
             tinexus::common::dbus::qpath::legacy::Settings(),
@@ -123,15 +143,11 @@ void SettingsBridge::initDbusClient() {
             this,
             SLOT(onDaemonConfigChanged(QString,QDBusVariant))
         );
-        tinexus::log::info("[SettingsBridge] Connected as D-Bus client to {}",
-                           tinexus::common::dbus::service::Settings);
-    } else {
-        tinexus::log::warn("[SettingsBridge] Session D-Bus not available — operating in local standalone mode");
     }
 }
 
 void SettingsBridge::selectPage(int page) {
-    page = std::clamp(page, 0, 7);
+    page = std::clamp(page, 0, 9);
     if (m_currentPage != page) {
         m_currentPage = page;
         emit currentPageChanged();
@@ -180,46 +196,38 @@ void SettingsBridge::loadConfig() {
         if (pos == std::string::npos) continue;
 
         if (line.starts_with("accent_index")) {
-            try {
-                m_personalization->setAccentIndex(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_personalization->setAccentIndex(std::stoi(line.substr(pos + 1))); } catch (...) {}
         } else if (line.starts_with("selected_wallpaper_idx")) {
-            try {
-                m_personalization->setSelectedWallpaperIndex(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_personalization->setSelectedWallpaperIndex(std::stoi(line.substr(pos + 1))); } catch (...) {}
         } else if (line.starts_with("theme_mode")) {
             std::string mode = line.substr(pos + 1);
-            mode.erase(0, mode.find_first_not_of(" \t\""));
-            mode.erase(mode.find_last_not_of(" \t\"") + 1);
-            if (!mode.empty()) m_personalization->setThemeMode(QString::fromStdString(mode));
+            auto f = mode.find_first_not_of(" \t\"");
+            auto l = mode.find_last_not_of(" \t\"\r");
+            if (f != std::string::npos && l != std::string::npos && l >= f) {
+                m_personalization->setThemeMode(QString::fromStdString(mode.substr(f, l - f + 1)));
+            }
         } else if (line.starts_with("display_scale_idx")) {
-            try {
-                m_display->setDisplayScaleIndex(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_display->setDisplayScaleIndex(std::stoi(line.substr(pos + 1))); } catch (...) {}
         } else if (line.starts_with("night_light")) {
             m_display->setNightLight(line.find("true") != std::string::npos);
         } else if (line.starts_with("vrr_enabled")) {
             m_display->setVrrEnabled(line.find("true") != std::string::npos);
         } else if (line.starts_with("screen_timeout_min")) {
-            try {
-                m_system->setScreenTimeoutMin(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_system->setScreenTimeoutMin(std::stoi(line.substr(pos + 1))); } catch (...) {}
         } else if (line.starts_with("sleep_after_min")) {
-            try {
-                m_system->setSleepAfterMin(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_system->setSleepAfterMin(std::stoi(line.substr(pos + 1))); } catch (...) {}
         } else if (line.starts_with("power_profile_idx")) {
-            try {
-                m_system->setPowerProfileIndex(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_system->setPowerProfileIndex(std::stoi(line.substr(pos + 1))); } catch (...) {}
         } else if (line.starts_with("lock_on_sleep")) {
             m_system->setLockOnSleep(line.find("true") != std::string::npos);
         } else if (line.starts_with("pam_auth")) {
             m_system->setPamAuth(line.find("true") != std::string::npos);
         } else if (line.starts_with("clipboard_history_size")) {
-            try {
-                m_system->setClipboardHistorySize(std::stoi(line.substr(pos + 1)));
-            } catch (...) {}
+            try { m_system->setClipboardHistorySize(std::stoi(line.substr(pos + 1))); } catch (...) {}
+        } else if (line.starts_with("guard_enabled")) {
+            m_privacy->setGuardEnabled(line.find("true") != std::string::npos);
+        } else if (line.starts_with("sandbox_enabled")) {
+            m_privacy->setSandboxEnabled(line.find("true") != std::string::npos);
         }
     }
 }
@@ -258,6 +266,8 @@ void SettingsBridge::saveConfig() {
         out << "lock_on_sleep = " << (m_system->lockOnSleep() ? "true" : "false") << "\n";
         out << "pam_auth = " << (m_system->pamAuth() ? "true" : "false") << "\n";
         out << "clipboard_history_size = " << m_system->clipboardHistorySize() << "\n";
+        out << "guard_enabled = " << (m_privacy->guardEnabled() ? "true" : "false") << "\n";
+        out << "sandbox_enabled = " << (m_privacy->sandboxEnabled() ? "true" : "false") << "\n";
         out.close();
 
         std::filesystem::rename(tmp_path, config_path, ec);

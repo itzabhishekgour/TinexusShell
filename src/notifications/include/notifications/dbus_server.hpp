@@ -22,6 +22,8 @@ public:
     static int method_close_notification(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
     static int method_get_capabilities(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
     static int method_get_server_information(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
+    static int method_get_active_notifications(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
+    static int method_clear_all(sd_bus_message *m, void *userdata, sd_bus_error *ret_error);
 
 private:
     DBusServer() = default;

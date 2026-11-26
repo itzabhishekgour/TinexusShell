@@ -38,6 +38,7 @@ Item {
         sourceSize.height: Math.max(32, Math.round(root.iconSize * 2))
         fillMode: Image.PreserveAspectFit
         smooth: true
+        asynchronous: true
         source: papirusIconName.length > 0 ? ("image://tinexus/" + papirusIconName) : ""
         visible: status === Image.Ready
     }

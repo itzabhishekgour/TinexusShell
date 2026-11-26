@@ -94,12 +94,16 @@ chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
     isc-dhcp-client procps libcap2-bin wget ca-certificates libssl-dev libwayland-dev libpixman-1-dev libfreetype-dev \
     libwlroots-0.19-dev libdrm-dev libvulkan-dev libxkbcommon-dev libpam0g-dev \
     systemd systemd-sysv libpam-systemd calamares calamares-settings-ubuntu-common \
-    linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin xdg-desktop-portal-wlr \
+    linux-firmware shim-signed grub-efi-amd64-signed libnotify-bin xdg-desktop-portal xdg-desktop-portal-wlr \
     libgl1-mesa-dri mesa-vulkan-drivers mesa-va-drivers libegl-mesa0 libgbm1 zstd initramfs-tools \
     fonts-inter fonts-jetbrains-mono fonts-dejavu-core libqt6opengl6 qml6-module-qtquick-effects \
-    papirus-icon-theme librsvg2-common gtk-update-icon-cache
+    papirus-icon-theme librsvg2-common gtk-update-icon-cache \
+    pipewire pipewire-pulse pipewire-alsa wireplumber pulseaudio-utils libpulse0 libasound2-plugins alsa-utils \
+    bluez upower network-manager
 chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends qt6-svg-plugins || \
     chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends qt6-image-formats-plugins || true
+chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends \
+    ffmpeg libavcodec-extra gstreamer1.0-libav intel-media-va-driver || true
 
 [ -f /mnt/rootfs/usr/lib/x86_64-linux-gnu/qt6/plugins/wayland-shell-integration/liblayer-shell.so ] || fatal "liblayer-shell.so missing after install!"
 [ -f /mnt/rootfs/sbin/dhclient ] || [ -f /mnt/rootfs/usr/sbin/dhclient ] || fatal "dhclient missing after install!"
@@ -288,6 +292,11 @@ MOC_BIN="/usr/lib/qt6/libexec/moc"
 QT6_INC="-I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtQuick -I/usr/include/x86_64-linux-gnu/qt6/QtQml -I/usr/include/x86_64-linux-gnu/qt6/QtNetwork -I/usr/include/x86_64-linux-gnu/qt6/QtSvg -I/usr/include/x86_64-linux-gnu/qt6/QtWaylandClient -I/usr/include/LayerShellQt -I/tmp/build_apps"
 COMMON_INC="-I/workspace/include -I/workspace/src -I/workspace/src/common/include -I/workspace/src/ipcd/include"
 
+mkdir -p /mnt/rootfs/workspace/build/protocols
+chroot /mnt/rootfs wayland-scanner client-header /workspace/protocols/org-kde-kwin-blur.xml /workspace/build/protocols/org-kde-kwin-blur-client-protocol.h
+chroot /mnt/rootfs wayland-scanner private-code /workspace/protocols/org-kde-kwin-blur.xml /workspace/build/protocols/org-kde-kwin-blur-protocol.c
+chroot /mnt/rootfs /usr/bin/gcc -O2 -c /workspace/build/protocols/org-kde-kwin-blur-protocol.c -o /tmp/build_apps/org-kde-kwin-blur-protocol.o
+
 # 80. libtinexus_common
 info "Compiling updated libtinexus_common..."
 rm -f /workspace/build/lib/libtinexus_common.so.0.1.0
@@ -399,11 +408,11 @@ rm -f /workspace/build/bin/tinexus-settings-ui
 BUILD_START_SETTINGS=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/settings-ui/qt /workspace/src/settings-ui/qt/SettingsBridge.hpp -o /tmp/build_apps/moc_SettingsBridge.cpp
 chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/settings-ui/include/settings-ui /workspace/src/settings-ui/include/settings-ui/SettingsAdaptor.hpp -o /tmp/build_apps/moc_SettingsAdaptor.cpp
-for ctl in DisplayController AudioController NetworkController PersonalizationController SystemController AboutController PrivacyController SearchController; do
+for ctl in DisplayController AudioController NetworkController PersonalizationController SystemController AboutController PrivacyController SearchController BluetoothController UsersController; do
   chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/settings-ui/qt /workspace/src/settings-ui/qt/controllers/${ctl}.hpp -o /tmp/build_apps/moc_${ctl}.cpp
 done
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/guard/include -I/workspace/src/settings-ui -I/workspace/src/settings-ui/qt -I/workspace/src/settings-ui/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
+  $QT6_INC $COMMON_INC -I/workspace/build/protocols -I/workspace/src/guard/include -I/workspace/src/settings-ui -I/workspace/src/settings-ui/qt -I/workspace/src/settings-ui/include -I/usr/include/x86_64-linux-gnu/qt6/QtDBus \
   /workspace/src/settings-ui/qt/main_qt.cpp \
   /workspace/src/settings-ui/qt/SettingsBridge.cpp \
   /workspace/src/settings-ui/qt/SettingsAdaptor.cpp \
@@ -415,7 +424,10 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /workspace/src/settings-ui/qt/controllers/AboutController.cpp \
   /workspace/src/settings-ui/qt/controllers/PrivacyController.cpp \
   /workspace/src/settings-ui/qt/controllers/SearchController.cpp \
+  /workspace/src/settings-ui/qt/controllers/BluetoothController.cpp \
+  /workspace/src/settings-ui/qt/controllers/UsersController.cpp \
   /workspace/src/settings-ui/WifiManager.cpp \
+  /tmp/build_apps/org-kde-kwin-blur-protocol.o \
   /tmp/build_apps/moc_SettingsBridge.cpp \
   /tmp/build_apps/moc_DisplayController.cpp \
   /tmp/build_apps/moc_AudioController.cpp \
@@ -425,11 +437,13 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   /tmp/build_apps/moc_AboutController.cpp \
   /tmp/build_apps/moc_PrivacyController.cpp \
   /tmp/build_apps/moc_SearchController.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network -lQt6DBus -lcrypto \
+  /tmp/build_apps/moc_BluetoothController.cpp \
+  /tmp/build_apps/moc_UsersController.cpp \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus-guard -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network -lQt6DBus -lQt6WaylandClient -lwayland-client -lcrypto \
   -o /workspace/build/bin/tinexus-settings-ui
 [ -f /workspace/build/bin/tinexus-settings-ui ] || fatal "tinexus-settings-ui compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-settings-ui)" -ge "$BUILD_START_SETTINGS" ] || fatal "tinexus-settings-ui mtime is older than build start! Stale binary."
-strings /workspace/build/bin/tinexus-settings-ui | grep "libQt6Core" >/dev/null 2>&1 || fatal "tinexus-settings-ui not linked to Qt6!"
+readelf -d /workspace/build/bin/tinexus-settings-ui 2>/dev/null | grep -q "libQt6Core" || fatal "tinexus-settings-ui not linked to Qt6!"
 cp -f /workspace/build/bin/tinexus-settings-ui /mnt/rootfs/usr/bin/tinexus-settings-ui
 chmod 0755 /mnt/rootfs/usr/bin/tinexus-settings-ui
 
@@ -619,8 +633,20 @@ EOF_TTYS0
     chroot /mnt/rootfs /bin/bash -c "
         groupadd -r -f seat 2>/dev/null || true
         groupadd -r -f netdev 2>/dev/null || true
-        usermod -aG video,input,render,seat,sudo,adm,systemd-journal,netdev tinexus 2>/dev/null || true
+        usermod -aG audio,video,input,render,seat,sudo,adm,systemd-journal,netdev tinexus 2>/dev/null || true
         systemctl preset-all 2>/dev/null || true
+        systemctl enable NetworkManager.service 2>/dev/null || true
+        systemctl enable bluetooth.service 2>/dev/null || true
+        systemctl disable wpa_supplicant.service 2>/dev/null || true
+        systemctl disable systemd-networkd.service 2>/dev/null || true
+        mkdir -p /etc/NetworkManager/conf.d
+        cat << 'EOF_NM' > /etc/NetworkManager/conf.d/10-tinexus-wifi.conf
+[main]
+plugins=keyfile
+
+[device]
+wifi.backend=wpa_supplicant
+EOF_NM
         systemctl enable tinexus-session.target 2>/dev/null || true
         systemctl enable tinexus-splash.service 2>/dev/null || true
         systemctl enable tinexus-hardware-env.service 2>/dev/null || true
@@ -723,6 +749,38 @@ chroot /mnt/rootfs gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/n
 mkdir -p /mnt/rootfs/usr/share/sounds/tinexus
 cp -a /workspace/assets/sounds/* /mnt/rootfs/usr/share/sounds/tinexus/ 2>/dev/null || true
 chmod 0644 /mnt/rootfs/usr/share/sounds/tinexus/* 2>/dev/null || true
+
+# Pre-populate root-owned /etc/asound.conf so ALSA routes cleanly through PipeWire-Pulse with dmix fallback
+cat << 'EOF_ASOUND' > /mnt/rootfs/etc/asound.conf
+# Tinexus Universal Audio Configuration
+defaults.pcm.card 0
+defaults.ctl.card 0
+
+pcm.!default {
+    type pulse
+    fallback "tinexus_hw"
+    hint {
+        show on
+        description "Default Audio Device (PipeWire-Pulse)"
+    }
+}
+
+ctl.!default {
+    type pulse
+    fallback "tinexus_hw"
+}
+
+pcm.tinexus_hw {
+    type plug
+    slave.pcm "dmix:0,0"
+}
+
+ctl.tinexus_hw {
+    type hw
+    card 0
+}
+EOF_ASOUND
+chmod 0644 /mnt/rootfs/etc/asound.conf
 
 info "Running ldconfig in rootfs..."
 chroot /mnt/rootfs /sbin/ldconfig

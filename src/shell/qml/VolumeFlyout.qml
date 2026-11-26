@@ -1,14 +1,26 @@
 // ============================================================================
-// VolumeFlyout.qml — Sound & Volume Control Flyout with LiquidGlass
+// VolumeFlyout.qml — Tactile Control-Center Pill Sound Flyout with LiquidGlass
 // ============================================================================
 import QtQuick
+import QtQuick.Layouts
 import "../../common/qml"
 
 Item {
     id: root
     readonly property int shadowPad: 18
-    readonly property int cardWidth: 256
+    readonly property int cardWidth: 272
     readonly property int cardHeight: 174
+
+    property int localVolume: (typeof bridge !== "undefined") ? bridge.volume : 75
+
+    Connections {
+        target: typeof bridge !== "undefined" ? bridge : null
+        function onVolumeChanged() {
+            if (!sliderMouseArea.pressed) {
+                root.localVolume = bridge.volume
+            }
+        }
+    }
 
     width: cardWidth + shadowPad * 2
     height: cardHeight + shadowPad * 2
@@ -25,142 +37,197 @@ Item {
             materialType: "popover"
             cornerRadius: 14
             blurAmount: 28
-            fluidOpacity: 0.66
+            fluidOpacity: 0.68
             shadowEnabled: true
             topSpecularOpacity: 0.14
         }
 
-        Column {
+        ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
             spacing: 10
 
             // Header
-            Item {
-                width: parent.width
-                height: 22
+            RowLayout {
+                Layout.fillWidth: true
+                height: 24
+                spacing: 8
 
-                Row {
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 8
+                Rectangle {
+                    width: 24
+                    height: 24
+                    radius: 6
+                    color: muteMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.14) : "transparent"
 
                     Image {
+                        anchors.centerIn: parent
                         width: 16
                         height: 16
-                        anchors.verticalCenter: parent.verticalCenter
                         fillMode: Image.PreserveAspectFit
-                        source: "image://icon/" + (typeof bridge !== "undefined" && (bridge.soundMuted || bridge.volume === 0)
+                        source: "image://icon/" + (typeof bridge !== "undefined" && (bridge.soundMuted || root.localVolume === 0)
                                 ? "audio-volume-muted-symbolic?color=#FF453A"
                                 : "audio-volume-high-symbolic?color=#38BDF8")
                     }
 
-                    Text {
-                        text: "Sound"
-                        color: "#FFFFFF"
-                        font.family: "Inter"
-                        font.pixelSize: 14
-                        font.bold: true
-                        anchors.verticalCenter: parent.verticalCenter
+                    MouseArea {
+                        id: muteMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof bridge !== "undefined") {
+                                bridge.soundMuted = !bridge.soundMuted
+                            }
+                        }
                     }
                 }
 
                 Text {
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: typeof bridge !== "undefined" ? (bridge.soundMuted ? "Muted" : (bridge.volume + "%")) : "75%"
-                    color: Qt.rgba(1, 1, 1, 0.60)
+                    text: "Sound"
+                    color: "#FFFFFF"
+                    font.family: "Inter"
+                    font.pixelSize: 14
+                    font.bold: true
+                    Layout.fillWidth: true
+                }
+
+                Text {
+                    text: typeof bridge !== "undefined" ? (bridge.soundMuted ? "Muted" : (root.localVolume + "%")) : (root.localVolume + "%")
+                    color: Qt.rgba(1, 1, 1, 0.65)
                     font.family: "Inter"
                     font.pixelSize: 12
+                    font.weight: Font.Medium
                 }
             }
 
-            Rectangle { width: parent.width; height: 1; color: Qt.rgba(1, 1, 1, 0.09) }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.rgba(1, 1, 1, 0.09) }
 
-            // Slider track + thumb
-            Rectangle {
-                width: parent.width
+            // Tactile macOS-style Pill Slider
+            Item {
+                Layout.fillWidth: true
                 height: 36
-                radius: 8
-                color: Qt.rgba(1, 1, 1, 0.045)
 
                 Rectangle {
                     id: sliderTrack
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.leftMargin: 6
-                    anchors.rightMargin: 6
-                    height: 24
-                    radius: 12
-                    color: Qt.rgba(0, 0, 0, 0.40)
-                    border.color: Qt.rgba(1, 1, 1, 0.10)
+                    height: 28
+                    radius: 14
+                    color: Qt.rgba(0, 0, 0, 0.42)
+                    border.color: Qt.rgba(1, 1, 1, 0.12)
+                    border.width: 1
+                    clip: true
+
+                    readonly property real ratio: Math.max(0.0, Math.min(1.0, root.localVolume / 100.0))
 
                     Rectangle {
-                        id: sliderProgress
+                        id: sliderFill
                         height: parent.height
-                        radius: 12
-                        width: Math.max(height, parent.width * ((typeof bridge !== "undefined" ? bridge.volume : 75) / 100.0))
-                        color: "#6B8CEF"
+                        width: parent.height + (parent.width - parent.height) * sliderTrack.ratio
+                        radius: 14
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: (typeof bridge !== "undefined" && bridge.soundMuted) ? "#5E5E66" : "#4A7DFF" }
+                            GradientStop { position: 1.0; color: (typeof bridge !== "undefined" && bridge.soundMuted) ? "#7A7A85" : "#38BDF8" }
+                        }
+                    }
+
+                    // Embedded Glyph inside Track
+                    Image {
+                        x: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 13
+                        height: 13
+                        fillMode: Image.PreserveAspectFit
+                        source: "image://icon/" + (typeof bridge !== "undefined" && (bridge.soundMuted || root.localVolume === 0)
+                                ? "audio-volume-muted-symbolic?color=#FFFFFF"
+                                : "audio-volume-medium-symbolic?color=#FFFFFF")
+                    }
+
+                    // Smooth Circular Knob at Fill Edge
+                    Rectangle {
+                        width: 22
+                        height: 22
+                        radius: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: Math.max(3, sliderFill.width - width - 3)
+                        color: "#FFFFFF"
+                        border.color: Qt.rgba(0, 0, 0, 0.16)
+                        border.width: 1
+                        scale: sliderMouseArea.pressed ? 1.08 : 1.0
+                        Behavior on scale { SpringAnimation { spring: 6.5; damping: 0.72 } }
                     }
 
                     MouseArea {
+                        id: sliderMouseArea
                         anchors.fill: parent
                         preventStealing: true
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
 
-                        function updateVolume(mouseX) {
-                            var pct = Math.max(0, Math.min(100, Math.round((mouseX / sliderTrack.width) * 100)));
+                        function applyFromMouse(mx) {
+                            var pad = 14
+                            var usable = Math.max(1, sliderTrack.width - pad * 2)
+                            var norm = Math.max(0.0, Math.min(1.0, (mx - pad) / usable))
+                            var pct = Math.round(norm * 100)
+                            root.localVolume = pct
                             if (typeof bridge !== "undefined") {
-                                bridge.volume = pct;
+                                bridge.volume = pct
                             }
                         }
 
                         onPressed: function(mouse) {
-                            updateVolume(mouse.x);
+                            if (typeof bridge !== "undefined") bridge.beginVolumeDrag()
+                            applyFromMouse(mouse.x)
                         }
                         onPositionChanged: function(mouse) {
-                            if (pressed) {
-                                updateVolume(mouse.x);
-                            }
+                            if (pressed) applyFromMouse(mouse.x)
                         }
-                        onClicked: function(mouse) {
-                            updateVolume(mouse.x);
+                        onReleased: {
+                            if (typeof bridge !== "undefined") bridge.endVolumeDrag()
+                        }
+                        onCanceled: {
+                            if (typeof bridge !== "undefined") bridge.endVolumeDrag()
                         }
                     }
                 }
             }
 
-            Rectangle { width: parent.width; height: 1; color: Qt.rgba(1, 1, 1, 0.09) }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.rgba(1, 1, 1, 0.09) }
 
-            // Output Device Pill
+            // Real Active Output Device Pill
             Rectangle {
-                width: parent.width
+                Layout.fillWidth: true
                 height: 32
                 radius: 8
-                color: Qt.rgba(1, 1, 1, 0.025)
+                color: Qt.rgba(1, 1, 1, 0.03)
                 border.color: Qt.rgba(1, 1, 1, 0.08)
 
-                Row {
-                    anchors.left: parent.left
+                RowLayout {
+                    anchors.fill: parent
                     anchors.leftMargin: 10
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.rightMargin: 10
                     spacing: 8
 
                     Image {
-                        width: 14
-                        height: 14
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.preferredWidth: 14
+                        Layout.preferredHeight: 14
+                        sourceSize.width: 14
+                        sourceSize.height: 14
                         fillMode: Image.PreserveAspectFit
                         source: "image://icon/audio-speakers-symbolic?color=#38BDF8"
                     }
+
                     Text {
-                        text: "Internal Speakers"
+                        text: (typeof bridge !== "undefined" && bridge.outputDeviceName.length > 0)
+                              ? bridge.outputDeviceName
+                              : "Audio Output"
                         color: "#FFFFFF"
                         font.family: "Inter"
                         font.pixelSize: 12
-                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
                 }
             }

@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <poll.h>
+#include <signal.h>
 
 namespace tinexus::settings_ui {
 
@@ -39,6 +41,112 @@ std::string trim_str(const std::string& s) {
     if (start == std::string::npos) return "";
     auto end = s.find_last_not_of(" \t\r\n\"");
     return s.substr(start, end - start + 1);
+}
+
+std::string run_nmcli_cmd(const std::vector<std::string>& args, int timeout_ms = 5000, int* exit_code_out = nullptr) {
+    if (!safe_exists("/usr/bin/nmcli")) {
+        if (exit_code_out) *exit_code_out = 127;
+        return "";
+    }
+    int pipefd[2]{-1, -1};
+    if (::pipe2(pipefd, O_CLOEXEC) != 0) {
+        if (exit_code_out) *exit_code_out = 1;
+        return "";
+    }
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        if (exit_code_out) *exit_code_out = 1;
+        return "";
+    }
+    if (pid == 0) {
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        int devnull = ::open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDIN_FILENO);
+            if (devnull > 2) ::close(devnull);
+        }
+        if (pipefd[1] > 2) ::close(pipefd[1]);
+        std::vector<char*> c_args;
+        c_args.reserve(args.size() + 2);
+        c_args.push_back(const_cast<char*>("/usr/bin/nmcli"));
+        for (const auto& a : args) c_args.push_back(const_cast<char*>(a.c_str()));
+        c_args.push_back(nullptr);
+        ::execv("/usr/bin/nmcli", c_args.data());
+        _exit(127);
+    }
+    ::close(pipefd[1]);
+    int flags = ::fcntl(pipefd[0], F_GETFL, 0);
+    if (flags >= 0) ::fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+
+    std::string out;
+    char buf[1024];
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    bool eof = false;
+    while (!eof) {
+        int rem = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count());
+        if (rem <= 0) {
+            ::kill(pid, SIGKILL);
+            break;
+        }
+        struct pollfd pfd{};
+        pfd.fd = pipefd[0];
+        pfd.events = POLLIN;
+        int pr = ::poll(&pfd, 1, rem);
+        if (pr > 0) {
+            while (true) {
+                ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+                if (n > 0) out.append(buf, static_cast<size_t>(n));
+                else if (n == 0) { eof = true; break; }
+                else if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                else if (errno == EINTR) continue;
+                else { eof = true; break; }
+            }
+        } else if (pr == 0) {
+            ::kill(pid, SIGKILL);
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    ::close(pipefd[0]);
+    int st = 0;
+    while (::waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (exit_code_out) {
+        *exit_code_out = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    }
+    return out;
+}
+
+bool is_nm_running() {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+    int rc = 1;
+    std::string out = run_nmcli_cmd({"-t", "-f", "RUNNING", "general"}, 1200, &rc);
+#pragma GCC diagnostic pop
+    return rc == 0 && out.find("running") != std::string::npos;
+}
+
+std::vector<std::string> split_nmcli_escaped(const std::string& line) {
+    std::vector<std::string> fields;
+    std::string cur;
+    for (size_t i = 0; i < line.size(); ++i) {
+        if (line[i] == '\\' && i + 1 < line.size() && (line[i + 1] == ':' || line[i + 1] == '\\')) {
+            cur.push_back(line[i + 1]);
+            ++i;
+        } else if (line[i] == ':') {
+            fields.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(line[i]);
+        }
+    }
+    fields.push_back(cur);
+    return fields;
 }
 } // namespace
 
@@ -84,6 +192,20 @@ std::string WifiManager::get_active_interface() const {
 void WifiManager::set_wifi_enabled(bool enabled) {
     try {
         m_wifi_enabled.store(enabled);
+        if (is_nm_running()) {
+            int rc = 1;
+            run_nmcli_cmd({"radio", "wifi", enabled ? "on" : "off"}, 2500, &rc);
+            if (!enabled) {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_connected_ssid.clear();
+                m_ip_address.clear();
+                m_networks.clear();
+                m_status_message = "Wi-Fi is turned off";
+            } else {
+                trigger_scan();
+            }
+            return;
+        }
         std::string iface = get_active_interface();
         if (iface.empty()) return;
 
@@ -180,7 +302,15 @@ void WifiManager::connect(const std::string& ssid, const std::string& password) 
 }
 
 void WifiManager::disconnect() {
-    send_wpa_command("DISCONNECT");
+    if (is_nm_running()) {
+        std::string iface = get_active_interface();
+        if (!iface.empty()) {
+            int rc = 1;
+            run_nmcli_cmd({"dev", "disconnect", iface}, 3000, &rc);
+        }
+    } else {
+        send_wpa_command("DISCONNECT");
+    }
     std::lock_guard<std::mutex> lock(m_mutex);
     m_connected_ssid.clear();
     m_ip_address.clear();
@@ -335,6 +465,48 @@ std::string WifiManager::send_wpa_command(const std::string& cmd) {
 }
 
 void WifiManager::refresh_status_internal() {
+    if (is_nm_running()) {
+        int rc = 1;
+        std::string raw = run_nmcli_cmd({"-t", "-f", "ACTIVE,SSID,SIGNAL", "dev", "wifi"}, 2000, &rc);
+        std::string cur_ssid;
+        int bars = 0;
+        if (rc == 0) {
+            std::istringstream iss(raw);
+            std::string line;
+            while (std::getline(iss, line)) {
+                auto cols = split_nmcli_escaped(line);
+                if (cols.size() >= 3 && cols[0] == "yes") {
+                    cur_ssid = cols[1];
+                    int sig = 50;
+                    try { sig = std::clamp(std::stoi(cols[2]), 0, 100); } catch (...) {}
+                    bars = (sig >= 75) ? 4 : (sig >= 50) ? 3 : (sig >= 25) ? 2 : 1;
+                    break;
+                }
+            }
+        }
+        std::string iface = get_active_interface();
+        std::string ip;
+        if (!iface.empty()) {
+            int irc = 1;
+            std::string ip_raw = run_nmcli_cmd({"-t", "-f", "IP4.ADDRESS", "dev", "show", iface}, 1500, &irc);
+            auto col = ip_raw.find(':');
+            if (col != std::string::npos) {
+                ip = trim_str(ip_raw.substr(col + 1));
+                auto slash = ip.find('/');
+                if (slash != std::string::npos) ip = ip.substr(0, slash);
+            }
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_connected_ssid = cur_ssid;
+        m_ip_address = ip;
+        m_connected_signal_bars = bars;
+        for (auto& net : m_networks) {
+            net.is_connected = (!cur_ssid.empty() && net.ssid == cur_ssid);
+        }
+        m_status_message = !cur_ssid.empty() ? "Connected" : (m_networks.empty() ? "No Wi-Fi networks found" : "Not Connected");
+        return;
+    }
+
     std::string status = send_wpa_command("STATUS");
     std::string cur_ssid;
     std::string ip;
@@ -613,6 +785,85 @@ void WifiManager::parse_iw_scan_results(const std::string& iface) {
 
 void WifiManager::scan_worker() {
     try {
+        if (is_nm_running()) {
+            int rc = 1;
+            std::string radio = trim_str(run_nmcli_cmd({"radio", "wifi"}, 1200, &rc));
+            if (radio == "disabled") {
+                m_wifi_enabled.store(false);
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_networks.clear();
+                m_status_message = "Wi-Fi is turned off";
+                m_is_scanning.store(false);
+                return;
+            }
+            m_wifi_enabled.store(true);
+
+            std::string raw = run_nmcli_cmd({"-t", "-f", "ACTIVE,SSID,BSSID,SIGNAL,SECURITY", "dev", "wifi", "list", "--rescan", "yes"}, 7000, &rc);
+            if (rc == 0) {
+                std::vector<WifiNetwork> parsed;
+                std::string active_ssid;
+                int active_bars = 0;
+                std::istringstream iss(raw);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    if (line.empty()) continue;
+                    auto cols = split_nmcli_escaped(line);
+                    if (cols.size() < 5) continue;
+                    const bool is_active = (cols[0] == "yes");
+                    const std::string ssid = cols[1];
+                    if (ssid.empty()) continue;
+
+                    int sig_pct = 50;
+                    try { sig_pct = std::clamp(std::stoi(cols[3]), 0, 100); } catch (...) {}
+                    int bars = (sig_pct >= 75) ? 4 : (sig_pct >= 50) ? 3 : (sig_pct >= 25) ? 2 : 1;
+
+                    WifiNetwork net;
+                    net.ssid = ssid;
+                    net.bssid = cols[2];
+                    net.signal_dbm = -100 + (sig_pct / 2);
+                    net.signal_bars = bars;
+                    net.frequency_mhz = 2412;
+                    net.security_str = (cols[4].empty() || cols[4] == "--") ? "Open" : cols[4];
+                    net.is_secured = (net.security_str != "Open");
+                    net.is_connected = is_active;
+                    if (is_active) {
+                        active_ssid = ssid;
+                        active_bars = bars;
+                    }
+                    auto it = std::find_if(parsed.begin(), parsed.end(), [&](const WifiNetwork& n) { return n.ssid == net.ssid; });
+                    if (it == parsed.end()) parsed.push_back(net);
+                    else if (net.is_connected || net.signal_bars > it->signal_bars) *it = net;
+                }
+                std::sort(parsed.begin(), parsed.end(), [](const WifiNetwork& a, const WifiNetwork& b) {
+                    if (a.is_connected != b.is_connected) return a.is_connected > b.is_connected;
+                    return a.signal_bars > b.signal_bars;
+                });
+
+                std::string nm_iface = get_active_interface();
+                std::string ip4;
+                if (!nm_iface.empty()) {
+                    int irc = 1;
+                    std::string ip_raw = run_nmcli_cmd({"-t", "-f", "IP4.ADDRESS", "dev", "show", nm_iface}, 1500, &irc);
+                    auto col = ip_raw.find(':');
+                    if (col != std::string::npos) {
+                        ip4 = trim_str(ip_raw.substr(col + 1));
+                        auto slash = ip4.find('/');
+                        if (slash != std::string::npos) ip4 = ip4.substr(0, slash);
+                    }
+                }
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_networks = std::move(parsed);
+                    m_connected_ssid = active_ssid;
+                    m_connected_signal_bars = active_bars;
+                    m_ip_address = ip4;
+                    if (!nm_iface.empty()) m_active_iface = nm_iface;
+                    m_status_message = active_ssid.empty() ? "Disconnected" : "Connected";
+                }
+                m_is_scanning.store(false);
+                return;
+            }
+        }
         // Run 3000ms polling probe asynchronously inside this background worker thread.
         // This allows delayed kernel/firmware initialization (e.g. MediaTek MT7921/iwlwifi) without blocking the UI.
         auto hw_res = tinexus::net::probe_primary_wifi_interface("/sys/class/net", "/sys/class/rfkill", 3000);
@@ -711,6 +962,43 @@ std::vector<std::string> WifiManager::build_dhcp_client_args(const std::string& 
 
 void WifiManager::connect_worker(std::string ssid, std::string password) {
     try {
+        if (is_nm_running()) {
+            int rc = 1;
+            std::string iface = get_active_interface();
+            std::vector<std::string> args = {"dev", "wifi", "connect", ssid};
+            if (!password.empty()) {
+                args.push_back("password");
+                args.push_back(password);
+            }
+            if (!iface.empty()) {
+                args.push_back("ifname");
+                args.push_back(iface);
+            }
+            std::string res = run_nmcli_cmd(args, 15000, &rc);
+            if (rc != 0 && !password.empty()) {
+                // Remove stale conflicting connection profile (e.g. old key-mgmt / changed password) and retry cleanly once
+                (void)run_nmcli_cmd({"con", "delete", "id", ssid}, 2500, nullptr);
+                res = run_nmcli_cmd(args, 15000, &rc);
+            }
+            if (rc == 0) {
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_connected_ssid = ssid;
+                    m_connecting_ssid.clear();
+                    m_status_message = "Connected";
+                }
+                m_is_connecting.store(false);
+                scan_worker();
+                return;
+            } else {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_connecting_ssid.clear();
+                m_status_message = res.empty() ? "Connection failed. Verify password." : trim_str(res);
+                m_is_connecting.store(false);
+                return;
+            }
+        }
+
         std::string iface = get_active_interface();
         if (iface.empty()) {
             auto probe = tinexus::net::probe_primary_wifi_interface("/sys/class/net", "/sys/class/rfkill", 0);

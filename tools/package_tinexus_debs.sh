@@ -177,6 +177,7 @@ fi
 
 cat << 'EOF' > "$COMP_DIR/etc/udev/rules.d/72-tinexus-seat.rules"
 SUBSYSTEM=="input", ENV{ID_INPUT}=="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
+SUBSYSTEM=="sound", GROUP="audio", MODE="0660", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
 SUBSYSTEM=="drm", KERNEL=="card[0-9]*", GROUP="video", MODE="0660", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="master-of-seat", TAG+="uaccess"
 SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", GROUP="render", MODE="0660", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="seat0", TAG+="uaccess"
 EOF

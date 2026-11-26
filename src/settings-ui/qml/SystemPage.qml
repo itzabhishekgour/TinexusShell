@@ -14,6 +14,53 @@ ScrollView {
 
         Item { height: 4 }
 
+        // ── Battery Status Card (Live UPower / sysfs) ─────────────────────
+        MacCard {
+            Layout.fillWidth: true
+            implicitHeight: 62
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 12
+
+                Image {
+                    width: 28; height: 28
+                    source: "image://tinexus/" + (bridge.hasBattery ? "battery-full-charged" : "ac-adapter")
+                    sourceSize: Qt.size(28, 28)
+                }
+
+                ColumnLayout {
+                    spacing: 2
+                    Layout.fillWidth: true
+
+                    Text {
+                        text: bridge.hasBattery
+                              ? ("Battery Level: " + bridge.batteryPercent + "%")
+                              : "External AC Power"
+                        color: "#f5f5f7"
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        text: bridge.batteryState + (bridge.onBattery ? "  •  Running on battery" : "  •  Connected")
+                        color: "#86868b"
+                        font.pixelSize: 11
+                    }
+                }
+
+                MacButton {
+                    text: "Lock"
+                    onClicked: bridge.sessionLock()
+                }
+                MacButton {
+                    text: "Sleep"
+                    onClicked: bridge.sessionSuspend()
+                }
+            }
+        }
+
         // Section Title: Power & Sleep
         Text {
             text: "POWER & SLEEP"

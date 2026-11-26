@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -127,6 +128,42 @@ static bool wait_for_socket_ready(const fs::path& socket_path, int timeout_ms = 
     }
 }
 
+static bool is_user_systemd_unit_active(const char* unit_name) {
+    if (!unit_name || !fs::exists("/usr/bin/systemctl")) return false;
+    pid_t pid = fork();
+    if (pid == 0) {
+        int devnull = ::open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDIN_FILENO);
+            ::dup2(devnull, STDOUT_FILENO);
+            ::dup2(devnull, STDERR_FILENO);
+            if (devnull > 2) ::close(devnull);
+        }
+        execl("/usr/bin/systemctl", "systemctl", "--user", "is-active", "--quiet", unit_name, nullptr);
+        _exit(127);
+    }
+    if (pid < 0) return false;
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static bool is_process_running_comm(const char* proc_name) {
+    if (!proc_name) return false;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator("/proc", ec)) {
+        if (!entry.is_directory(ec)) continue;
+        std::string fname = entry.path().filename().string();
+        if (fname.empty() || !std::isdigit(static_cast<unsigned char>(fname[0]))) continue;
+        std::ifstream comm(entry.path() / "comm");
+        std::string line;
+        if (std::getline(comm, line) && line == proc_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool wait_for_display_ready(const fs::path& runtime_dir, int timeout_ms = 5000) {
     auto start = std::chrono::steady_clock::now();
     const fs::path sys_display = "/run/tinexus/display";
@@ -179,20 +216,25 @@ int main(int argc, char* argv[]) {
         log::warn("[Session] Timeout waiting for /run/tinexus/display; proceeding with session startup.");
     }
 
-    // 2. Launch background infrastructure daemons
+    // 2. Launch background infrastructure daemons (respecting systemd --user sockets if already live)
     fs::path session_bus_sock = runtime_dir / "bus";
     std::string dbus_addr = "unix:path=" + session_bus_sock.string();
-    log::info("[Session] Starting D-Bus Session Bus...");
-    pid_t dbus_pid = fork();
-    if (dbus_pid == 0) {
-        execl("/usr/bin/dbus-daemon", "dbus-daemon", "--session", "--nofork", "--nopidfile",
-              ("--address=" + dbus_addr).c_str(), nullptr);
-        _exit(127);
-    }
-    g_managed_components[dbus_pid] = {"dbus-session", 0, 0, {}};
-
-    if (wait_for_socket_ready(session_bus_sock)) {
-        log::info("[Session] D-Bus session socket is ready at {}", session_bus_sock.string());
+    if (wait_for_socket_ready(session_bus_sock, 300)) {
+        log::info("[Session] D-Bus session socket already active at {}", session_bus_sock.string());
+    } else {
+        log::info("[Session] Starting D-Bus Session Bus...");
+        pid_t dbus_pid = fork();
+        if (dbus_pid == 0) {
+            execl("/usr/bin/dbus-daemon", "dbus-daemon", "--session", "--nofork", "--nopidfile",
+                  ("--address=" + dbus_addr).c_str(), nullptr);
+            _exit(127);
+        }
+        if (dbus_pid > 0) {
+            g_managed_components[dbus_pid] = {"dbus-session", 0, 0, {}};
+        }
+        if (wait_for_socket_ready(session_bus_sock, 5000)) {
+            log::info("[Session] D-Bus session socket is ready at {}", session_bus_sock.string());
+        }
     }
     setenv("DBUS_SESSION_BUS_ADDRESS", dbus_addr.c_str(), 1);
 
@@ -209,25 +251,44 @@ int main(int argc, char* argv[]) {
     // Launch Settings Daemon (io.tinexus.shell.Settings authoritative config daemon)
     launch_component("settings");
 
-    // Launch Universal PipeWire / WirePlumber Audio Daemons (if present)
+    // Launch Universal PipeWire / WirePlumber Audio Daemons (if present and not managed by systemd --user)
     if (fs::exists("/usr/bin/pipewire")) {
+        fs::path pw_sock = runtime_dir / "pipewire-0";
         fs::path pulse_dir = runtime_dir / "pulse";
+        fs::path pulse_sock = pulse_dir / "native";
         std::error_code ec;
         fs::create_directories(pulse_dir, ec);
-        std::string pulse_server = "unix:" + (pulse_dir / "native").string();
+        std::string pulse_server = "unix:" + pulse_sock.string();
         setenv("PULSE_SERVER", pulse_server.c_str(), 1);
 
-        log::info("[Session] Starting PipeWire daemon (PULSE_SERVER={})...", pulse_server);
-        pid_t pw_pid = fork();
-        if (pw_pid == 0) {
-            execl("/usr/bin/pipewire", "pipewire", nullptr);
-            _exit(127);
-        }
-        if (pw_pid > 0) {
-            g_managed_components[pw_pid] = {"pipewire", 0, 0, {}};
+        const bool user_pw_active = is_user_systemd_unit_active("pipewire.service") ||
+                                    is_user_systemd_unit_active("pipewire.socket") ||
+                                    is_process_running_comm("pipewire");
+        if (!wait_for_socket_ready(pw_sock, user_pw_active ? 2000 : 400) && !is_process_running_comm("pipewire")) {
+            log::info("[Session] Starting PipeWire daemon (PULSE_SERVER={})...", pulse_server);
+            pid_t pw_pid = fork();
+            if (pw_pid == 0) {
+                execl("/usr/bin/pipewire", "pipewire", nullptr);
+                _exit(127);
+            }
+            if (pw_pid > 0) {
+                g_managed_components[pw_pid] = {"pipewire", 0, 0, {}};
+            }
+            if (wait_for_socket_ready(pw_sock, 3000)) {
+                log::info("[Session] PipeWire socket ready at {}", pw_sock.string());
+            } else {
+                log::warn("[Session] Timeout waiting for PipeWire socket at {}", pw_sock.string());
+            }
+        } else {
+            log::info("[Session] PipeWire already active (systemd --user or process live).");
         }
 
-        if (fs::exists("/usr/bin/pipewire-pulse")) {
+        const bool user_pwp_active = is_user_systemd_unit_active("pipewire-pulse.service") ||
+                                     is_user_systemd_unit_active("pipewire-pulse.socket") ||
+                                     is_process_running_comm("pipewire-pulse");
+        if (fs::exists("/usr/bin/pipewire-pulse") &&
+            !wait_for_socket_ready(pulse_sock, user_pwp_active ? 2000 : 400) &&
+            !is_process_running_comm("pipewire-pulse")) {
             log::info("[Session] Starting PipeWire-Pulse compatibility daemon...");
             pid_t pwp_pid = fork();
             if (pwp_pid == 0) {
@@ -237,9 +298,16 @@ int main(int argc, char* argv[]) {
             if (pwp_pid > 0) {
                 g_managed_components[pwp_pid] = {"pipewire-pulse", 0, 0, {}};
             }
+            if (wait_for_socket_ready(pulse_sock, 3000)) {
+                log::info("[Session] PipeWire-Pulse socket ready at {}", pulse_sock.string());
+            }
+        } else {
+            log::info("[Session] PipeWire-Pulse already active.");
         }
 
-        if (fs::exists("/usr/bin/wireplumber")) {
+        const bool wp_active = is_user_systemd_unit_active("wireplumber.service") ||
+                               is_process_running_comm("wireplumber");
+        if (fs::exists("/usr/bin/wireplumber") && !wp_active) {
             log::info("[Session] Starting WirePlumber session manager...");
             pid_t wp_pid = fork();
             if (wp_pid == 0) {
@@ -249,6 +317,8 @@ int main(int argc, char* argv[]) {
             if (wp_pid > 0) {
                 g_managed_components[wp_pid] = {"wireplumber", 0, 0, {}};
             }
+        } else if (wp_active) {
+            log::info("[Session] WirePlumber already active (systemd --user or process live).");
         }
     }
 
@@ -353,10 +423,46 @@ int main(int argc, char* argv[]) {
                     log::info("[Session] Restarting component '{}' in {} ms (attempt {})...", state.name, state.backoff_ms, state.restart_count);
                     std::this_thread::sleep_for(std::chrono::milliseconds(state.backoff_ms));
                     
-                    pid_t new_pid = launch_component(state.name);
-                    g_managed_components[new_pid].restart_count = state.restart_count;
-                    g_managed_components[new_pid].backoff_ms = state.backoff_ms;
-                    g_managed_components[new_pid].last_crash = state.last_crash;
+                    pid_t new_pid = -1;
+                    if (state.name == "dbus-session") {
+                        if (!wait_for_socket_ready(runtime_dir / "bus", 100)) {
+                            new_pid = fork();
+                            if (new_pid == 0) {
+                                execl("/usr/bin/dbus-daemon", "dbus-daemon", "--session", "--nofork", "--nopidfile",
+                                      ("--address=" + dbus_addr).c_str(), nullptr);
+                                _exit(127);
+                            }
+                        }
+                    } else if (state.name == "pipewire") {
+                        if (!wait_for_socket_ready(runtime_dir / "pipewire-0", 150) && !is_process_running_comm("pipewire")) {
+                            new_pid = fork();
+                            if (new_pid == 0) {
+                                execl("/usr/bin/pipewire", "pipewire", nullptr);
+                                _exit(127);
+                            }
+                        }
+                    } else if (state.name == "pipewire-pulse") {
+                        if (!wait_for_socket_ready(runtime_dir / "pulse" / "native", 150) && !is_process_running_comm("pipewire-pulse")) {
+                            new_pid = fork();
+                            if (new_pid == 0) {
+                                execl("/usr/bin/pipewire-pulse", "pipewire-pulse", nullptr);
+                                _exit(127);
+                            }
+                        }
+                    } else if (state.name == "wireplumber") {
+                        if (!is_user_systemd_unit_active("wireplumber.service") && !is_process_running_comm("wireplumber")) {
+                            new_pid = fork();
+                            if (new_pid == 0) {
+                                execl("/usr/bin/wireplumber", "wireplumber", nullptr);
+                                _exit(127);
+                            }
+                        }
+                    } else {
+                        new_pid = launch_component(state.name);
+                    }
+                    if (new_pid > 0) {
+                        g_managed_components[new_pid] = state;
+                    }
                 }
             }
         } else if (p == -1) {

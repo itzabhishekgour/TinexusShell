@@ -14,20 +14,19 @@ ScrollView {
 
         Item { height: 4 }
 
-        // ── Monitor Graphic Preview (macOS Displays Top Graphic) ──────────
+        // ── Monitor Graphic Preview ───────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
             height: 124
-            radius: 10
-            color: "#28282a"
-            border.color: "#14ffffff"
+            radius: 12
+            color: Qt.rgba(0.16, 0.17, 0.21, 0.78)
+            border.color: Qt.rgba(1, 1, 1, 0.11)
             border.width: 1
 
             ColumnLayout {
                 anchors.centerIn: parent
                 spacing: 5
 
-                // Miniature Display Frame
                 Rectangle {
                     Layout.alignment: Qt.AlignHCenter
                     width: 110
@@ -37,28 +36,26 @@ ScrollView {
                     border.color: "#48484c"
                     border.width: 2
 
-                    // Screen with wallpaper preview
                     Rectangle {
                         anchors.fill: parent
                         anchors.margins: 3
                         radius: 3
                         gradient: Gradient {
                             GradientStop { position: 0.0; color: "#1e3a8a" }
-                            GradientStop { position: 0.5; color: "#0A84FF" }
+                            GradientStop { position: 0.5; color: typeof bridge !== "undefined" ? bridge.accentColor : "#0A84FF" }
                             GradientStop { position: 1.0; color: "#38bdf8" }
                         }
 
                         Text {
                             anchors.centerIn: parent
                             text: typeof bridge !== "undefined" ? bridge.displayResolution : "1920 × 1080"
-                            color: "#ccffffff"
+                            color: "#e6ffffff"
                             font.pixelSize: 10
                             font.bold: true
                         }
                     }
                 }
 
-                // Monitor Stand
                 Rectangle {
                     Layout.alignment: Qt.AlignHCenter
                     width: 28
@@ -70,13 +67,12 @@ ScrollView {
                 Text {
                     Layout.alignment: Qt.AlignHCenter
                     text: (typeof bridge !== "undefined" && bridge.displaySubtitle.length > 0) ? bridge.displaySubtitle : "Primary Display"
-                    color: "#86868b"
+                    color: "#9898a0"
                     font.pixelSize: 11
                 }
             }
         }
 
-        // Section Title: Resolution & Color
         Text {
             text: "RESOLUTION & COLOR"
             color: "#86868b"
@@ -95,10 +91,33 @@ ScrollView {
                 anchors.fill: parent
                 spacing: 0
 
-                // Row 1: Display Scaling Dropdown
+                MacSettingRow {
+                    title: "Resolution"
+                    subtitle: "Live DRM/KMS mode for " + (typeof bridge !== "undefined" ? bridge.displayConnector : "Primary Display")
+                    showSeparator: true
+
+                    MacComboBox {
+                        model: (typeof bridge !== "undefined" && bridge.availableResolutions.length > 0) ? bridge.availableResolutions : ["1920 × 1080"]
+                        currentIndex: typeof bridge !== "undefined" ? bridge.currentResolutionIndex : 0
+                        onActivated: (index) => bridge.setDisplayResolutionIndex(index)
+                    }
+                }
+
+                MacSettingRow {
+                    title: "Refresh Rate"
+                    subtitle: "Output scanout frequency in Hz"
+                    showSeparator: true
+
+                    MacComboBox {
+                        model: (typeof bridge !== "undefined" && bridge.availableRefreshRates.length > 0) ? bridge.availableRefreshRates : ["60 Hz"]
+                        currentIndex: typeof bridge !== "undefined" ? bridge.currentRefreshIndex : 0
+                        onActivated: (index) => bridge.setDisplayRefreshIndex(index)
+                    }
+                }
+
                 MacSettingRow {
                     title: "Display Scaling"
-                    subtitle: "Adjust scale factor for high-DPI Wayland outputs"
+                    subtitle: "Fractional HiDPI Wayland output scaling"
                     showSeparator: true
 
                     MacComboBox {
@@ -108,7 +127,6 @@ ScrollView {
                     }
                 }
 
-                // Row 2: Screen Brightness inline slider
                 Item {
                     Layout.fillWidth: true
                     height: 48
@@ -123,7 +141,6 @@ ScrollView {
                             text: "Screen Brightness"
                             color: "#f5f5f7"
                             font.pixelSize: 13
-                            font.weight: Font.Normal
                             Layout.fillWidth: true
                         }
 
@@ -131,53 +148,30 @@ ScrollView {
                             spacing: 8
                             Layout.alignment: Qt.AlignVCenter
 
-                            // Small sun (low brightness)
-                            Item {
-                                width: 12; height: 12
-                                Rectangle {
-                                    anchors.centerIn: parent
-                                    width: 6; height: 6; radius: 3
-                                    color: "#86868b"
-                                }
+                            Image {
+                                width: 14; height: 14
+                                source: "image://tinexus/display-brightness-symbolic"
+                                sourceSize: Qt.size(14, 14)
+                                opacity: 0.55
                             }
 
                             MacSlider {
                                 id: brightnessSlider
-                                width: 220
+                                width: 210
                                 from: 10
                                 to: 100
                                 value: bridge.brightness
                                 onMoved: (val) => bridge.setBrightness(Math.round(val))
                             }
 
-                            // Large radiating sun (high brightness)
-                            Item {
-                                width: 14; height: 14
-                                Rectangle {
-                                    anchors.centerIn: parent
-                                    width: 7; height: 7; radius: 3.5
-                                    color: "#f5f5f7"
-                                }
-                                Canvas {
-                                    anchors.fill: parent
-                                    onPaint: {
-                                        var ctx = getContext("2d");
-                                        ctx.reset();
-                                        ctx.strokeStyle = "#f5f5f7";
-                                        ctx.lineWidth = 1.0;
-                                        // 4 cross rays
-                                        ctx.beginPath();
-                                        ctx.moveTo(7, 1); ctx.lineTo(7, 3);
-                                        ctx.moveTo(7, 11); ctx.lineTo(7, 13);
-                                        ctx.moveTo(1, 7); ctx.lineTo(3, 7);
-                                        ctx.moveTo(11, 7); ctx.lineTo(13, 7);
-                                        ctx.stroke();
-                                    }
-                                }
+                            Image {
+                                width: 16; height: 16
+                                source: "image://tinexus/display-brightness-symbolic"
+                                sourceSize: Qt.size(16, 16)
                             }
 
                             Text {
-                                width: 44
+                                width: 42
                                 horizontalAlignment: Text.AlignRight
                                 text: Math.round(brightnessSlider.value) + "%"
                                 color: "#86868b"
@@ -186,7 +180,6 @@ ScrollView {
                         }
                     }
 
-                    // Hairline separator
                     Rectangle {
                         anchors.left: parent.left
                         anchors.leftMargin: 16
@@ -197,10 +190,9 @@ ScrollView {
                     }
                 }
 
-                // Row 3: Night Light Toggle
                 MacSettingRow {
                     title: "Night Light"
-                    subtitle: "Warmer screen colors reduce eye strain at night"
+                    subtitle: "Apply warm 4000K gamma curve to reduce eye strain"
                     showSeparator: true
 
                     MacSwitch {
@@ -209,21 +201,20 @@ ScrollView {
                     }
                 }
 
-                // Row 4: VRR Toggle
                 MacSettingRow {
-                    title: "Variable Refresh Rate (VRR / Adaptive Sync)"
-                    subtitle: "Synchronizes output frame rate to GPU render pipeline"
+                    title: "Variable Refresh Rate (VRR)"
+                    subtitle: bridge.vrrSupported ? "Adaptive sync supported by active display" : "Fixed refresh display (hardware VRR unsupported)"
                     showSeparator: false
 
                     MacSwitch {
                         checked: bridge.vrrEnabled
+                        enabled: bridge.vrrSupported
                         onToggled: (val) => bridge.setVrrEnabled(val)
                     }
                 }
             }
         }
 
-        // Section Title: Hardware Details
         Text {
             text: "HARDWARE DETAILS"
             color: "#86868b"
@@ -232,7 +223,6 @@ ScrollView {
             Layout.leftMargin: 6
         }
 
-        // ── Grouped Card: Hardware & Compositor ───────────────────────────
         MacCard {
             Layout.fillWidth: true
             implicitHeight: hwCol.implicitHeight
@@ -244,7 +234,7 @@ ScrollView {
 
                 MacSettingRow {
                     title: "Compositor Engine"
-                    subtitle: typeof bridge !== "undefined" ? bridge.compositorInfo : "tinexus-comp (wlroots 0.19.2)"
+                    subtitle: typeof bridge !== "undefined" ? bridge.compositorInfo : "tinexus-comp (wlroots 0.19)"
                     showSeparator: false
 
                     Text {

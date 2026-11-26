@@ -28,8 +28,17 @@ class ShellBridge : public QObject {
     Q_PROPERTY(int batteryPercent READ batteryPercent NOTIFY batteryChanged)
     Q_PROPERTY(bool networkConnected READ networkConnected NOTIFY networkChanged)
     Q_PROPERTY(int networkBars READ networkBars NOTIFY networkChanged)
+    Q_PROPERTY(bool wifiEnabled READ wifiEnabled NOTIFY wifiChanged)
+    Q_PROPERTY(bool wifiScanning READ wifiScanning NOTIFY wifiChanged)
+    Q_PROPERTY(bool wifiConnecting READ wifiConnecting NOTIFY wifiChanged)
+    Q_PROPERTY(QString connectedSsid READ connectedSsid NOTIFY wifiChanged)
+    Q_PROPERTY(QString connectingSsid READ connectingSsid NOTIFY wifiChanged)
+    Q_PROPERTY(QString wifiIpAddress READ wifiIpAddress NOTIFY wifiChanged)
+    Q_PROPERTY(QString wifiStatusMessage READ wifiStatusMessage NOTIFY wifiChanged)
+    Q_PROPERTY(QVariantList wifiNetworks READ wifiNetworks NOTIFY wifiChanged)
     Q_PROPERTY(int volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(bool soundMuted READ soundMuted WRITE setSoundMuted NOTIFY volumeChanged)
+    Q_PROPERTY(QString outputDeviceName READ outputDeviceName NOTIFY volumeChanged)
     Q_PROPERTY(int brightness READ brightness WRITE setBrightness NOTIFY brightnessChanged)
     Q_PROPERTY(QString activeAppName READ activeAppName WRITE setActiveAppName NOTIFY activeAppChanged)
     Q_PROPERTY(QString logoUrl READ logoUrl CONSTANT)
@@ -41,6 +50,7 @@ class ShellBridge : public QObject {
     Q_PROPERTY(bool notificationsOpen READ notificationsOpen WRITE setNotificationsOpen NOTIFY flyoutStateChanged)
     Q_PROPERTY(bool volumeFlyoutOpen READ volumeFlyoutOpen WRITE setVolumeFlyoutOpen NOTIFY flyoutStateChanged)
     Q_PROPERTY(bool brightnessFlyoutOpen READ brightnessFlyoutOpen WRITE setBrightnessFlyoutOpen NOTIFY flyoutStateChanged)
+    Q_PROPERTY(bool wifiFlyoutOpen READ wifiFlyoutOpen WRITE setWifiFlyoutOpen NOTIFY flyoutStateChanged)
     Q_PROPERTY(bool rebootConfirmationOpen READ rebootConfirmationOpen WRITE setRebootConfirmationOpen NOTIFY flyoutStateChanged)
     Q_PROPERTY(bool shutdownConfirmationOpen READ shutdownConfirmationOpen WRITE setShutdownConfirmationOpen NOTIFY flyoutStateChanged)
 
@@ -73,8 +83,17 @@ public:
     int batteryPercent() const { return m_batteryPercent; }
     bool networkConnected() const { return m_networkConnected; }
     int networkBars() const { return m_networkBars; }
+    bool wifiEnabled() const { return m_wifiEnabled; }
+    bool wifiScanning() const { return m_wifiScanning; }
+    bool wifiConnecting() const { return m_wifiConnecting; }
+    QString connectedSsid() const { return m_connectedSsid; }
+    QString connectingSsid() const { return m_connectingSsid; }
+    QString wifiIpAddress() const { return m_wifiIpAddress; }
+    QString wifiStatusMessage() const { return m_wifiStatusMessage; }
+    QVariantList wifiNetworks() const { return m_wifiNetworks; }
     int volume() const { return m_volume; }
     bool soundMuted() const { return m_soundMuted; }
+    QString outputDeviceName() const { return m_outputDeviceName; }
     int brightness() const { return m_brightness; }
     QString activeAppName() const { return m_activeAppName; }
     QString logoUrl() const { return m_logoUrl; }
@@ -85,6 +104,7 @@ public:
     bool notificationsOpen() const { return m_notificationsOpen; }
     bool volumeFlyoutOpen() const { return m_volumeFlyoutOpen; }
     bool brightnessFlyoutOpen() const { return m_brightnessFlyoutOpen; }
+    bool wifiFlyoutOpen() const { return m_wifiFlyoutOpen; }
     bool rebootConfirmationOpen() const { return m_rebootConfirmationOpen; }
     bool shutdownConfirmationOpen() const { return m_shutdownConfirmationOpen; }
 
@@ -118,6 +138,7 @@ public:
     void setNotificationsOpen(bool open);
     void setVolumeFlyoutOpen(bool open);
     void setBrightnessFlyoutOpen(bool open);
+    void setWifiFlyoutOpen(bool open);
     void setRebootConfirmationOpen(bool open);
     void setShutdownConfirmationOpen(bool open);
 
@@ -129,6 +150,15 @@ public:
     Q_INVOKABLE void toggleNotifications();
     Q_INVOKABLE void toggleVolume();
     Q_INVOKABLE void toggleBrightness();
+    Q_INVOKABLE void toggleWifiFlyout();
+    Q_INVOKABLE void setWifiEnabled(bool enabled);
+    Q_INVOKABLE void scanWifiNetworks();
+    Q_INVOKABLE void connectWifi(const QString& ssid, const QString& password = QString());
+    Q_INVOKABLE void disconnectWifi();
+    Q_INVOKABLE void beginVolumeDrag();
+    Q_INVOKABLE void endVolumeDrag();
+    Q_INVOKABLE void beginBrightnessDrag();
+    Q_INVOKABLE void endBrightnessDrag();
     Q_INVOKABLE void clearNotifications();
     Q_INVOKABLE void dismissNotification(int index);
     Q_INVOKABLE void dismissToast();
@@ -151,11 +181,13 @@ public:
 public slots:
     void onNotificationAdded(uint id, const QString& appName, const QString& appIcon,
                             const QString& summary, const QString& body, int expireTimeout);
+    void onNotificationClosed(uint id, uint reason);
 
 signals:
     void timeChanged();
     void batteryChanged();
     void networkChanged();
+    void wifiChanged();
     void volumeChanged();
     void brightnessChanged();
     void activeAppChanged();
@@ -174,15 +206,26 @@ private slots:
 private:
     void scanApplications();
     void pollBattery();
+    void syncWifiState(bool activeRescan = false);
+    void syncActiveNotifications();
     void resolveLogoUrl();
 
     QString m_currentTime{"12:00 PM"};
     QString m_currentDate{"Wed, Sep 10"};
     int     m_batteryPercent{-1};
-    bool    m_networkConnected{true};
-    int     m_networkBars{4};
+    bool    m_networkConnected{false};
+    int     m_networkBars{0};
+    bool    m_wifiEnabled{true};
+    bool    m_wifiScanning{false};
+    bool    m_wifiConnecting{false};
+    QString m_connectedSsid;
+    QString m_connectingSsid;
+    QString m_wifiIpAddress;
+    QString m_wifiStatusMessage{"Checking Wi-Fi..."};
+    QVariantList m_wifiNetworks;
     int     m_volume{75};
     bool    m_soundMuted{false};
+    QString m_outputDeviceName{"Audio Output"};
     int     m_brightness{80};
     QString m_activeAppName{"Applications"};
     QString m_logoUrl;
@@ -200,6 +243,7 @@ private:
     bool    m_notificationsOpen{false};
     bool    m_volumeFlyoutOpen{false};
     bool    m_brightnessFlyoutOpen{false};
+    bool    m_wifiFlyoutOpen{false};
     bool    m_rebootConfirmationOpen{false};
     bool    m_shutdownConfirmationOpen{false};
 
@@ -214,10 +258,18 @@ private:
     QTimer       m_clockTimer;
     QTimer       m_batteryTimer;
     QTimer       m_audioTimer;
+    QTimer       m_wifiTimer;
     QTimer       m_volumeApplyTimer;
+    QTimer       m_brightnessApplyTimer;
     int          m_pendingVolume{-1};
+    int          m_pendingBrightness{-1};
+    bool         m_draggingVolume{false};
+    bool         m_draggingBrightness{false};
     std::shared_ptr<std::atomic<bool>> m_audioPolling{std::make_shared<std::atomic<bool>>(false)};
     std::shared_ptr<std::atomic<bool>> m_audioWriting{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<bool>> m_brightnessWriting{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<bool>> m_wifiPolling{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<bool>> m_wifiConnectingFlag{std::make_shared<std::atomic<bool>>(false)};
     std::shared_ptr<std::atomic<bool>> m_appsScanning{std::make_shared<std::atomic<bool>>(false)};
 
     struct BlurProtocolState;

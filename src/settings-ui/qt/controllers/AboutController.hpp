@@ -21,6 +21,10 @@ class AboutController : public QObject {
     Q_PROPERTY(QString currentUserRealName READ currentUserRealName NOTIFY userInfoChanged)
     Q_PROPERTY(QString userInitials READ userInitials NOTIFY userInfoChanged)
 
+    Q_PROPERTY(QString systemReportText READ systemReportText NOTIFY systemReportChanged)
+    Q_PROPERTY(bool updateChecking READ updateChecking NOTIFY updateStateChanged)
+    Q_PROPERTY(QString updateStatus READ updateStatus NOTIFY updateStateChanged)
+
 public:
     explicit AboutController(QObject* parent = nullptr);
     ~AboutController() override = default;
@@ -38,14 +42,22 @@ public:
     QString currentUserRealName() const { return m_currentUserRealName; }
     QString userInitials() const { return m_userInitials; }
 
+    QString systemReportText() const { return m_systemReportText; }
+    bool updateChecking() const { return m_updateChecking; }
+    QString updateStatus() const { return m_updateStatus; }
+
 public slots:
     void refreshSystemInfo();
     void refreshUserInfo();
+    void refreshSystemReport();
+    void copySystemReport();
     void checkForUpdates();
 
 signals:
     void aboutInfoChanged();
     void userInfoChanged();
+    void systemReportChanged();
+    void updateStateChanged();
     void toastRequested(const QString& message, bool isError);
 
 private:
@@ -61,6 +73,10 @@ private:
     QString m_currentUserName;
     QString m_currentUserRealName;
     QString m_userInitials;
+
+    QString m_systemReportText;
+    bool m_updateChecking{false};
+    QString m_updateStatus{"System software status: Ready to check"};
 };
 
 } // namespace tinexus::settings_ui

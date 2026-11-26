@@ -113,13 +113,15 @@ static int method_set_value(sd_bus_message* m, void*, sd_bus_error*) {
         const char* val = nullptr;
         sd_bus_message_read(m, "s", &val);
         if (val) {
-            if (k == "theme" || k == "currenttheme") {
+            if (k == "theme" || k == "theme_mode" || k == "currenttheme") {
                 settings.theme = val;
             } else if (k == "wallpaper" || k == "wallpaper_path" || k == "wallpaperpath") {
                 settings.wallpaper_path = val;
                 SettingsDaemon::instance().update_wallpaper(val);
             } else if (k == "accent" || k == "accent_color" || k == "accentcolor") {
                 settings.accent_color = val;
+            } else if (k == "resolution") {
+                settings.resolution = val;
             }
         }
     } else if (type == SD_BUS_TYPE_DOUBLE) {
@@ -128,6 +130,29 @@ static int method_set_value(sd_bus_message* m, void*, sd_bus_error*) {
         if (k == "scale" || k == "display_scale") {
             settings.display_scale = static_cast<float>(val);
         }
+    } else if (type == SD_BUS_TYPE_INT32 || type == SD_BUS_TYPE_UINT32) {
+        int32_t val = 0;
+        sd_bus_message_read(m, (type == SD_BUS_TYPE_UINT32) ? "u" : "i", &val);
+        if (k == "accent_index") settings.accent_index = val;
+        else if (k == "selected_wallpaper_idx") settings.selected_wallpaper_idx = val;
+        else if (k == "display_scale_idx") {
+            settings.display_scale_idx = val;
+            static constexpr float scales[] = {1.0f, 1.25f, 1.5f, 2.0f};
+            if (val >= 0 && val < 4) settings.display_scale = scales[val];
+        } else if (k == "screen_timeout_min") settings.screen_timeout_min = static_cast<uint32_t>(std::max(1, val));
+        else if (k == "sleep_after_min") settings.idle_sleep_timeout_mins = static_cast<uint32_t>(std::max(1, val));
+        else if (k == "power_profile_idx") settings.power_profile_idx = val;
+        else if (k == "clipboard_history_size") settings.clipboard_history_size = val;
+    } else if (type == SD_BUS_TYPE_BOOLEAN) {
+        int val = 0;
+        sd_bus_message_read(m, "b", &val);
+        const bool b = (val != 0);
+        if (k == "night_light") settings.night_light = b;
+        else if (k == "vrr_enabled") settings.vrr_enabled = b;
+        else if (k == "lock_on_sleep") settings.lock_on_sleep = b;
+        else if (k == "pam_auth") settings.pam_auth = b;
+        else if (k == "guard_enabled") settings.guard_enabled = b;
+        else if (k == "sandbox_enabled") settings.sandbox_enabled = b;
     }
     sd_bus_message_exit_container(m);
 

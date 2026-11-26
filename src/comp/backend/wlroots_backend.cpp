@@ -3,6 +3,7 @@
 #include "common/RuntimePaths.hpp"
 #include "common/DBusNames.hpp"
 #include "comp/output/output.hpp"
+#include "comp/output/output_manager.hpp"
 #include <vector>
 #include <memory>
 #include <filesystem>
@@ -2066,11 +2067,14 @@ private:
                 }
             }
 
-            // Auto-focus heuristic for the unified shell
+            // Auto-focus heuristic for the unified shell using active input region extents
+            // (fixed 440px window height shrinks input_region to <= 32px when flyouts are closed)
             if (w->layer_surface->wl_namespace && strcmp(w->layer_surface->wl_namespace, "tinexus-shell") == 0) {
-                if (w->layer_surface->surface->current.height > 100) {
+                const pixman_box32_t* ext = pixman_region32_extents(&w->layer_surface->surface->input_region);
+                const bool has_interactive_flyout = ext && (ext->y2 > 100);
+                if (has_interactive_flyout) {
                     if (w->backend->m_lock_surface == nullptr && FocusManager::instance().keyboard_focus() != w->layer_surface->surface) {
-                        log::info("[LayerShell] Height > 100. Granting keyboard focus to Pulse.");
+                        log::info("[LayerShell] Active flyout input_region y2={} > 100. Granting keyboard focus to Shell.", ext->y2);
                         FocusManager::instance().set_keyboard_focus(w->layer_surface->surface);
                     }
                 } else {
@@ -2898,6 +2902,166 @@ private:
 
     void publish_display_telemetry() const {
         TinexusOutput::publish_primary_display_state(get_primary_output());
+        try {
+            tinexus::common::RuntimePaths::ensure_runtime_dir();
+            std::filesystem::create_directories("/run/tinexus");
+            const std::string user_path = tinexus::common::RuntimePaths::get_runtime_dir() + "/outputs";
+            auto write_outputs = [&](const std::string& path) {
+                std::ofstream out(path);
+                if (!out.is_open()) return;
+                for (const auto& o_ptr : m_outputs) {
+                    if (!o_ptr || !o_ptr->get_wlr_output()) continue;
+                    struct wlr_output* o = o_ptr->get_wlr_output();
+                    int32_t cur_w = o->width;
+                    int32_t cur_h = o->height;
+                    int32_t cur_mhz = o->refresh > 0 ? o->refresh : 60000;
+                    if (o->current_mode) {
+                        cur_w = o->current_mode->width;
+                        cur_h = o->current_mode->height;
+                        cur_mhz = o->current_mode->refresh > 0 ? o->current_mode->refresh : cur_mhz;
+                    }
+                    std::string modes_csv;
+                    struct wlr_output_mode* m = nullptr;
+                    wl_list_for_each(m, &o->modes, link) {
+                        if (!modes_csv.empty()) modes_csv += ',';
+                        modes_csv += std::to_string(m->width) + "x" + std::to_string(m->height) +
+                                     "@" + std::to_string(m->refresh > 0 ? m->refresh : 60000);
+                    }
+                    if (modes_csv.empty() && cur_w > 0 && cur_h > 0) {
+                        modes_csv = std::to_string(cur_w) + "x" + std::to_string(cur_h) + "@" + std::to_string(cur_mhz);
+                    }
+                    out << "output|" << (o->name ? o->name : "Unknown")
+                        << "|" << cur_w << "x" << cur_h
+                        << "|" << cur_mhz
+                        << "|" << o->scale
+                        << "|" << (o->adaptive_sync_supported ? 1 : 0)
+                        << "|" << (o->adaptive_sync_status == WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED ? 1 : 0)
+                        << "|" << modes_csv << "\n";
+                }
+            };
+            write_outputs(user_path);
+            write_outputs("/run/tinexus/outputs");
+        } catch (...) {}
+    }
+
+    bool apply_display_config(const std::string& connector,
+                              int32_t width,
+                              int32_t height,
+                              int32_t refresh_mhz,
+                              float scale,
+                              bool vrr_enabled,
+                              bool night_light,
+                              uint8_t flags) noexcept override {
+        try {
+            struct wlr_output* target = nullptr;
+            for (const auto& o_ptr : m_outputs) {
+                if (!o_ptr || !o_ptr->get_wlr_output()) continue;
+                struct wlr_output* o = o_ptr->get_wlr_output();
+                if (connector.empty() || (o->name && connector == o->name)) {
+                    target = o;
+                    break;
+                }
+            }
+            if (!target) {
+                target = get_primary_output();
+            }
+            if (!target) return false;
+
+            struct wlr_output_state state{};
+            wlr_output_state_init(&state);
+
+            if ((flags & (1 << 0)) != 0 && width > 0 && height > 0) {
+                struct wlr_output_mode* best_mode = nullptr;
+                int32_t best_diff = INT32_MAX;
+                struct wlr_output_mode* m = nullptr;
+                wl_list_for_each(m, &target->modes, link) {
+                    if (m->width == width && m->height == height) {
+                        int32_t diff = (refresh_mhz > 0) ? std::abs(m->refresh - refresh_mhz) : 0;
+                        if (!best_mode || diff < best_diff) {
+                            best_mode = m;
+                            best_diff = diff;
+                        }
+                    }
+                }
+                if (best_mode) {
+                    wlr_output_state_set_mode(&state, best_mode);
+                } else {
+                    wlr_output_state_set_custom_mode(&state, width, height,
+                                                     refresh_mhz > 0 ? refresh_mhz : 60000);
+                }
+            }
+
+            if ((flags & (1 << 1)) != 0 && scale >= 0.5f && scale <= 4.0f) {
+                wlr_output_state_set_scale(&state, scale);
+            }
+
+            if ((flags & (1 << 2)) != 0 && target->adaptive_sync_supported) {
+                wlr_output_state_set_adaptive_sync_enabled(&state, vrr_enabled);
+            }
+
+            std::vector<uint16_t> gamma_table;
+            if ((flags & (1 << 3)) != 0) {
+                const size_t gamma_sz = wlr_output_get_gamma_size(target);
+                if (gamma_sz > 1) {
+                    gamma_table.resize(gamma_sz * 3);
+                    const double r_gain = night_light ? 1.0 : 1.0;
+                    const double g_gain = night_light ? 0.84 : 1.0;
+                    const double b_gain = night_light ? 0.62 : 1.0;
+                    for (size_t i = 0; i < gamma_sz; ++i) {
+                        double t = static_cast<double>(i) / static_cast<double>(gamma_sz - 1);
+                        gamma_table[i] = static_cast<uint16_t>(std::clamp(t * r_gain, 0.0, 1.0) * 65535.0);
+                        gamma_table[gamma_sz + i] = static_cast<uint16_t>(std::clamp(t * g_gain, 0.0, 1.0) * 65535.0);
+                        gamma_table[2 * gamma_sz + i] = static_cast<uint16_t>(std::clamp(t * b_gain, 0.0, 1.0) * 65535.0);
+                    }
+                    wlr_output_state_set_gamma_lut(&state, gamma_sz,
+                                                   gamma_table.data(),
+                                                   gamma_table.data() + gamma_sz,
+                                                   gamma_table.data() + 2 * gamma_sz);
+                }
+            }
+
+            bool ok = wlr_output_commit_state(target, &state);
+            wlr_output_state_finish(&state);
+
+            if (ok) {
+                int32_t eff_w = target->width;
+                int32_t eff_h = target->height;
+                int32_t eff_mhz = target->refresh > 0 ? target->refresh : 60000;
+                if (target->current_mode) {
+                    eff_w = target->current_mode->width;
+                    eff_h = target->current_mode->height;
+                    eff_mhz = target->current_mode->refresh > 0 ? target->current_mode->refresh : eff_mhz;
+                }
+                OutputConfig cfg;
+                cfg.name = target->name ? target->name : "Unknown";
+                cfg.width = eff_w;
+                cfg.height = eff_h;
+                cfg.refresh_rate_mhz = eff_mhz;
+                cfg.scale = target->scale;
+                cfg.enabled = true;
+                OutputManager::instance().add_output(cfg);
+
+                rearrange_layers(target);
+                update_background_fill();
+                update_workspace_viewport();
+                publish_display_telemetry();
+                for (const auto& w : m_toplevels) {
+                    if (w && w->toplevel && w->toplevel->base && w->toplevel->base->surface &&
+                        get_output_for_toplevel(w.get()) == target) {
+                        wlr_fractional_scale_v1_notify_scale(w->toplevel->base->surface, target->scale);
+                    }
+                }
+                mark_all_outputs_overlay_dirty(true);
+                log::info("[DisplayConfig] Applied display config on '{}': {}x{}@{}mHz scale={} vrr={} night_light={}",
+                          cfg.name, eff_w, eff_h, eff_mhz, target->scale, vrr_enabled, night_light);
+            } else {
+                log::warn("[DisplayConfig] Compositor rejected output commit on '{}'",
+                          target->name ? target->name : "Unknown");
+            }
+            return ok;
+        } catch (...) {
+            return false;
+        }
     }
 
     void position_launcher_toplevel(ToplevelWrapper* wrapper, int32_t width_hint = 640) {

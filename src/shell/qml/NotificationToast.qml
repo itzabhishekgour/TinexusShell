@@ -40,6 +40,7 @@ Item {
         anchors.fill: parent
         anchors.margins: 10
         spacing: 10
+        z: 2
 
         // App Icon Badge (38x38)
         Rectangle {

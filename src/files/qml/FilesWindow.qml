@@ -403,28 +403,100 @@ Window {
                     border.width: rootWindow.addressBarEditMode ? 1.5 : 1
                     Layout.alignment: Qt.AlignVCenter
 
-                    // Breadcrumb Display Mode
+                    // Interactive Clickable Breadcrumb Display Mode
                     RowLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: 10
-                        anchors.rightMargin: 10
-                        spacing: 8
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 6
                         visible: !rootWindow.addressBarEditMode
 
                         FileVectorIcon {
                             iconKind: "folder"
+                            iconName: (typeof bridge !== "undefined" && bridge.isInTrash) ? "user-trash" : "inode-directory"
                             isDir: true
                             iconSize: 16
                             Layout.alignment: Qt.AlignVCenter
                         }
 
-                        Text {
-                            text: typeof bridge !== "undefined" ? bridge.currentPath : "/"
-                            color: "#FFFFFF"
-                            font.pixelSize: 12
-                            elide: Text.ElideMiddle
+                        Flickable {
+                            id: crumbFlick
                             Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
+                            Layout.fillHeight: true
+                            clip: true
+                            contentWidth: crumbRow.implicitWidth
+                            contentHeight: height
+                            boundsBehavior: Flickable.StopAtBounds
+                            onContentWidthChanged: {
+                                if (contentWidth > width) {
+                                    contentX = contentWidth - width
+                                }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                z: -1
+                                cursorShape: Qt.IBeamCursor
+                                onClicked: {
+                                    rootWindow.addressBarEditMode = true;
+                                    addressInput.text = typeof bridge !== "undefined" ? bridge.currentPath : "/";
+                                    addressInput.forceActiveFocus();
+                                    addressInput.selectAll();
+                                }
+                            }
+
+                            Row {
+                                id: crumbRow
+                                height: parent.height
+                                spacing: 2
+
+                                Repeater {
+                                    model: typeof bridge !== "undefined" ? bridge.breadcrumbs : []
+
+                                    delegate: Row {
+                                        height: parent.height
+                                        spacing: 2
+
+                                        Text {
+                                            visible: index > 0
+                                            text: "›"
+                                            color: Qt.rgba(1, 1, 1, 0.35)
+                                            font.pixelSize: 12
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+
+                                        Rectangle {
+                                            readonly property bool isLast: index === (typeof bridge !== "undefined" ? bridge.breadcrumbs.length - 1 : 0)
+                                            width: crumbLbl.implicitWidth + 10
+                                            height: 22
+                                            radius: 5
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            color: crumbMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.14) : "transparent"
+
+                                            Text {
+                                                id: crumbLbl
+                                                anchors.centerIn: parent
+                                                text: modelData.label || ""
+                                                color: isLast ? "#FFFFFF" : Qt.rgba(1, 1, 1, 0.72)
+                                                font.pixelSize: 12
+                                                font.weight: isLast ? Font.DemiBold : Font.Normal
+                                            }
+
+                                            MouseArea {
+                                                id: crumbMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    if (typeof bridge !== "undefined" && modelData.path) {
+                                                        bridge.cd(modelData.path);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         Item {
@@ -440,18 +512,6 @@ Window {
                             MouseArea {
                                 id: refMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: { if (typeof bridge !== "undefined") bridge.refresh() }
-                            }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.IBeamCursor
-                            z: -1
-                            onClicked: {
-                                rootWindow.addressBarEditMode = true;
-                                addressInput.text = typeof bridge !== "undefined" ? bridge.currentPath : "/";
-                                addressInput.forceActiveFocus();
-                                addressInput.selectAll();
                             }
                         }
                     }
@@ -813,6 +873,70 @@ Window {
             }
         }
 
+        // ── 1C. Trash Banner (Visible when browsing Trash) ───────────
+        Rectangle {
+            Layout.fillWidth: true
+            height: (typeof bridge !== "undefined" && bridge.isInTrash) ? 34 : 0
+            visible: height > 0
+            clip: true
+            color: Qt.rgba(1.0, 0.27, 0.23, 0.12)
+            border.color: Qt.rgba(1.0, 0.27, 0.23, 0.30)
+            border.width: 1
+            z: 19
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 10
+
+                FileVectorIcon {
+                    iconKind: "file"
+                    iconName: "user-trash"
+                    isDir: true
+                    iconSize: 16
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Text {
+                    text: "Trash — Right-click an item to restore or delete permanently"
+                    color: "#FFFFFF"
+                    font.pixelSize: 12
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Rectangle {
+                    width: 88
+                    height: 24
+                    radius: 5
+                    visible: typeof bridge !== "undefined" && bridge.itemCount > 0
+                    color: emptyTrashMouse.containsMouse ? "#FF453A" : Qt.rgba(1.0, 0.27, 0.23, 0.25)
+                    border.color: Qt.rgba(1.0, 0.27, 0.23, 0.45)
+                    border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Empty Trash"
+                        color: "#FFFFFF"
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+
+                    MouseArea {
+                        id: emptyTrashMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof bridge !== "undefined") bridge.emptyTrash();
+                        }
+                    }
+                }
+            }
+        }
+
         // ── 2. Main Body: Sidebar + Dynamic Viewports ───────────────
         RowLayout {
             Layout.fillWidth: true
@@ -925,6 +1049,7 @@ Window {
                 }
 
                 MouseArea {
+                    id: bgMouse
                     anchors.fill: parent
                     acceptedButtons: Qt.RightButton | Qt.LeftButton
 
@@ -994,8 +1119,9 @@ Window {
                             rootWindow.contextMenuTarget = typeof bridge !== "undefined" ? bridge.currentPath : "";
                             rootWindow.contextMenuIsDir = true;
                             rootWindow.contextMenuIsBg = true;
-                            rootWindow.contextMenuX = mouse.x + 190;
-                            rootWindow.contextMenuY = mouse.y + 52;
+                            var pt = bgMouse.mapToItem(rootWindow.contentItem, mouse.x, mouse.y);
+                            rootWindow.contextMenuX = pt.x;
+                            rootWindow.contextMenuY = pt.y;
                             rootWindow.contextMenuVisible = true;
                         } else {
                             rootWindow.contextMenuVisible = false;
@@ -1044,6 +1170,7 @@ Window {
                                     FileVectorIcon {
                                         anchors.centerIn: parent
                                         iconKind: modelData.iconKind
+                                        iconName: modelData.iconName ? modelData.iconName : ""
                                         isDir: modelData.isDir
                                         iconSize: 44
                                     }
@@ -1323,6 +1450,7 @@ Window {
 
                                         FileVectorIcon {
                                             iconKind: modelData.iconKind
+                                            iconName: modelData.iconName ? modelData.iconName : ""
                                             isDir: modelData.isDir
                                             iconSize: 20
                                             anchors.verticalCenter: parent.verticalCenter
@@ -1511,6 +1639,7 @@ Window {
 
                                                 FileVectorIcon {
                                                     iconKind: modelData.iconKind
+                                                    iconName: modelData.iconName ? modelData.iconName : ""
                                                     isDir: modelData.isDir
                                                     iconSize: 16
                                                     anchors.verticalCenter: parent.verticalCenter
@@ -1617,6 +1746,7 @@ Window {
                                 FileVectorIcon {
                                     anchors.centerIn: parent
                                     iconKind: details ? details.iconKind : "file"
+                                    iconName: (details && details.iconName) ? details.iconName : ""
                                     isDir: details ? details.isDir : false
                                     iconSize: 64
                                     visible: !details || details.iconKind !== "image"
@@ -1709,7 +1839,7 @@ Window {
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Move to Trash"
+                                    text: (typeof bridge !== "undefined" && bridge.isInTrash) ? "Delete Permanently" : "Move to Trash"
                                     color: "#FF453A"
                                     font.pixelSize: 11
                                 }
@@ -1753,6 +1883,7 @@ Window {
                             FileVectorIcon {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 iconKind: parent.parent.details ? parent.parent.details.iconKind : "file"
+                                iconName: (parent.parent.details && parent.parent.details.iconName) ? parent.parent.details.iconName : ""
                                 isDir: parent.parent.details ? parent.parent.details.isDir : false
                                 iconSize: 110
                             }
@@ -1808,6 +1939,7 @@ Window {
                                         FileVectorIcon {
                                             anchors.horizontalCenter: parent.horizontalCenter
                                             iconKind: modelData.iconKind
+                                            iconName: modelData.iconName ? modelData.iconName : ""
                                             isDir: modelData.isDir
                                             iconSize: 32
                                         }
@@ -1852,25 +1984,30 @@ Window {
     Rectangle {
         id: contextMenu
         visible: rootWindow.contextMenuVisible
-        x: Math.min(rootWindow.width - width - 8, rootWindow.contextMenuX)
-        y: Math.min(rootWindow.height - height - 8, rootWindow.contextMenuY)
-        width: 195
-        height: rootWindow.contextMenuIsBg ? 150 : 280
+        x: Math.max(8, Math.min(rootWindow.width - width - 8, rootWindow.contextMenuX))
+        y: Math.max(8, Math.min(rootWindow.height - height - 8, rootWindow.contextMenuY))
+        width: 205
+        height: ctxCol.implicitHeight + 10
         radius: 8
         color: Qt.rgba(24 / 255.0, 27 / 255.0, 36 / 255.0, 0.96)
         border.color: Qt.rgba(1, 1, 1, 0.16)
         border.width: 1
         z: 99
 
+        readonly property bool inTrash: typeof bridge !== "undefined" && bridge.isInTrash
+
         Column {
-            anchors.fill: parent
+            id: ctxCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
             anchors.margins: 4
             spacing: 2
 
             // Background Actions
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: rootWindow.contextMenuIsBg
+                visible: rootWindow.contextMenuIsBg && !contextMenu.inTrash
                 color: bgNewFMouse.containsMouse ? "#0A84FF" : "transparent"
                 Text { text: "New Folder"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
                 MouseArea {
@@ -1880,7 +2017,7 @@ Window {
             }
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: rootWindow.contextMenuIsBg
+                visible: rootWindow.contextMenuIsBg && !contextMenu.inTrash
                 color: bgNewDocMouse.containsMouse ? "#0A84FF" : "transparent"
                 Text { text: "New Document"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
                 MouseArea {
@@ -1893,7 +2030,7 @@ Window {
             }
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: rootWindow.contextMenuIsBg
+                visible: rootWindow.contextMenuIsBg && !contextMenu.inTrash
                 color: bgPasteMouse.containsMouse ? "#0A84FF" : "transparent"
                 opacity: (typeof bridge !== "undefined" && bridge.hasClipboard) ? 1.0 : 0.4
                 Text { text: "Paste"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
@@ -1901,6 +2038,16 @@ Window {
                     id: bgPasteMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                     enabled: typeof bridge !== "undefined" && bridge.hasClipboard
                     onClicked: { rootWindow.contextMenuVisible = false; if (typeof bridge !== "undefined") bridge.pasteItem(); }
+                }
+            }
+            Rectangle {
+                width: parent.width; height: 26; radius: 5
+                visible: rootWindow.contextMenuIsBg && contextMenu.inTrash && (typeof bridge !== "undefined" && bridge.itemCount > 0)
+                color: bgEmptyTrashMouse.containsMouse ? "#FF453A" : "transparent"
+                Text { text: "Empty Trash"; color: bgEmptyTrashMouse.containsMouse ? "#FFFFFF" : "#FF453A"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
+                MouseArea {
+                    id: bgEmptyTrashMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: { rootWindow.contextMenuVisible = false; if (typeof bridge !== "undefined") bridge.emptyTrash(); }
                 }
             }
             Rectangle {
@@ -1917,7 +2064,17 @@ Window {
             // Item Specific Actions
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: !rootWindow.contextMenuIsBg
+                visible: !rootWindow.contextMenuIsBg && contextMenu.inTrash
+                color: itmRestoreMouse.containsMouse ? "#30D158" : "transparent"
+                Text { text: "Restore from Trash"; color: itmRestoreMouse.containsMouse ? "#FFFFFF" : "#30D158"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
+                MouseArea {
+                    id: itmRestoreMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: { rootWindow.contextMenuVisible = false; if (typeof bridge !== "undefined") bridge.restoreItem(rootWindow.contextMenuTarget); }
+                }
+            }
+            Rectangle {
+                width: parent.width; height: 26; radius: 5
+                visible: !rootWindow.contextMenuIsBg && !contextMenu.inTrash
                 color: itmOpenMouse.containsMouse ? "#0A84FF" : "transparent"
                 Text { text: "Open"; color: "#FFFFFF"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
                 MouseArea {
@@ -1959,7 +2116,7 @@ Window {
             }
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: !rootWindow.contextMenuIsBg
+                visible: !rootWindow.contextMenuIsBg && !contextMenu.inTrash
                 color: itmCopyMouse.containsMouse ? "#0A84FF" : "transparent"
                 Text { text: typeof bridge !== "undefined" && bridge.selectedCount > 1 ? ("Copy (" + bridge.selectedCount + " items)") : "Copy"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
                 MouseArea {
@@ -1978,7 +2135,7 @@ Window {
             }
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: !rootWindow.contextMenuIsBg
+                visible: !rootWindow.contextMenuIsBg && !contextMenu.inTrash
                 color: itmCutMouse.containsMouse ? "#0A84FF" : "transparent"
                 Text { text: typeof bridge !== "undefined" && bridge.selectedCount > 1 ? ("Cut (" + bridge.selectedCount + " items)") : "Cut"; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
                 MouseArea {
@@ -1997,7 +2154,7 @@ Window {
             }
             Rectangle {
                 width: parent.width; height: 26; radius: 5
-                visible: !rootWindow.contextMenuIsBg && (typeof bridge === "undefined" || bridge.selectedCount <= 1)
+                visible: !rootWindow.contextMenuIsBg && !contextMenu.inTrash && (typeof bridge === "undefined" || bridge.selectedCount <= 1)
                 color: itmRenMouse.containsMouse ? "#0A84FF" : "transparent"
                 Text { text: "Rename..."; color: "#FFFFFF"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
                 MouseArea {
@@ -2013,7 +2170,12 @@ Window {
                 width: parent.width; height: 26; radius: 5
                 visible: !rootWindow.contextMenuIsBg
                 color: itmDelMouse.containsMouse ? "#FF453A" : "transparent"
-                Text { text: typeof bridge !== "undefined" && bridge.selectedCount > 1 ? ("Move " + bridge.selectedCount + " items to Trash") : "Move to Trash"; color: itmDelMouse.containsMouse ? "#FFFFFF" : "#FF453A"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10 }
+                Text {
+                    text: contextMenu.inTrash
+                          ? (typeof bridge !== "undefined" && bridge.selectedCount > 1 ? ("Delete " + bridge.selectedCount + " items Permanently") : "Delete Permanently")
+                          : (typeof bridge !== "undefined" && bridge.selectedCount > 1 ? ("Move " + bridge.selectedCount + " items to Trash") : "Move to Trash")
+                    color: itmDelMouse.containsMouse ? "#FFFFFF" : "#FF453A"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10
+                }
                 MouseArea {
                     id: itmDelMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                     onClicked: {

@@ -18,6 +18,7 @@
 #include <cmath>
 
 #include <QtCore/QEvent>
+#include <QtCore/QTimer>
 
 #if defined(HAVE_LAYERSHELL) && HAVE_LAYERSHELL
 #include <LayerShellQt/Window>
@@ -35,6 +36,7 @@ protected:
                 bool anyOpen = m_bridge->logoMenuOpen() || m_bridge->appMenuOpen() ||
                                m_bridge->calendarOpen() || m_bridge->notificationsOpen() ||
                                m_bridge->volumeFlyoutOpen() || m_bridge->brightnessFlyoutOpen() ||
+                               m_bridge->wifiFlyoutOpen() ||
                                m_bridge->rebootConfirmationOpen() || m_bridge->shutdownConfirmationOpen();
                 if (anyOpen) {
                     tinexus::log::debug("[shell] Focus lost — auto-dismissing active flyout");
@@ -124,6 +126,7 @@ int main(int argc, char* argv[]) {
                                                                     LayerShellQt::Window::AnchorLeft |
                                                                     LayerShellQt::Window::AnchorRight));
             lsWin->setExclusiveZone(32);
+            lsWin->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityOnDemand);
             lsWin->setScope(QStringLiteral("tinexus-shell"));
             std::cout << "[tinexus-shell] LayerShellQt configured: Layer=Top, ExclusiveZone=32, Scope=tinexus-shell" << std::endl;
         }
@@ -203,10 +206,11 @@ int main(int argc, char* argv[]) {
 
             addFlyoutItemMask("logoFlyout",   QRect(8, 36, 224, 274),        bridge.logoMenuOpen());
             addFlyoutItemMask("appsFlyout",   QRect(48, 36, 248, 360),       bridge.appMenuOpen());
-            addFlyoutItemMask("calFlyout",    QRect(cx - 90, 48, 300, 310),  bridge.calendarOpen());
+            addFlyoutItemMask("calFlyout",    QRect(cx - 90, 36, 284, 326),  bridge.calendarOpen());
             addFlyoutItemMask("notifFlyout",  QRect(w - 376, 36, 360, 182),  bridge.notificationsOpen());
-            addFlyoutItemMask("volFlyout",    QRect(w - 295, 36, 256, 174),  bridge.volumeFlyoutOpen());
-            addFlyoutItemMask("briFlyout",    QRect(w - 325, 36, 250, 116),  bridge.brightnessFlyoutOpen());
+            addFlyoutItemMask("volFlyout",    QRect(w - 310, 36, 272, 178),  bridge.volumeFlyoutOpen());
+            addFlyoutItemMask("briFlyout",    QRect(w - 340, 36, 272, 122),  bridge.brightnessFlyoutOpen());
+            addFlyoutItemMask("wifiFlyout",   QRect(w - 350, 36, 300, 310),  bridge.wifiFlyoutOpen());
             addFlyoutItemMask("powerDialog",  QRect(cx - 190, 60, 380, 180), bridge.rebootConfirmationOpen() || bridge.shutdownConfirmationOpen());
             addFlyoutItemMask("notifToast",   QRect(w - 368, 40, 350, 68),   bridge.toastVisible());
 
@@ -214,6 +218,18 @@ int main(int argc, char* argv[]) {
             window->requestUpdate();
             bridge.syncBlurRegion(mask);
             tinexus::log::debug("[shell] Applied dynamic compound input/blur mask (rect count={})", mask.rectCount());
+        };
+
+        // Coalesce multiple QML layout/loader/flyout signals within the same frame into one
+        // input-mask + blur-region commit to eliminate redundant Wayland surface commits.
+        auto* maskSyncTimer = new QTimer(window);
+        maskSyncTimer->setSingleShot(true);
+        maskSyncTimer->setInterval(0);
+        QObject::connect(maskSyncTimer, &QTimer::timeout, window, applyInputMask);
+        auto scheduleInputMask = [maskSyncTimer]() {
+            if (!maskSyncTimer->isActive()) {
+                maskSyncTimer->start();
+            }
         };
 
         // Install event filter for auto-dismissing flyouts on focus loss
@@ -225,23 +241,23 @@ int main(int argc, char* argv[]) {
 
         // Re-apply whenever flyout state changes
         QObject::connect(&bridge, &tinexus::shell::ShellBridge::flyoutStateChanged,
-                         window, applyInputMask);
+                         window, scheduleInputMask);
 
         // Re-apply whenever toast visibility changes
         QObject::connect(&bridge, &tinexus::shell::ShellBridge::toastVisibleChanged,
-                         window, applyInputMask);
+                         window, scheduleInputMask);
 
         // Re-apply whenever AuraNotch expands or collapses
         QObject::connect(&bridge, &tinexus::shell::ShellBridge::notchExpandedChanged,
-                         window, applyInputMask);
+                         window, scheduleInputMask);
 
         // Re-apply when QML flyout loaders / spring animations settle
         QObject::connect(&bridge, &tinexus::shell::ShellBridge::overlayGeometrySyncRequested,
-                         window, applyInputMask);
+                         window, scheduleInputMask);
 
         // Re-apply if window width changes (e.g. dynamic output resize)
         QObject::connect(window, &QWindow::widthChanged, window,
-                         [applyInputMask](int /*newW*/) { applyInputMask(); });
+                         [scheduleInputMask](int /*newW*/) { scheduleInputMask(); });
 
         window->show();
         applyInputMask();

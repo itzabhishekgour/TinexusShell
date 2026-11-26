@@ -1,5 +1,6 @@
 #include "notifications/dbus_server.hpp"
 #include "notifications/notification_server.hpp"
+#include "notifications/notification_manager.hpp"
 #include "common/logger.hpp"
 #include <vector>
 
@@ -11,6 +12,8 @@ static const sd_bus_vtable notifications_vtable[] = {
     SD_BUS_METHOD("CloseNotification", "u", "", DBusServer::method_close_notification, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("GetCapabilities", "", "as", DBusServer::method_get_capabilities, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("GetServerInformation", "", "ssss", DBusServer::method_get_server_information, SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("GetActiveNotifications", "", "a(ussssi)", DBusServer::method_get_active_notifications, SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("ClearAll", "", "", DBusServer::method_clear_all, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_SIGNAL("NotificationClosed", "uu", 0),
     SD_BUS_SIGNAL("ActionInvoked", "us", 0),
     SD_BUS_SIGNAL("NotificationAdded", "ussssi", 0),
@@ -175,12 +178,66 @@ int DBusServer::method_notify(sd_bus_message *m, void *, sd_bus_error *ret_error
 }
 
 int DBusServer::method_close_notification(sd_bus_message *m, void *, sd_bus_error *ret_error) {
-    uint32_t id;
+    (void)ret_error;
+    uint32_t id = 0;
     int r = sd_bus_message_read(m, "u", &id);
     if (r < 0) return r;
 
-    NotificationServer::instance().close_notification(id);
-    
+    if (NotificationServer::instance().close_notification(id)) {
+        DBusServer::instance().emit_notification_closed(id, 3); // 3 = ClosedByCall
+    }
+
+    return sd_bus_reply_method_return(m, "");
+}
+
+int DBusServer::method_get_active_notifications(sd_bus_message *m, void *, sd_bus_error *ret_error) {
+    (void)ret_error;
+    sd_bus_message *reply = nullptr;
+    int r = sd_bus_message_new_method_return(m, &reply);
+    if (r < 0) return r;
+
+    r = sd_bus_message_open_container(reply, SD_BUS_TYPE_ARRAY, "(ussssi)");
+    if (r < 0) {
+        sd_bus_message_unref(reply);
+        return r;
+    }
+
+    const auto active = NotificationManager::instance().active_queue();
+    for (const auto& n : active) {
+        r = sd_bus_message_append(reply, "(ussssi)",
+                                  static_cast<uint32_t>(n.id),
+                                  n.app_name.c_str(),
+                                  n.app_icon.c_str(),
+                                  n.summary.c_str(),
+                                  n.body.c_str(),
+                                  n.expire_timeout_ms);
+        if (r < 0) {
+            sd_bus_message_unref(reply);
+            return r;
+        }
+    }
+
+    r = sd_bus_message_close_container(reply);
+    if (r < 0) {
+        sd_bus_message_unref(reply);
+        return r;
+    }
+
+    r = sd_bus_send(nullptr, reply, nullptr);
+    sd_bus_message_unref(reply);
+    return (r < 0) ? r : 1;
+}
+
+int DBusServer::method_clear_all(sd_bus_message *m, void *, sd_bus_error *ret_error) {
+    (void)ret_error;
+    const auto active = NotificationManager::instance().active_queue();
+    for (const auto& n : active) {
+        if (NotificationManager::instance().close_notification(n.id, ClosedReason::Dismissed)) {
+            DBusServer::instance().emit_notification_closed(
+                static_cast<uint32_t>(n.id),
+                static_cast<uint32_t>(ClosedReason::Dismissed));
+        }
+    }
     return sd_bus_reply_method_return(m, "");
 }
 

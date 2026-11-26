@@ -1,7 +1,7 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
 
-find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 DBus Svg QUIET)
+find_package(Qt6 COMPONENTS Core Gui Quick Qml QuickControls2 DBus Svg WaylandClient QUIET)
 
 if(Qt6_FOUND)
     set(SETTINGS_CONTROLLER_SRCS
@@ -13,6 +13,8 @@ if(Qt6_FOUND)
         qt/controllers/AboutController.cpp
         qt/controllers/PrivacyController.cpp
         qt/controllers/SearchController.cpp
+        qt/controllers/BluetoothController.cpp
+        qt/controllers/UsersController.cpp
     )
 
     # Qt6 QML Settings Application
@@ -31,7 +33,7 @@ if(Qt6_FOUND)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
 
-    target_include_directories(tinexus-settings-ui PRIVATE include qt ${CMAKE_SOURCE_DIR}/include)
+    target_include_directories(tinexus-settings-ui PRIVATE include qt ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/ipcd/include)
 
     target_link_libraries(tinexus-settings-ui PRIVATE
         Qt6::Core
@@ -41,6 +43,9 @@ if(Qt6_FOUND)
         Qt6::QuickControls2
         Qt6::DBus
         Qt6::Svg
+        Qt6::WaylandClient
+        PkgConfig::WAYLAND_CLIENT
+        tinexus_protocols
         tinexus_common
         tinexus_warnings
         tinexus-guard
@@ -61,7 +66,7 @@ if(Qt6_FOUND)
         AUTOMOC ON
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-    target_include_directories(test-settings-render PRIVATE include qt ${CMAKE_SOURCE_DIR}/include)
+    target_include_directories(test-settings-render PRIVATE include qt ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/ipcd/include)
     target_link_libraries(test-settings-render PRIVATE
         Qt6::Core
         Qt6::Gui
@@ -87,7 +92,7 @@ if(Qt6_FOUND)
         AUTOMOC ON
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-    target_include_directories(test-settings-wifi-render PRIVATE include qt ${CMAKE_SOURCE_DIR}/include)
+    target_include_directories(test-settings-wifi-render PRIVATE include qt ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/ipcd/include)
     target_link_libraries(test-settings-wifi-render PRIVATE
         Qt6::Core
         Qt6::Gui
@@ -113,7 +118,7 @@ if(Qt6_FOUND)
         AUTOMOC ON
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-    target_include_directories(test-about-live PRIVATE include qt ${CMAKE_SOURCE_DIR}/include)
+    target_include_directories(test-about-live PRIVATE include qt ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/ipcd/include)
     target_link_libraries(test-about-live PRIVATE
         Qt6::Core
         Qt6::Gui
