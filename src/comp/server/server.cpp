@@ -495,6 +495,16 @@ int TinexusServer::handle_ipc_fd(int fd, uint32_t mask, void* data) {
 
 void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, uint32_t payload_len) {
     using namespace tinexus::ipcd::protocol;
+    if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_ICON_POSITION) &&
+        payload_len >= sizeof(DockIconPositionPayload)) {
+        const auto* p = static_cast<const DockIconPositionPayload*>(payload);
+        char safe_app[129]{};
+        std::memcpy(safe_app, p->app_id, sizeof(p->app_id));
+        if (m_backend && safe_app[0] != '\0') {
+            m_backend->update_dock_icon_position(safe_app, p->x, p->y, p->w, p->h);
+        }
+        return;
+    }
     if (msg_type == static_cast<uint16_t>(DockMessageType::DOCK_RESTORE_REQUEST) && payload_len >= sizeof(DockNotifyPayload)) {
         const auto* p = static_cast<const DockNotifyPayload*>(payload);
         if (m_backend) {
@@ -514,7 +524,7 @@ void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, 
             struct {
                 Header hdr;
                 DockFocusChangedPayload pld;
-            } __attribute__((packed)) msg;
+            } __attribute__((packed)) msg{};
             msg.hdr.magic = TINEXUS_IPC_MAGIC;
             msg.hdr.version = TINEXUS_IPC_VERSION_1;
             msg.hdr.msg_type = static_cast<uint16_t>(DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED);
@@ -532,16 +542,12 @@ void TinexusServer::notify_window_minimized(const std::string& app_id) {
         struct {
             tinexus::ipcd::protocol::Header hdr;
             tinexus::ipcd::protocol::DockNotifyPayload pld;
-        } __attribute__((packed)) msg;
+        } __attribute__((packed)) msg{};
         msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
         msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
         msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_MINIMIZED);
         msg.hdr.payload_len = sizeof(msg.pld);
-        msg.hdr.sequence_id = 0;
-        msg.hdr.flags = 0;
-        msg.hdr.checksum = 0;
         strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
-        msg.pld.surface_id = 0;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
 }
@@ -552,16 +558,12 @@ void TinexusServer::notify_window_restored(const std::string& app_id) {
         struct {
             tinexus::ipcd::protocol::Header hdr;
             tinexus::ipcd::protocol::DockNotifyPayload pld;
-        } __attribute__((packed)) msg;
+        } __attribute__((packed)) msg{};
         msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
         msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
         msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_RESTORED);
         msg.hdr.payload_len = sizeof(msg.pld);
-        msg.hdr.sequence_id = 0;
-        msg.hdr.flags = 0;
-        msg.hdr.checksum = 0;
         strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
-        msg.pld.surface_id = 0;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
 }
@@ -572,16 +574,12 @@ void TinexusServer::notify_app_started(const std::string& app_id) {
         struct {
             tinexus::ipcd::protocol::Header hdr;
             tinexus::ipcd::protocol::DockNotifyPayload pld;
-        } __attribute__((packed)) msg;
+        } __attribute__((packed)) msg{};
         msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
         msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
         msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_STARTED);
         msg.hdr.payload_len = sizeof(msg.pld);
-        msg.hdr.sequence_id = 0;
-        msg.hdr.flags = 0;
-        msg.hdr.checksum = 0;
         strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
-        msg.pld.surface_id = 0;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
 }
@@ -592,16 +590,12 @@ void TinexusServer::notify_app_closed(const std::string& app_id) {
         struct {
             tinexus::ipcd::protocol::Header hdr;
             tinexus::ipcd::protocol::DockNotifyPayload pld;
-        } __attribute__((packed)) msg;
+        } __attribute__((packed)) msg{};
         msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
         msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
         msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_APP_CLOSED);
         msg.hdr.payload_len = sizeof(msg.pld);
-        msg.hdr.sequence_id = 0;
-        msg.hdr.flags = 0;
-        msg.hdr.checksum = 0;
         strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
-        msg.pld.surface_id = 0;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
 }
@@ -612,17 +606,31 @@ void TinexusServer::notify_app_focus_changed(const std::string& app_id, uint8_t 
         struct {
             tinexus::ipcd::protocol::Header hdr;
             tinexus::ipcd::protocol::DockFocusChangedPayload pld;
-        } __attribute__((packed)) msg;
+        } __attribute__((packed)) msg{};
         msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
         msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
         msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_NOTIFY_FOCUS_CHANGED);
         msg.hdr.payload_len = sizeof(msg.pld);
-        msg.hdr.sequence_id = 0;
-        msg.hdr.flags = 0;
-        msg.hdr.checksum = 0;
         strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
         msg.pld.is_focused = is_focused;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
+    }
+}
+
+void TinexusServer::query_dock_icon_position(const std::string& app_id) {
+    if (app_id.empty()) return;
+    if (m_ipc_socket < 0) setup_ipc_connection();
+    if (m_ipc_socket >= 0) {
+        struct {
+            tinexus::ipcd::protocol::Header hdr;
+            tinexus::ipcd::protocol::DockQueryIconPositionPayload pld;
+        } __attribute__((packed)) msg{};
+        msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+        msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+        msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_QUERY_ICON_POSITION);
+        msg.hdr.payload_len = sizeof(msg.pld);
+        strncpy(msg.pld.app_id, app_id.c_str(), sizeof(msg.pld.app_id) - 1);
+        send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL | MSG_DONTWAIT);
     }
 }
 

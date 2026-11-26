@@ -62,6 +62,13 @@ struct WindowAnimation {
     double target_scale{1.0};
     double current_scale{1.0};
 
+    // Physical Spring Mode (Slice D): uses damped harmonic SpringState when true
+    bool use_spring{false};
+    double spring_stiffness{420.0};
+    double spring_damping{30.0};
+    double initial_velocity{0.0};
+    SpringState spring_progress{};
+
     // Callbacks
     std::function<void(const WindowAnimation&)> on_step;
     std::function<void(const WindowAnimation&)> on_complete;

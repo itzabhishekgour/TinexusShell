@@ -30,11 +30,13 @@ FocusManager& FocusManager::instance() noexcept {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-void FocusManager::bind(struct wlr_seat* seat, struct wlr_scene* scene) noexcept {
-    m_seat  = seat;
-    m_scene = scene;
-    log::info("[Focus] FocusManager bound — seat={} scene={}",
-              static_cast<void*>(seat), static_cast<void*>(scene));
+void FocusManager::bind(struct wlr_seat* seat, struct wlr_scene* scene,
+                        struct wlr_scene* overlay_scene) noexcept {
+    m_seat          = seat;
+    m_scene         = scene;
+    m_overlay_scene = overlay_scene;
+    log::info("[Focus] FocusManager bound — seat={} scene={} overlay_scene={}",
+              static_cast<void*>(seat), static_cast<void*>(scene), static_cast<void*>(overlay_scene));
 }
 
 // ---------------------------------------------------------------------------
@@ -42,13 +44,15 @@ void FocusManager::bind(struct wlr_seat* seat, struct wlr_scene* scene) noexcept
 // ---------------------------------------------------------------------------
 
 PickResult FocusManager::pick_surface(double x, double y) const noexcept {
-    if (!m_scene) {
-        return {};
-    }
-
     double sx{0.0}, sy{0.0};
-    struct wlr_scene_node* node =
-        wlr_scene_node_at(&m_scene->tree.node, x, y, &sx, &sy);
+    struct wlr_scene_node* node{nullptr};
+
+    if (m_overlay_scene) {
+        node = wlr_scene_node_at(&m_overlay_scene->tree.node, x, y, &sx, &sy);
+    }
+    if (!node && m_scene) {
+        node = wlr_scene_node_at(&m_scene->tree.node, x, y, &sx, &sy);
+    }
 
     if (!node || node->type != WLR_SCENE_NODE_BUFFER) {
         return {};

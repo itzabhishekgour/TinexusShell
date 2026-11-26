@@ -25,12 +25,20 @@ struct SpringState {
     double velocity{0.0};
     double target{1.0};
 
-    // Step the spring simulation forward by dt seconds.
+    // Step the spring simulation forward by dt seconds using bounded fixed substeps
+    // so explicit integration remains stable across idle wakes and 60Hz–240Hz displays.
     // Returns true when the spring has settled (< epsilon from target).
     bool step(double dt, double stiffness = 380.0, double damping = 28.0) noexcept {
-        double force = -stiffness * (value - target) - damping * velocity;
-        velocity += force * dt;
-        value    += velocity * dt;
+        double remaining = std::clamp(dt, 0.0, 0.05);
+        constexpr double kMaxSubstep = 1.0 / 240.0;
+
+        while (remaining > 0.0) {
+            const double h = std::min(remaining, kMaxSubstep);
+            const double force = -stiffness * (value - target) - damping * velocity;
+            velocity += force * h;
+            value    += velocity * h;
+            remaining -= h;
+        }
 
         // Settle threshold
         if (std::abs(value - target) < 0.001 && std::abs(velocity) < 0.001) {

@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
+#include "comp/window/decoration_assets.hpp"
 
 extern "C" {
 #include <wayland-server-core.h>
@@ -63,8 +64,24 @@ struct IWindowActionHandler {
 };
 
 struct TinexusWindowFrame {
-    struct wlr_scene_tree* frame_tree{nullptr}; // Root node under m_scene_tree_normal
-    struct wlr_scene_tree* client_tree{nullptr}; // Child node holding the client surface at (1, 29)
+    struct wlr_scene_tree* frame_tree{nullptr};   // Root node under m_scene_tree_normal
+    struct wlr_scene_tree* shadow_tree{nullptr};  // Dual-layer soft shadow 9-slice child tree
+    struct wlr_scene_tree* client_tree{nullptr};  // Child node holding the client surface at (1, 29)
+
+    // 8-slice drop shadow buffers around the frame box (center empty -> zero client darken leak)
+    struct wlr_scene_buffer* shadow_tl{nullptr};
+    struct wlr_scene_buffer* shadow_t{nullptr};
+    struct wlr_scene_buffer* shadow_tr{nullptr};
+    struct wlr_scene_buffer* shadow_l{nullptr};
+    struct wlr_scene_buffer* shadow_r{nullptr};
+    struct wlr_scene_buffer* shadow_bl{nullptr};
+    struct wlr_scene_buffer* shadow_b{nullptr};
+    struct wlr_scene_buffer* shadow_br{nullptr};
+
+    // HiDPI antialiased rounded top corners + crisp titlebar/border geometry
+    struct wlr_scene_buffer* corner_tl{nullptr};
+    struct wlr_scene_buffer* corner_tr{nullptr};
+    struct wlr_scene_rect* titlebar_top_bg{nullptr};
     struct wlr_scene_rect* titlebar_bg{nullptr};
     struct wlr_scene_rect* titlebar_divider{nullptr};
     struct wlr_scene_rect* border_top{nullptr};
@@ -72,20 +89,26 @@ struct TinexusWindowFrame {
     struct wlr_scene_rect* border_left{nullptr};
     struct wlr_scene_rect* border_right{nullptr};
 
-    // Traffic light buttons (circular multi-slice scene rects)
+    // Antialiased circular traffic light buttons with hover glyphs
     struct wlr_scene_tree* traffic_tree{nullptr};
-    std::vector<struct wlr_scene_rect*> close_rects;
-    std::vector<struct wlr_scene_rect*> min_rects;
-    std::vector<struct wlr_scene_rect*> max_rects;
+    struct wlr_scene_buffer* btn_close{nullptr};
+    struct wlr_scene_buffer* btn_min{nullptr};
+    struct wlr_scene_buffer* btn_max{nullptr};
 
     int32_t client_width{800};
     int32_t client_height{600};
     bool is_active{false};
     bool is_fullscreen{false};
+    bool is_maximized{false};
+    bool traffic_hovered{false};
 
     void update_geometry(int32_t w, int32_t h);
     void set_active(bool active);
     void set_fullscreen(bool fullscreen);
+    void set_maximized(bool maximized);
+    void set_traffic_hovered(bool hovered);
+    void set_visual_transform(double scale, float opacity);
+    void refresh_visual_buffers();
     [[nodiscard]] HitTarget hit_test(double local_x, double local_y) const;
 };
 
@@ -97,6 +120,7 @@ public:
     void shutdown();
 
     [[nodiscard]] const DecorationTheme& theme() const noexcept { return m_theme; }
+    [[nodiscard]] const DecorationAssetCache& assets() const noexcept { return m_assets; }
     void set_theme(const DecorationTheme& theme);
     void load_theme(const std::string& path = "");
 
@@ -106,6 +130,7 @@ public:
     // Decoration negotiation queries
     [[nodiscard]] bool client_wants_csd(struct wlr_xdg_toplevel* toplevel) const;
     [[nodiscard]] bool client_wants_ssd(struct wlr_xdg_toplevel* toplevel) const;
+    void apply_pending_decoration_mode(struct wlr_xdg_toplevel* toplevel);
 
     // Frame lifecycle (Native Wayland toplevels)
     TinexusWindowFrame* create_frame(struct wlr_xdg_toplevel* toplevel, struct wlr_scene_tree* parent = nullptr);
@@ -119,15 +144,17 @@ public:
     void set_xwayland_active(struct wlr_xwayland_surface* xsurface, bool active);
     void update_xwayland_geometry(struct wlr_xwayland_surface* xsurface, int32_t w, int32_t h);
 
-    // Handle cursor button on potential frame
+    // Handle cursor button / motion on frame (resolves exact frame from node ancestry)
     bool handle_cursor_button(struct wlr_scene_node* node, double cursor_x, double cursor_y,
                               uint32_t button, uint32_t state, void* wrapper);
+    HitTarget handle_cursor_motion(struct wlr_scene_node* node, double cursor_x, double cursor_y);
 
     // Focus state updates
     void set_toplevel_active(struct wlr_xdg_toplevel* toplevel, bool active);
 
-    // Fullscreen state updates
+    // Fullscreen / maximized state updates
     void set_toplevel_fullscreen(struct wlr_xdg_toplevel* toplevel, bool fullscreen);
+    void set_toplevel_maximized(struct wlr_xdg_toplevel* toplevel, bool maximized);
 
     // Geometry updates from commit
     void update_toplevel_geometry(struct wlr_xdg_toplevel* toplevel, int32_t w, int32_t h);
@@ -136,19 +163,30 @@ private:
     TinexusDecorationManager() = default;
     ~TinexusDecorationManager() = default;
 
+    TinexusWindowFrame* find_frame_from_node(struct wlr_scene_node* node) const;
     TinexusWindowFrame* create_frame_impl(void* window_key, struct wlr_scene_tree* parent, const char* label);
     void destroy_frame_impl(void* window_key);
     [[nodiscard]] TinexusWindowFrame* get_frame_impl(void* window_key) const;
 
+    struct DecorationContext;
+
+    static enum wlr_xdg_toplevel_decoration_v1_mode resolve_decoration_mode(
+        struct wlr_xdg_toplevel_decoration_v1* decoration) noexcept;
+    static void apply_decoration_context(DecorationContext* ctx);
     static void handle_new_toplevel_decoration(struct wl_listener* listener, void* data);
     static void handle_decoration_request_mode(struct wl_listener* listener, void* data);
+    static void handle_decoration_surface_commit(struct wl_listener* listener, void* data);
     static void handle_decoration_destroy(struct wl_listener* listener, void* data);
 
     struct DecorationContext {
         struct wlr_xdg_toplevel_decoration_v1* decoration{nullptr};
         struct wl_listener request_mode{};
+        struct wl_listener surface_commit{};
         struct wl_listener destroy{};
         TinexusDecorationManager* manager{nullptr};
+        enum wlr_xdg_toplevel_decoration_v1_mode pending_mode{
+            WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE};
+        bool has_pending_mode{false};
     };
 
     struct wl_display* m_display{nullptr};
@@ -160,6 +198,8 @@ private:
     std::unordered_map<void*, std::unique_ptr<TinexusWindowFrame>> m_frames;
     std::vector<std::unique_ptr<DecorationContext>> m_contexts;
     DecorationTheme m_theme;
+    DecorationAssetCache m_assets;
+    TinexusWindowFrame* m_hovered_frame{nullptr};
 
     // Double-click detection on titlebar
     uint32_t m_last_click_time{0};

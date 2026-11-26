@@ -62,7 +62,9 @@ public:
     // ------------------------------------------------------------------
 
     /// Called once by the backend after wlr_seat and wlr_scene are ready.
-    void bind(struct wlr_seat* seat, struct wlr_scene* scene) noexcept;
+    /// Optional overlay_scene holds top/overlay UI layers checked before base scene.
+    void bind(struct wlr_seat* seat, struct wlr_scene* scene,
+              struct wlr_scene* overlay_scene = nullptr) noexcept;
 
     // ------------------------------------------------------------------
     // Pointer focus
@@ -102,6 +104,7 @@ private:
     // wlroots handles (owned by the backend, held here as non-owning ptrs)
     struct wlr_seat*    m_seat{nullptr};
     struct wlr_scene*   m_scene{nullptr};
+    struct wlr_scene*   m_overlay_scene{nullptr};
 
     // Pointer state
     struct wlr_surface* m_pointer_surface{nullptr}; ///< currently hovered surface

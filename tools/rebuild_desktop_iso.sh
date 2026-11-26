@@ -120,6 +120,12 @@ EOF
     info "Installing Firefox via Mozilla APT repo..."
     chroot /mnt/rootfs /usr/bin/apt-get update -o Acquire::Retries=3 || true
     chroot /mnt/rootfs /usr/bin/apt-get install -y --no-install-recommends firefox || true
+elif [ -f /mnt/rootfs/usr/lib/firefox/libxul.so ] && ! cat /mnt/rootfs/usr/lib/firefox/libxul.so >/dev/null 2>&1; then
+    warn "Detected unreadable/corrupt lower SquashFS block in /usr/lib/firefox/libxul.so — removing corrupt copy & reinstalling firefox..."
+    rm -rf /mnt/rootfs/usr/lib/firefox
+    chroot /mnt/rootfs /usr/bin/apt-get install --reinstall -y --no-install-recommends firefox || fatal "Failed to repair corrupt Firefox installation!"
+    cat /mnt/rootfs/usr/lib/firefox/libxul.so >/dev/null 2>&1 || fatal "libxul.so still unreadable after Firefox reinstall!"
+    success "Firefox libxul.so repaired cleanly via reinstall."
 fi
 
 if [ -f /mnt/rootfs/usr/bin/firefox ]; then
@@ -840,13 +846,22 @@ fi
 # ── 15. Create New SquashFS ───────────────────────────────────────────────────
 info "Compressing clean rootfs with mksquashfs (xz)..."
 rm -f "$NEW_SQUASHFS"
+MKSQ_LOG="$(mktemp /tmp/mksq_XXXXXX.log)"
+set +e
 mksquashfs /mnt/rootfs "$NEW_SQUASHFS" \
     -comp xz \
     -b 1048576 \
     -Xbcj x86 \
     -noappend \
     -wildcards \
-    -e 'workspace/*' 'tmp/*' 'var/tmp/*'
+    -e 'workspace/*' 'tmp/*' 'var/tmp/*' 2>&1 | tee "$MKSQ_LOG"
+mksq_rc=${PIPESTATUS[0]}
+set -e
+if [ "$mksq_rc" -ne 0 ] || grep -qE "Read failed because|Failed to read file" "$MKSQ_LOG"; then
+    rm -f "$MKSQ_LOG" "$NEW_SQUASHFS"
+    fatal "CRITICAL BUILD ERROR: mksquashfs encountered read/compression errors! Aborting before corrupting ISO."
+fi
+rm -f "$MKSQ_LOG"
 success "Created new squashfs: $(ls -lh "$NEW_SQUASHFS" | awk '{print $5}')"
 
 # ── 15b. Rigorous SquashFS Content Verification ───────────────────────────────

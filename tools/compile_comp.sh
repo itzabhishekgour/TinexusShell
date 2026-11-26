@@ -76,19 +76,17 @@ SRCS=(
   $COMP_SRC/server/server.cpp
   $COMP_SRC/server/global_registry.cpp
   $COMP_SRC/server/surface_tree.cpp
-  $COMP_SRC/backend/headless_backend.cpp
   $COMP_SRC/backend/wlroots_backend.cpp
-  $COMP_SRC/backend/drm_backend.cpp
   $COMP_SRC/surface/surface_state.cpp
   $COMP_SRC/surface/configure_serial.cpp
   $COMP_SRC/surface/buffer_manager.cpp
   $COMP_SRC/surface/frame_callback.cpp
   $COMP_SRC/surface/resource_cleanup.cpp
+  $COMP_SRC/window/decoration_assets.cpp
   $COMP_SRC/window/decoration_manager.cpp
   $COMP_SRC/input/keymap_engine.cpp
   $COMP_SRC/input/interaction_controller.cpp
   $COMP_SRC/input/seat_manager.cpp
-  $COMP_SRC/input/udev_monitor.cpp
   $COMP_SRC/output/output.cpp
   $COMP_SRC/output/output_layout.cpp
   $COMP_SRC/output/output_manager.cpp
@@ -114,6 +112,8 @@ MAX_JOBS=8
 OBJS=()
 
 rm -f "$OBJ_DIR/org-kde-kwin-blur-protocol.o" "$OBJ_DIR/blur_manager.o"
+NEWEST_HDR_EPOCH=$(find /mnt/rootfs/workspace/src/comp -type f \( -name '*.hpp' -o -name '*.h' \) -printf '%T@\n' | sort -nr | head -n1 | cut -d. -f1)
+NEWEST_HDR_EPOCH=${NEWEST_HDR_EPOCH:-0}
 
 for src in "${SRCS[@]}"; do
   bname=$(basename "$src")
@@ -124,7 +124,10 @@ for src in "${SRCS[@]}"; do
   OBJS+=("$obj_chroot")
 
   if [ -f "$obj_host" ] && [ "$obj_host" -nt "$src_host" ]; then
-    continue
+    obj_epoch=$(stat -c %Y "$obj_host" 2>/dev/null || echo 0)
+    if [ "$obj_epoch" -ge "$NEWEST_HDR_EPOCH" ]; then
+      continue
+    fi
   fi
 
   while [ $(jobs -rp | wc -l) -ge $MAX_JOBS ]; do
@@ -147,7 +150,7 @@ mkdir -p /workspace/build/bin
 rm -f /workspace/build/bin/tinexus-comp
 BUILD_START_TIME=$(date +%s)
 
-chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
+chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 -rdynamic \
   "${OBJS[@]}" \
   -L/workspace/build/lib -L/usr/lib -L/usr/lib/x86_64-linux-gnu \
   -ltinexus_common -ltinexus_protocols -lwayland-server -lwlroots-0.19 -ldrm -lvulkan -lEGL -lGLESv2 -lxkbcommon -lpixman-1 -lsystemd -lpthread \

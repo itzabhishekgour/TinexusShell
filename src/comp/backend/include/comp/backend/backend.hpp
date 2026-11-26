@@ -33,6 +33,8 @@ public:
     virtual bool minimize_window_by_app_id(const std::string& app_id) noexcept { return false; }
     virtual bool has_app(const std::string& app_id) const noexcept { return false; }
     virtual bool toggle_launcher() noexcept { return false; }
+    virtual void update_dock_icon_position(const std::string& app_id, int32_t x, int32_t y,
+                                           int32_t w, int32_t h) noexcept {}
 
     virtual struct wl_display* display() = 0;
     [[nodiscard]] virtual BackendType type() const noexcept = 0;
@@ -48,8 +50,7 @@ public:
 };
 
 
-// Factory functions
-std::unique_ptr<Backend> create_headless_backend();
+// Factory function
 std::unique_ptr<Backend> create_wlroots_backend(struct wl_display* display);
 
 } // namespace tinexus::comp

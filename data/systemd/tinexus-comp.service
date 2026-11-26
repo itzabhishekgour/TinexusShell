@@ -31,8 +31,12 @@ ExecStartPre=+/bin/chmod 0700 /run/user/1000
 ExecStartPre=+/bin/chmod 0755 /run/tinexus
 
 # Environment: hardware renderer selection is performed by tinexus-hardware-env.service
-# and published to /run/tinexus/env. We source that file here.
+# and published to /run/tinexus/env. We source that file here, then strip DISPLAY and
+# WAYLAND_DISPLAY so a crash restart never inherits XWayland's dead DISPLAY=:0 and falls
+# into wlroots' X11 backend loop.
 EnvironmentFile=-/run/tinexus/env
+UnsetEnvironment=DISPLAY WAYLAND_DISPLAY
+ExecStartPre=+/bin/sh -c 'if [ -f /run/tinexus/env ]; then sed -i "/^DISPLAY=/d;/^WAYLAND_DISPLAY=/d" /run/tinexus/env 2>/dev/null || true; fi'
 
 # Additional Wayland/seatd settings that are compositor-specific.
 Environment="LIBSEAT_BACKEND=seatd"

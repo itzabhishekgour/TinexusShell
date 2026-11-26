@@ -13,19 +13,17 @@ add_executable(tinexus-comp
     server/server.cpp
     server/global_registry.cpp
     server/surface_tree.cpp
-    backend/headless_backend.cpp
     backend/wlroots_backend.cpp
-    backend/drm_backend.cpp
     surface/surface_state.cpp
     surface/configure_serial.cpp
     surface/buffer_manager.cpp
     surface/frame_callback.cpp
     surface/resource_cleanup.cpp
+    window/decoration_assets.cpp
     window/decoration_manager.cpp
     input/keymap_engine.cpp
     input/interaction_controller.cpp
     input/seat_manager.cpp
-    input/udev_monitor.cpp
     output/output.cpp
     output/output_manager.cpp
     cursor/cursor_manager.cpp
@@ -79,5 +77,7 @@ target_link_libraries(tinexus-comp PRIVATE
     PkgConfig::PIXMAN
     PkgConfig::SYSTEMD
 )
+
+target_link_options(tinexus-comp PRIVATE -rdynamic)
 
 install(TARGETS tinexus-comp RUNTIME DESTINATION bin)

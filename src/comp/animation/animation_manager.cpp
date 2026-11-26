@@ -15,6 +15,11 @@ void AnimationManager::start_animation(WindowAnimation anim) {
     anim.current_scale = anim.start_scale;
     anim.elapsed_sec = 0.0;
     anim.finished = false;
+    if (anim.use_spring) {
+        anim.spring_progress.value = 0.0;
+        anim.spring_progress.velocity = anim.initial_velocity;
+        anim.spring_progress.target = 1.0;
+    }
 
     m_active_animations[id] = std::move(anim);
 
@@ -45,6 +50,51 @@ void AnimationManager::tick(double dt) {
 
     for (auto& [id, anim] : m_active_animations) {
         anim.elapsed_sec += dt;
+
+        if (anim.use_spring) {
+            bool settled = false;
+            if (dt > 0.0) {
+                settled = anim.spring_progress.step(dt, anim.spring_stiffness, anim.spring_damping);
+                if (anim.elapsed_sec >= 1.5) {
+                    settled = true;
+                }
+            }
+
+            if (settled) {
+                anim.finished = true;
+                anim.current_geom = anim.target_geom;
+                anim.current_opacity = anim.target_opacity;
+                anim.current_scale = anim.target_scale;
+
+                if (anim.on_step) {
+                    anim.on_step(anim);
+                }
+
+                completed_ids.push_back(id);
+                if (anim.on_complete) {
+                    completion_callbacks.push_back(anim.on_complete);
+                    completed_anims.push_back(anim);
+                }
+            } else {
+                const double t = anim.spring_progress.value;
+                anim.current_geom.x = anim.start_geom.x + static_cast<int32_t>(std::round((anim.target_geom.x - anim.start_geom.x) * t));
+                anim.current_geom.y = anim.start_geom.y + static_cast<int32_t>(std::round((anim.target_geom.y - anim.start_geom.y) * t));
+                anim.current_geom.width = anim.start_geom.width + static_cast<int32_t>(std::round((anim.target_geom.width - anim.start_geom.width) * t));
+                anim.current_geom.height = anim.start_geom.height + static_cast<int32_t>(std::round((anim.target_geom.height - anim.start_geom.height) * t));
+
+                const double t_clamped = std::clamp(t, 0.0, 1.0);
+                anim.current_opacity = std::clamp(
+                    anim.start_opacity + (anim.target_opacity - anim.start_opacity) * t_clamped,
+                    0.0, 1.0);
+                anim.current_scale = std::max(0.05, anim.start_scale + (anim.target_scale - anim.start_scale) * t);
+
+                if (anim.on_step) {
+                    anim.on_step(anim);
+                }
+            }
+            continue;
+        }
+
         double progress = anim.duration_sec > 0.0 ? (anim.elapsed_sec / anim.duration_sec) : 1.0;
 
         if (progress >= 1.0) {
