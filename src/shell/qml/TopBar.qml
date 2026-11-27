@@ -125,6 +125,61 @@ Item {
                 }
             }
         }
+
+        // Subtle macOS-style Space Pill Indicator (shown when >1 Space active)
+        Rectangle {
+            id: spacePill
+            visible: typeof bridge !== "undefined" && (bridge.activeSpacesCount > 1 || bridge.activeSpaceFullscreen || bridge.activeWorkspaceId > 1)
+            height: 22
+            width: spaceRow.implicitWidth + 14
+            radius: 11
+            color: spaceMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(1, 1, 1, 0.08)
+            border.color: Qt.rgba(1, 1, 1, 0.12)
+            border.width: 1
+            anchors.verticalCenter: parent.verticalCenter
+            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutCubic } }
+
+            Row {
+                id: spaceRow
+                anchors.centerIn: parent
+                spacing: 6
+
+                Rectangle {
+                    width: 6
+                    height: 6
+                    radius: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: (typeof bridge !== "undefined" && bridge.activeSpaceFullscreen) ? "#30D158" : "#38BDF8"
+                }
+
+                Text {
+                    text: (typeof bridge !== "undefined") ? bridge.activeSpaceLabel : "Desktop 1"
+                    color: Qt.rgba(1, 1, 1, 0.88)
+                    font.family: "Inter"
+                    font.pixelSize: 11
+                    font.weight: Font.Medium
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    readonly property int _maxW: 110
+                    width: Math.min(implicitWidth, _maxW)
+                }
+            }
+
+            MouseArea {
+                id: spaceMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    if (typeof bridge !== "undefined") {
+                        // Return to Desktop 1 from Fullscreen/higher space, or cycle Spaces 1..2
+                        var targetWs = (bridge.activeWorkspaceId === 1) ? 2 : 1;
+                        bridge.switchWorkspace(targetWs);
+                    }
+                }
+            }
+        }
     }
 
     // ── Center: Reactive Dynamic Island Aura Notch ───────────────

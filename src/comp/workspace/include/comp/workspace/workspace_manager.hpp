@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 
 // Forward declarations
@@ -13,10 +14,19 @@ struct wlr_scene_tree;
 
 namespace tinexus::comp {
 
+enum class WorkspaceKind : uint8_t {
+    Desktop = 0,
+    Fullscreen = 1
+};
+
 struct Workspace {
     uint32_t id{1};
     std::string name;
     bool is_active{false};
+    WorkspaceKind kind{WorkspaceKind::Desktop};
+    uint64_t owner_window_id{0};
+    uint32_t restore_workspace_id{1};
+    bool was_maximized{false};
     std::vector<uint64_t> window_ids;
     struct wlr_scene_tree* scene_tree{nullptr};
 };
@@ -29,13 +39,29 @@ public:
     ~WorkspaceManager() = default;
 
     void initialize_default_workspaces(uint32_t count = 9);
-    
+
     [[nodiscard]] uint32_t active_workspace_id() const noexcept;
+    [[nodiscard]] int32_t workspace_slot(uint32_t workspace_id) const noexcept;
+    [[nodiscard]] uint32_t active_slot_1based() const noexcept;
+    [[nodiscard]] const Workspace* active_workspace() const noexcept;
+    [[nodiscard]] bool is_active_space_fullscreen() const noexcept;
+    [[nodiscard]] uint32_t fullscreen_space_count() const noexcept;
+    [[nodiscard]] uint32_t active_or_populated_space_count() const noexcept;
+
     bool switch_workspace(uint32_t workspace_id);
-    
+    bool switch_to_slot(uint32_t slot_1based);
+
+    uint32_t promote_to_fullscreen_space(uint64_t window_id,
+                                         uint32_t from_workspace_id,
+                                         bool was_maximized,
+                                         const std::string& label,
+                                         struct wlr_scene_tree* fs_scene_tree);
+    uint32_t demote_fullscreen_space(uint64_t window_id, bool immediate_remove = false);
+    [[nodiscard]] uint32_t find_fullscreen_space_for_window(uint64_t window_id) const noexcept;
+
     void add_window_to_workspace(uint32_t workspace_id, uint64_t window_id);
     void remove_window_from_workspace(uint64_t window_id);
-    
+
     [[nodiscard]] const std::vector<Workspace>& get_all_workspaces() const noexcept;
     [[nodiscard]] const Workspace* get_workspace(uint32_t workspace_id) const noexcept;
     [[nodiscard]] Workspace* get_workspace(uint32_t workspace_id) noexcept;
@@ -53,6 +79,12 @@ public:
     void set_frame_scheduler(std::function<void()> scheduler) noexcept {
         m_frame_scheduler = std::move(scheduler);
     }
+    void set_state_callback(std::function<void()> cb) noexcept {
+        m_state_callback = std::move(cb);
+    }
+    void set_scene_tree_destroy_callback(std::function<void(struct wlr_scene_tree*)> cb) noexcept {
+        m_tree_destroy_cb = std::move(cb);
+    }
 
     [[nodiscard]] bool has_active_animation() const noexcept { return m_is_sliding; }
     void tick_animation(double dt) noexcept;
@@ -68,9 +100,15 @@ public:
     [[nodiscard]] bool is_overview_active() const noexcept { return m_overview_active; }
 
 private:
+    void reposition_all_workspace_trees() noexcept;
+    void prune_pending_fullscreen_spaces() noexcept;
+    void notify_state_changed() noexcept;
+
     std::vector<Workspace> m_workspaces;
     uint32_t m_active_id{1};
+    uint32_t m_next_fullscreen_id{100};
     std::unordered_map<uint64_t, uint32_t> m_window_to_workspace;
+    std::unordered_set<uint32_t> m_pending_destroy_ws_ids;
     bool m_overview_active{false};
 
     // Spaces horizontal slide spring physics
@@ -78,10 +116,12 @@ private:
     bool                  m_is_sliding{false};
     uint32_t              m_viewport_width{0};
     std::function<void()> m_frame_scheduler;
+    std::function<void()> m_state_callback;
+    std::function<void(struct wlr_scene_tree*)> m_tree_destroy_cb;
 
     // Interactive gesture tracking state
     bool                  m_in_gesture{false};
-    uint32_t              m_gesture_start_ws{1};
+    uint32_t              m_gesture_start_slot{0};
     double                m_gesture_accum_dx{0.0};
     uint32_t              m_gesture_last_time{0};
     double                m_gesture_velocity{0.0};

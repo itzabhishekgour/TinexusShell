@@ -8,6 +8,8 @@
 #include <common/AppId.hpp>
 #include <common/logger.hpp>
 #include <common/ui/WaylandBlurHelper.hpp>
+#include "ipcd/protocol/header.hpp"
+#include "ipcd/protocol/display_protocol.hpp"
 
 #include <QtCore/QProcess>
 #include <QtCore/QFileInfo>
@@ -187,6 +189,7 @@ ShellBridge::ShellBridge(QObject* parent)
         }
 
         syncActiveNotifications();
+        setupIpcdClient();
         pollBattery();
         syncAudioState();
         syncWifiState(false);
@@ -1510,6 +1513,126 @@ void ShellBridge::prevMediaTrack() {
     m_mediaPlaying = true;
     tinexus::log::info("[Shell] Previous media track: {}", m_mediaTitle.toStdString());
     emit mediaStateChanged();
+}
+
+void ShellBridge::setupIpcdClient() {
+    if (m_ipcSocket) return;
+    m_ipcSocket = new QLocalSocket(this);
+    m_ipcSocket->setReadBufferSize(32768);
+    connect(m_ipcSocket, &QLocalSocket::connected, this, &ShellBridge::onIpcdConnected);
+    connect(m_ipcSocket, &QLocalSocket::readyRead, this, &ShellBridge::onIpcdReadyRead);
+
+    auto scheduleReconnect = [this]() {
+        if (!m_ipcReconnectTimer.isActive()) {
+            m_ipcReconnectTimer.start(m_ipcBackoffMs);
+            m_ipcBackoffMs = std::min(m_ipcBackoffMs * 2, 30000);
+        }
+    };
+    connect(m_ipcSocket, &QLocalSocket::disconnected, this, [this, scheduleReconnect]() {
+        m_ipcReadBuf.clear();
+        scheduleReconnect();
+    });
+    connect(m_ipcSocket, &QLocalSocket::errorOccurred, this, [scheduleReconnect](QLocalSocket::LocalSocketError) {
+        scheduleReconnect();
+    });
+
+    m_ipcBackoffMs = 500;
+    m_ipcReconnectTimer.setInterval(m_ipcBackoffMs);
+    m_ipcReconnectTimer.setSingleShot(true);
+    connect(&m_ipcReconnectTimer, &QTimer::timeout, this, &ShellBridge::tryConnectIpcd);
+    tryConnectIpcd();
+}
+
+void ShellBridge::tryConnectIpcd() {
+    if (!m_ipcSocket) return;
+    if (m_ipcSocket->state() == QLocalSocket::ConnectedState ||
+        m_ipcSocket->state() == QLocalSocket::ConnectingState) {
+        return;
+    }
+    const QString sockPath = QString::fromStdString(tinexus::common::RuntimePaths::get_ipc_socket_path());
+    m_ipcSocket->connectToServer(sockPath);
+}
+
+void ShellBridge::onIpcdConnected() {
+    m_ipcReconnectTimer.stop();
+    m_ipcBackoffMs = 500;
+    m_ipcReadBuf.clear();
+
+    const uint16_t topic = static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::WORKSPACE_STATE_CHANGED);
+    sendIpcFrame(static_cast<uint16_t>(tinexus::ipcd::protocol::MessageType::SYS_SUBSCRIBE_TOPIC),
+                 &topic, sizeof(topic));
+    tinexus::log::info("[Shell] Connected to ipcd socket for Spaces telemetry");
+}
+
+void ShellBridge::onIpcdReadyRead() {
+    if (!m_ipcSocket) return;
+    m_ipcReadBuf.append(m_ipcSocket->readAll());
+
+    constexpr qsizetype kHdrSize = static_cast<qsizetype>(sizeof(tinexus::ipcd::protocol::Header));
+    while (m_ipcReadBuf.size() >= kHdrSize) {
+        tinexus::ipcd::protocol::Header hdr{};
+        std::memcpy(&hdr, m_ipcReadBuf.constData(), sizeof(hdr));
+        if (hdr.magic != tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC ||
+            hdr.version != tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1 ||
+            hdr.payload_len > 65536) {
+            m_ipcReadBuf.remove(0, 1);
+            continue;
+        }
+        const qsizetype frameSize = kHdrSize + static_cast<qsizetype>(hdr.payload_len);
+        if (m_ipcReadBuf.size() < frameSize) break;
+
+        if (hdr.msg_type == static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::WORKSPACE_STATE_CHANGED) &&
+            hdr.payload_len >= sizeof(tinexus::ipcd::protocol::WorkspaceStatePayload)) {
+            tinexus::ipcd::protocol::WorkspaceStatePayload pld{};
+            std::memcpy(&pld, m_ipcReadBuf.constData() + kHdrSize, sizeof(pld));
+            char safeLabel[65]{};
+            std::memcpy(safeLabel, pld.label, sizeof(pld.label));
+            const QString label = (safeLabel[0] != '\0')
+                ? QString::fromUtf8(safeLabel)
+                : (pld.is_fullscreen ? QStringLiteral("Fullscreen") : QStringLiteral("Desktop %1").arg(pld.active_id));
+
+            const bool fs = (pld.is_fullscreen != 0);
+            if (m_activeWorkspaceId != static_cast<int>(pld.active_id) ||
+                m_activeWorkspaceSlot != static_cast<int>(pld.active_slot) ||
+                m_activeSpacesCount != static_cast<int>(pld.active_spaces) ||
+                m_activeSpaceFullscreen != fs ||
+                m_activeSpaceLabel != label) {
+                m_activeWorkspaceId = static_cast<int>(pld.active_id);
+                m_activeWorkspaceSlot = static_cast<int>(pld.active_slot);
+                m_activeSpacesCount = static_cast<int>(pld.active_spaces);
+                m_activeSpaceFullscreen = fs;
+                m_activeSpaceLabel = label;
+                emit workspaceStateChanged();
+            }
+        }
+        m_ipcReadBuf.remove(0, frameSize);
+    }
+}
+
+void ShellBridge::sendIpcFrame(uint16_t msgType, const void* payload, uint32_t payloadLen) {
+    if (!m_ipcSocket || m_ipcSocket->state() != QLocalSocket::ConnectedState) return;
+    tinexus::ipcd::protocol::Header hdr{};
+    hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+    hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+    hdr.msg_type = msgType;
+    hdr.sequence_id = ++m_ipcSeq;
+    hdr.payload_len = payloadLen;
+
+    QByteArray frame;
+    frame.resize(static_cast<qsizetype>(sizeof(hdr) + payloadLen));
+    std::memcpy(frame.data(), &hdr, sizeof(hdr));
+    if (payloadLen > 0 && payload != nullptr) {
+        std::memcpy(frame.data() + sizeof(hdr), payload, payloadLen);
+    }
+    m_ipcSocket->write(frame);
+}
+
+void ShellBridge::switchWorkspace(int workspaceId) {
+    if (workspaceId <= 0) return;
+    tinexus::ipcd::protocol::WorkspaceSwitchPayload pld{};
+    pld.workspace_id = static_cast<uint32_t>(workspaceId);
+    sendIpcFrame(static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::WORKSPACE_SWITCH_REQUEST),
+                 &pld, sizeof(pld));
 }
 
 } // namespace tinexus::shell

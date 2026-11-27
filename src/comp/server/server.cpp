@@ -125,6 +125,9 @@ bool TinexusServer::initialize() {
 
     // 1. Initialize workspaces before backend so per-workspace scene trees are created
     WorkspaceManager::instance().initialize_default_workspaces(9);
+    WorkspaceManager::instance().set_state_callback([this]() {
+        notify_workspace_state();
+    });
 
     // 2. Create Backend (Wlroots by default)
     m_backend = create_wlroots_backend(m_wl_display);
@@ -440,7 +443,8 @@ void TinexusServer::setup_ipc_connection() {
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RESTORE_REQUEST),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_RAISE_AND_FOCUS),
                 static_cast<uint16_t>(tinexus::ipcd::protocol::DockMessageType::DOCK_BLUR_REGION),
-                static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::DISPLAY_SET_CONFIG)
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::DISPLAY_SET_CONFIG),
+                static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::WORKSPACE_SWITCH_REQUEST)
             };
             
             for (uint16_t t : sub_types) {
@@ -455,6 +459,7 @@ void TinexusServer::setup_ipc_connection() {
                 msg.topic = t;
                 send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
             }
+            notify_workspace_state();
         } else {
             close(m_ipc_socket);
             m_ipc_socket = -1;
@@ -507,6 +512,14 @@ void TinexusServer::process_ipc_message(uint16_t msg_type, const void* payload, 
             m_backend->apply_display_config(
                 safe_conn, p->width, p->height, p->refresh_mhz, p->scale,
                 p->vrr_enabled != 0, p->night_light != 0, p->flags);
+        }
+        return;
+    }
+    if (msg_type == static_cast<uint16_t>(DisplayMessageType::WORKSPACE_SWITCH_REQUEST) &&
+        payload_len >= sizeof(WorkspaceSwitchPayload)) {
+        const auto* p = static_cast<const WorkspaceSwitchPayload*>(payload);
+        if (p->workspace_id > 0) {
+            WorkspaceManager::instance().switch_workspace(p->workspace_id);
         }
         return;
     }
@@ -639,6 +652,41 @@ void TinexusServer::notify_app_focus_changed(const std::string& app_id, uint8_t 
         msg.pld.is_focused = is_focused;
         send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL);
     }
+}
+
+void TinexusServer::notify_workspace_state() {
+    if (m_ipc_socket < 0) {
+        setup_ipc_connection();
+    }
+    if (m_ipc_socket < 0) return;
+
+    auto& ws_mgr = WorkspaceManager::instance();
+    const Workspace* active_ws = ws_mgr.active_workspace();
+
+    struct {
+        tinexus::ipcd::protocol::Header hdr;
+        tinexus::ipcd::protocol::WorkspaceStatePayload pld;
+    } __attribute__((packed)) msg{};
+
+    msg.hdr.magic = tinexus::ipcd::protocol::TINEXUS_IPC_MAGIC;
+    msg.hdr.version = tinexus::ipcd::protocol::TINEXUS_IPC_VERSION_1;
+    msg.hdr.msg_type = static_cast<uint16_t>(tinexus::ipcd::protocol::DisplayMessageType::WORKSPACE_STATE_CHANGED);
+    msg.hdr.payload_len = sizeof(msg.pld);
+
+    msg.pld.active_id = ws_mgr.active_workspace_id();
+    msg.pld.active_slot = ws_mgr.active_slot_1based();
+    msg.pld.fullscreen_count = ws_mgr.fullscreen_space_count();
+    msg.pld.desktop_count = static_cast<uint32_t>(ws_mgr.get_all_workspaces().size()) - msg.pld.fullscreen_count;
+    msg.pld.active_spaces = ws_mgr.active_or_populated_space_count();
+    msg.pld.is_fullscreen = ws_mgr.is_active_space_fullscreen() ? 1 : 0;
+    msg.pld.is_transitioning = (ws_mgr.has_active_animation() || ws_mgr.in_gesture()) ? 1 : 0;
+    if (active_ws && !active_ws->name.empty()) {
+        std::strncpy(msg.pld.label, active_ws->name.c_str(), sizeof(msg.pld.label) - 1);
+    } else {
+        std::snprintf(msg.pld.label, sizeof(msg.pld.label), "Desktop %u", msg.pld.active_id);
+    }
+
+    send(m_ipc_socket, &msg, sizeof(msg), MSG_NOSIGNAL | MSG_DONTWAIT);
 }
 
 void TinexusServer::query_dock_icon_position(const std::string& app_id) {

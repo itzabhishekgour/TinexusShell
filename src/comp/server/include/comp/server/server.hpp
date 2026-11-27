@@ -29,6 +29,7 @@ public:
     void notify_app_started(const std::string& app_id);
     void notify_app_closed(const std::string& app_id);
     void notify_app_focus_changed(const std::string& app_id, uint8_t is_focused);
+    void notify_workspace_state();
     void query_dock_icon_position(const std::string& app_id);
 
     [[nodiscard]] const std::string& wayland_display() const noexcept;

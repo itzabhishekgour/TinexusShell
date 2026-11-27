@@ -4,17 +4,23 @@
 #include "MonitorBridge.hpp"
 #include <common/logger.hpp>
 #include <common/ui/TinexusAppIconProvider.hpp>
+#include <common/ui/WaylandBlurHelper.hpp>
 #include <QtGui/QGuiApplication>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
 #include <QtCore/QFileInfo>
 #include <QtCore/QUrl>
+#include <algorithm>
 #include <iostream>
 
 int main(int argc, char* argv[]) {
     tinexus::log::set_component_name("monitor");
     tinexus::log::info("Starting tinexus-monitor (Qt6)...");
+
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "wayland");
+    }
 
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("tinexus-monitor"));
@@ -32,7 +38,8 @@ int main(int argc, char* argv[]) {
         QCoreApplication::applicationDirPath() + QStringLiteral("/../src/monitor/qml/MonitorWindow.qml"),
         QStringLiteral("src/monitor/qml/MonitorWindow.qml"),
         QStringLiteral("/mnt/e/Tinu's Technology/Tinexus Manager/src/monitor/qml/MonitorWindow.qml"),
-        QStringLiteral("/usr/share/tinexus/monitor/qml/MonitorWindow.qml")
+        QStringLiteral("/usr/share/tinexus/monitor/qml/MonitorWindow.qml"),
+        QStringLiteral("/usr/share/tinexus-monitor/qml/MonitorWindow.qml")
     };
     for (const auto& cand : candidates) {
         if (QFileInfo::exists(cand)) {
@@ -52,9 +59,19 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    tinexus::common::ui::WaylandBlurHelper blurHelper;
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
     if (window) {
+        auto updateWindowBlur = [window, &blurHelper]() {
+            if (!window) return;
+            const int w = std::max(1, window->width());
+            const int h = std::max(1, window->height());
+            blurHelper.applyToWindow(window, true, QRegion(0, 0, w, h));
+        };
+        QObject::connect(window, &QWindow::widthChanged, window, [updateWindowBlur](int) { updateWindowBlur(); });
+        QObject::connect(window, &QWindow::heightChanged, window, [updateWindowBlur](int) { updateWindowBlur(); });
         window->show();
+        updateWindowBlur();
     }
 
     return app.exec();

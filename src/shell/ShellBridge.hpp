@@ -16,6 +16,7 @@
 #include <memory>
 
 class QQuickWindow;
+class QLocalSocket;
 
 namespace tinexus::shell {
 
@@ -42,6 +43,11 @@ class ShellBridge : public QObject {
     Q_PROPERTY(int brightness READ brightness WRITE setBrightness NOTIFY brightnessChanged)
     Q_PROPERTY(QString activeAppName READ activeAppName WRITE setActiveAppName NOTIFY activeAppChanged)
     Q_PROPERTY(QString logoUrl READ logoUrl CONSTANT)
+    Q_PROPERTY(int activeWorkspaceId READ activeWorkspaceId NOTIFY workspaceStateChanged)
+    Q_PROPERTY(int activeWorkspaceSlot READ activeWorkspaceSlot NOTIFY workspaceStateChanged)
+    Q_PROPERTY(int activeSpacesCount READ activeSpacesCount NOTIFY workspaceStateChanged)
+    Q_PROPERTY(bool activeSpaceFullscreen READ activeSpaceFullscreen NOTIFY workspaceStateChanged)
+    Q_PROPERTY(QString activeSpaceLabel READ activeSpaceLabel NOTIFY workspaceStateChanged)
 
     // Flyout & Dialog Visibility States
     Q_PROPERTY(bool logoMenuOpen READ logoMenuOpen WRITE setLogoMenuOpen NOTIFY flyoutStateChanged)
@@ -97,6 +103,11 @@ public:
     int brightness() const { return m_brightness; }
     QString activeAppName() const { return m_activeAppName; }
     QString logoUrl() const { return m_logoUrl; }
+    int activeWorkspaceId() const { return m_activeWorkspaceId; }
+    int activeWorkspaceSlot() const { return m_activeWorkspaceSlot; }
+    int activeSpacesCount() const { return m_activeSpacesCount; }
+    bool activeSpaceFullscreen() const { return m_activeSpaceFullscreen; }
+    QString activeSpaceLabel() const { return m_activeSpaceLabel; }
 
     bool logoMenuOpen() const { return m_logoMenuOpen; }
     bool appMenuOpen() const { return m_appMenuOpen; }
@@ -170,6 +181,7 @@ public:
     Q_INVOKABLE void onNotchCenterClicked();
     Q_INVOKABLE void requestBlur(bool enable = true, int radius = 28);
     Q_INVOKABLE void syncOverlayGeometry();
+    Q_INVOKABLE void switchWorkspace(int workspaceId);
 
     // Power Actions
     Q_INVOKABLE void requestReboot();
@@ -191,6 +203,7 @@ signals:
     void volumeChanged();
     void brightnessChanged();
     void activeAppChanged();
+    void workspaceStateChanged();
     void flyoutStateChanged();
     void notificationsChanged();
     void applicationsListChanged();
@@ -209,6 +222,11 @@ private:
     void syncWifiState(bool activeRescan = false);
     void syncActiveNotifications();
     void resolveLogoUrl();
+    void setupIpcdClient();
+    void tryConnectIpcd();
+    void onIpcdConnected();
+    void onIpcdReadyRead();
+    void sendIpcFrame(uint16_t msgType, const void* payload, uint32_t payloadLen);
 
     QString m_currentTime{"12:00 PM"};
     QString m_currentDate{"Wed, Sep 10"};
@@ -229,6 +247,17 @@ private:
     int     m_brightness{80};
     QString m_activeAppName{"Applications"};
     QString m_logoUrl;
+    int     m_activeWorkspaceId{1};
+    int     m_activeWorkspaceSlot{1};
+    int     m_activeSpacesCount{1};
+    bool    m_activeSpaceFullscreen{false};
+    QString m_activeSpaceLabel{QStringLiteral("Desktop 1")};
+
+    QLocalSocket* m_ipcSocket{nullptr};
+    QTimer        m_ipcReconnectTimer;
+    QByteArray    m_ipcReadBuf;
+    uint32_t      m_ipcSeq{0};
+    int           m_ipcBackoffMs{500};
 
     bool    m_notchExpanded{false};
     bool    m_mediaPlaying{true};

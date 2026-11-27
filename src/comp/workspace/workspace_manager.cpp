@@ -23,60 +23,301 @@ WorkspaceManager::WorkspaceManager() {
 
 void WorkspaceManager::initialize_default_workspaces(uint32_t count) {
     m_workspaces.clear();
+    m_window_to_workspace.clear();
+    m_pending_destroy_ws_ids.clear();
     m_workspaces.reserve(count);
+    m_next_fullscreen_id = 100;
 
     for (uint32_t i = 1; i <= count; ++i) {
-        m_workspaces.push_back(Workspace{i, "Workspace " + std::to_string(i), (i == 1), {}, nullptr});
+        m_workspaces.push_back(Workspace{
+            i,
+            "Desktop " + std::to_string(i),
+            (i == 1),
+            WorkspaceKind::Desktop,
+            0,
+            i,
+            false,
+            {},
+            nullptr
+        });
     }
     m_active_id = 1;
     m_slide_spring.reset(0.0, 0.0);
     m_is_sliding = false;
+    m_in_gesture = false;
+    notify_state_changed();
 }
 
 uint32_t WorkspaceManager::active_workspace_id() const noexcept {
     return m_active_id;
 }
 
+int32_t WorkspaceManager::workspace_slot(uint32_t workspace_id) const noexcept {
+    for (size_t i = 0; i < m_workspaces.size(); ++i) {
+        if (m_workspaces[i].id == workspace_id) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
+}
+
+uint32_t WorkspaceManager::active_slot_1based() const noexcept {
+    int32_t slot = workspace_slot(m_active_id);
+    return (slot >= 0) ? static_cast<uint32_t>(slot + 1) : 1u;
+}
+
+const Workspace* WorkspaceManager::active_workspace() const noexcept {
+    return get_workspace(m_active_id);
+}
+
+bool WorkspaceManager::is_active_space_fullscreen() const noexcept {
+    const Workspace* ws = active_workspace();
+    return ws != nullptr && ws->kind == WorkspaceKind::Fullscreen;
+}
+
+uint32_t WorkspaceManager::fullscreen_space_count() const noexcept {
+    uint32_t count = 0;
+    for (const auto& ws : m_workspaces) {
+        if (ws.kind == WorkspaceKind::Fullscreen &&
+            m_pending_destroy_ws_ids.find(ws.id) == m_pending_destroy_ws_ids.end()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+uint32_t WorkspaceManager::active_or_populated_space_count() const noexcept {
+    uint32_t count = 0;
+    for (const auto& ws : m_workspaces) {
+        if (m_pending_destroy_ws_ids.find(ws.id) != m_pending_destroy_ws_ids.end()) {
+            continue;
+        }
+        if (ws.is_active || ws.kind == WorkspaceKind::Fullscreen || !ws.window_ids.empty()) {
+            ++count;
+        }
+    }
+    return std::max<uint32_t>(1, count);
+}
+
+void WorkspaceManager::notify_state_changed() noexcept {
+    if (m_state_callback) {
+        m_state_callback();
+    }
+}
+
+void WorkspaceManager::reposition_all_workspace_trees() noexcept {
+    const double vw = static_cast<double>(m_viewport_width);
+    for (size_t i = 0; i < m_workspaces.size(); ++i) {
+        auto& ws = m_workspaces[i];
+        if (!ws.scene_tree) continue;
+        double base_x = static_cast<double>(i) * vw;
+        int32_t cur_x = static_cast<int32_t>(std::round(base_x - m_slide_spring.value));
+        wlr_scene_node_set_position(&ws.scene_tree->node, cur_x, 0);
+    }
+}
+
+void WorkspaceManager::prune_pending_fullscreen_spaces() noexcept {
+    if (m_pending_destroy_ws_ids.empty()) return;
+
+    bool erased_any = false;
+    for (auto it = m_workspaces.begin(); it != m_workspaces.end(); ) {
+        if (it->id != m_active_id &&
+            m_pending_destroy_ws_ids.find(it->id) != m_pending_destroy_ws_ids.end()) {
+            m_pending_destroy_ws_ids.erase(it->id);
+            struct wlr_scene_tree* dead_tree = it->scene_tree;
+            it->scene_tree = nullptr;
+            it = m_workspaces.erase(it);
+            if (dead_tree && m_tree_destroy_cb) {
+                m_tree_destroy_cb(dead_tree);
+            }
+            erased_any = true;
+        } else {
+            ++it;
+        }
+    }
+
+    if (erased_any) {
+        int32_t active_slot = workspace_slot(m_active_id);
+        if (active_slot < 0) active_slot = 0;
+        double vw = static_cast<double>(m_viewport_width);
+        m_slide_spring.reset(static_cast<double>(active_slot) * vw,
+                             static_cast<double>(active_slot) * vw);
+        reposition_all_workspace_trees();
+        notify_state_changed();
+    }
+}
+
 bool WorkspaceManager::switch_workspace(uint32_t workspace_id) {
     if (workspace_id == m_active_id && !m_is_sliding) return true;
 
-    auto it = std::find_if(m_workspaces.begin(), m_workspaces.end(),
-                           [workspace_id](const Workspace& ws) { return ws.id == workspace_id; });
-
-    if (it == m_workspaces.end()) {
+    int32_t to_slot = workspace_slot(workspace_id);
+    if (to_slot < 0) {
         log::warn("Attempted to switch to invalid workspace ID: {}", workspace_id);
         return false;
     }
 
-    uint32_t from_id = m_active_id;
-    uint32_t to_id = workspace_id;
+    int32_t from_slot = workspace_slot(m_active_id);
+    if (from_slot < 0) from_slot = 0;
 
-    // Enable scene trees involved in the transition (source, target, and intermediates)
-    uint32_t min_id = std::min(from_id, to_id);
-    uint32_t max_id = std::max(from_id, to_id);
-    for (auto& ws : m_workspaces) {
-        if (ws.scene_tree) {
-            if (ws.id >= min_id && ws.id <= max_id) {
-                wlr_scene_node_set_enabled(&ws.scene_tree->node, true);
-            }
+    int32_t min_slot = std::min(from_slot, to_slot);
+    int32_t max_slot = std::max(from_slot, to_slot);
+    for (int32_t i = 0; i < static_cast<int32_t>(m_workspaces.size()); ++i) {
+        auto& ws = m_workspaces[static_cast<size_t>(i)];
+        if (ws.scene_tree && i >= min_slot && i <= max_slot) {
+            wlr_scene_node_set_enabled(&ws.scene_tree->node, true);
         }
         ws.is_active = (ws.id == workspace_id);
     }
 
     m_active_id = workspace_id;
 
-    // Set spring target smoothly without wiping velocity (enables fluid mid-flight redirection)
-    double target_offset = static_cast<double>(workspace_id - 1) * static_cast<double>(m_viewport_width);
+    double target_offset = static_cast<double>(to_slot) * static_cast<double>(m_viewport_width);
     m_slide_spring.target = target_offset;
     m_is_sliding = true;
 
-    // Request immediate frame schedule from compositor
     if (m_frame_scheduler) {
         m_frame_scheduler();
     }
+    notify_state_changed();
 
-    log::info("Switched to Workspace {} (target_offset={})", workspace_id, target_offset);
+    log::info("Switched to Workspace {} (slot={}, target_offset={})", workspace_id, to_slot + 1, target_offset);
     return true;
+}
+
+bool WorkspaceManager::switch_to_slot(uint32_t slot_1based) {
+    if (slot_1based == 0 || slot_1based > m_workspaces.size()) {
+        return false;
+    }
+    return switch_workspace(m_workspaces[slot_1based - 1].id);
+}
+
+uint32_t WorkspaceManager::find_fullscreen_space_for_window(uint64_t window_id) const noexcept {
+    for (const auto& ws : m_workspaces) {
+        if (ws.kind == WorkspaceKind::Fullscreen && ws.owner_window_id == window_id) {
+            return ws.id;
+        }
+    }
+    return 0;
+}
+
+uint32_t WorkspaceManager::promote_to_fullscreen_space(uint64_t window_id,
+                                                       uint32_t from_workspace_id,
+                                                       bool was_maximized,
+                                                       const std::string& label,
+                                                       struct wlr_scene_tree* fs_scene_tree) {
+    uint32_t existing_fs = find_fullscreen_space_for_window(window_id);
+    if (existing_fs != 0) {
+        switch_workspace(existing_fs);
+        return existing_fs;
+    }
+
+    int32_t cur_slot = workspace_slot(m_active_id);
+    int32_t base_slot = workspace_slot(from_workspace_id);
+    if (base_slot < 0) base_slot = (cur_slot >= 0) ? cur_slot : 0;
+
+    // Insert right after base Desktop Space and any earlier consecutive Fullscreen Spaces attached to it
+    size_t insert_idx = static_cast<size_t>(base_slot + 1);
+    while (insert_idx < m_workspaces.size() &&
+           m_workspaces[insert_idx].kind == WorkspaceKind::Fullscreen &&
+           m_workspaces[insert_idx].restore_workspace_id == from_workspace_id) {
+        ++insert_idx;
+    }
+
+    uint32_t new_id = m_next_fullscreen_id++;
+    Workspace fs_ws;
+    fs_ws.id = new_id;
+    fs_ws.name = label.empty() ? "Fullscreen" : label;
+    fs_ws.is_active = false;
+    fs_ws.kind = WorkspaceKind::Fullscreen;
+    fs_ws.owner_window_id = window_id;
+    fs_ws.restore_workspace_id = from_workspace_id;
+    fs_ws.was_maximized = was_maximized;
+    fs_ws.scene_tree = fs_scene_tree;
+
+    m_workspaces.insert(m_workspaces.begin() + static_cast<ptrdiff_t>(insert_idx), std::move(fs_ws));
+
+    // Keep spring offset locked to the previous active slot if insertion shifted it right
+    if (cur_slot >= 0 && insert_idx <= static_cast<size_t>(cur_slot)) {
+        const double vw = static_cast<double>(m_viewport_width);
+        m_slide_spring.value += vw;
+        m_slide_spring.target += vw;
+    }
+
+    add_window_to_workspace(new_id, window_id);
+    reposition_all_workspace_trees();
+
+    if (fs_scene_tree) {
+        wlr_scene_node_set_enabled(&fs_scene_tree->node, true);
+    }
+
+    switch_workspace(new_id);
+    log::info("[Spaces] Promoted window {} to Dedicated Fullscreen Space {} ('{}', restore_ws={}, was_max={})",
+              window_id, new_id, label, from_workspace_id, was_maximized);
+    return new_id;
+}
+
+uint32_t WorkspaceManager::demote_fullscreen_space(uint64_t window_id, bool immediate_remove) {
+    uint32_t fs_id = find_fullscreen_space_for_window(window_id);
+    if (fs_id == 0) {
+        return m_active_id;
+    }
+
+    uint32_t restore_ws_id = 1;
+    for (auto& ws : m_workspaces) {
+        if (ws.id == fs_id) {
+            restore_ws_id = ws.restore_workspace_id;
+            ws.owner_window_id = 0;
+            break;
+        }
+    }
+    if (get_workspace(restore_ws_id) == nullptr) {
+        restore_ws_id = 1;
+    }
+
+    add_window_to_workspace(restore_ws_id, window_id);
+
+    if (immediate_remove || m_active_id != fs_id) {
+        int32_t rm_slot = workspace_slot(fs_id);
+        int32_t cur_slot = workspace_slot(m_active_id);
+        for (auto it = m_workspaces.begin(); it != m_workspaces.end(); ++it) {
+            if (it->id == fs_id) {
+                struct wlr_scene_tree* dead_tree = it->scene_tree;
+                it->scene_tree = nullptr;
+                m_workspaces.erase(it);
+                if (dead_tree && m_tree_destroy_cb) {
+                    m_tree_destroy_cb(dead_tree);
+                }
+                break;
+            }
+        }
+        if (rm_slot >= 0 && cur_slot > rm_slot) {
+            const double vw = static_cast<double>(m_viewport_width);
+            m_slide_spring.value = std::max(0.0, m_slide_spring.value - vw);
+            m_slide_spring.target = std::max(0.0, m_slide_spring.target - vw);
+        }
+        reposition_all_workspace_trees();
+        if (m_active_id == fs_id) {
+            m_active_id = restore_ws_id;
+            for (auto& ws : m_workspaces) {
+                ws.is_active = (ws.id == restore_ws_id);
+                if (ws.scene_tree) {
+                    wlr_scene_node_set_enabled(&ws.scene_tree->node, ws.is_active);
+                }
+            }
+            const int32_t target_slot = std::max(0, workspace_slot(restore_ws_id));
+            m_slide_spring.reset(static_cast<double>(target_slot) * static_cast<double>(m_viewport_width),
+                                 static_cast<double>(target_slot) * static_cast<double>(m_viewport_width));
+            reposition_all_workspace_trees();
+        }
+        notify_state_changed();
+        return restore_ws_id;
+    }
+
+    // Slide smoothly back to restore_ws_id first, then prune fs_id when settled
+    m_pending_destroy_ws_ids.insert(fs_id);
+    switch_workspace(restore_ws_id);
+    log::info("[Spaces] Scheduled demotion of Fullscreen Space {} back to Desktop {}", fs_id, restore_ws_id);
+    return restore_ws_id;
 }
 
 void WorkspaceManager::tick_animation(double dt) noexcept {
@@ -85,22 +326,18 @@ void WorkspaceManager::tick_animation(double dt) noexcept {
     // Critically damped spring step: stiffness=380.0, damping=28.0
     bool settled = m_slide_spring.step(dt, 380.0, 28.0);
 
-    // Update position of all workspace trees
-    for (auto& ws : m_workspaces) {
-        if (!ws.scene_tree) continue;
-        double base_x = static_cast<double>(ws.id - 1) * static_cast<double>(m_viewport_width);
-        int32_t current_x = static_cast<int32_t>(std::round(base_x - m_slide_spring.value));
-        wlr_scene_node_set_position(&ws.scene_tree->node, current_x, 0);
-    }
+    reposition_all_workspace_trees();
 
     if (settled) {
         m_is_sliding = false;
-        // Off-screen workspaces disabled to eliminate redundant damage & cursor checks
+        // Disable off-screen workspaces to eliminate redundant damage & cursor checks
         for (auto& ws : m_workspaces) {
             if (ws.scene_tree && ws.id != m_active_id) {
                 wlr_scene_node_set_enabled(&ws.scene_tree->node, false);
             }
         }
+        prune_pending_fullscreen_spaces();
+        notify_state_changed();
         log::info("Workspace slide settled on Workspace {}", m_active_id);
     }
 }
@@ -111,27 +348,28 @@ void WorkspaceManager::begin_gesture_swipe() noexcept {
     m_in_gesture = true;
     m_is_sliding = false; // Halt any active spring animation
 
-    // Determine base workspace closest to current visual position
     double cur_val = m_slide_spring.value;
     double vw = effective_viewport_width();
-    int nearest_idx = static_cast<int>(std::round(cur_val / vw)) + 1;
-    m_gesture_start_ws = static_cast<uint32_t>(std::clamp<int>(nearest_idx, 1, static_cast<int>(m_workspaces.size())));
+    int max_slot = static_cast<int>(m_workspaces.size()) - 1;
+    int nearest_slot = static_cast<int>(std::round(cur_val / vw));
+    m_gesture_start_slot = static_cast<uint32_t>(std::clamp<int>(nearest_slot, 0, std::max(0, max_slot)));
 
     m_gesture_accum_dx = 0.0;
     m_gesture_last_time = 0;
     m_gesture_velocity = 0.0;
 
-    // Enable adjacent scene trees to ensure seamless rendering during drag
-    uint32_t min_id = (m_gesture_start_ws > 1) ? m_gesture_start_ws - 1 : 1;
-    uint32_t max_id = std::min<uint32_t>(m_gesture_start_ws + 1, static_cast<uint32_t>(m_workspaces.size()));
-    for (auto& ws : m_workspaces) {
-        if (ws.scene_tree && ws.id >= min_id && ws.id <= max_id) {
+    int min_slot = (m_gesture_start_slot > 0) ? static_cast<int>(m_gesture_start_slot) - 1 : 0;
+    int end_slot = std::min<int>(static_cast<int>(m_gesture_start_slot) + 1, max_slot);
+    for (int i = 0; i < static_cast<int>(m_workspaces.size()); ++i) {
+        auto& ws = m_workspaces[static_cast<size_t>(i)];
+        if (ws.scene_tree && i >= min_slot && i <= end_slot) {
             wlr_scene_node_set_enabled(&ws.scene_tree->node, true);
         }
     }
+    notify_state_changed();
 
-    log::info("[Gesture] WorkspaceManager: Swipe begin (start_ws={}, current_offset={:.1f})",
-              m_gesture_start_ws, cur_val);
+    log::info("[Gesture] WorkspaceManager: Swipe begin (start_slot={}, current_offset={:.1f})",
+              m_gesture_start_slot + 1, cur_val);
 }
 
 void WorkspaceManager::update_gesture_swipe(double dx, uint32_t time_msec) noexcept {
@@ -139,48 +377,41 @@ void WorkspaceManager::update_gesture_swipe(double dx, uint32_t time_msec) noexc
 
     double vw = effective_viewport_width();
 
-    // Compute velocity (dt in seconds)
     if (m_gesture_last_time > 0 && time_msec > m_gesture_last_time) {
         double dt = static_cast<double>(time_msec - m_gesture_last_time) / 1000.0;
         if (dt > 0.001) {
-            // Natural 1:1: moving fingers left (dx < 0) moves camera to the right (-dx > 0)
             double instant_v = (-dx) / dt;
-            // Low-pass filter (70% instant, 30% previous)
             m_gesture_velocity = (m_gesture_velocity * 0.3) + (instant_v * 0.7);
         }
     }
     m_gesture_last_time = time_msec;
     m_gesture_accum_dx += dx;
 
-    // Natural 1:1 mapping: fingers moving left (dx < 0) slides to next workspace on right (+delta)
     double delta_offset = -dx;
     double max_offset = static_cast<double>(m_workspaces.size() - 1) * vw;
 
-    // Rubber-banding resistance when overshooting outer bounds
     if ((m_slide_spring.value < 0.0 && delta_offset < 0.0) ||
         (m_slide_spring.value > max_offset && delta_offset > 0.0)) {
-        delta_offset *= 0.35; // 0.35x resistance
+        delta_offset *= 0.35;
     }
 
     m_slide_spring.value += delta_offset;
 
-    // Elastic limit clamp: 25% of viewport width
     double elastic_limit = vw * 0.25;
     m_slide_spring.value = std::clamp(m_slide_spring.value, -elastic_limit, max_offset + elastic_limit);
 
-    // Reposition all workspace scene trees
     double cur_val = m_slide_spring.value;
-    int left_idx = static_cast<int>(std::floor(cur_val / vw)) + 1;
-    int right_idx = left_idx + 1;
+    int left_slot = static_cast<int>(std::floor(cur_val / vw));
+    int right_slot = left_slot + 1;
 
-    for (auto& ws : m_workspaces) {
+    for (int i = 0; i < static_cast<int>(m_workspaces.size()); ++i) {
+        auto& ws = m_workspaces[static_cast<size_t>(i)];
         if (!ws.scene_tree) continue;
 
-        // Dynamically enable trees within visible range
-        bool is_near = (static_cast<int>(ws.id) >= left_idx - 1 && static_cast<int>(ws.id) <= right_idx + 1);
+        bool is_near = (i >= left_slot - 1 && i <= right_slot + 1);
         wlr_scene_node_set_enabled(&ws.scene_tree->node, is_near);
 
-        double base_x = static_cast<double>(ws.id - 1) * vw;
+        double base_x = static_cast<double>(i) * vw;
         int32_t current_x = static_cast<int32_t>(std::round(base_x - cur_val));
         wlr_scene_node_set_position(&ws.scene_tree->node, current_x, 0);
     }
@@ -195,56 +426,56 @@ void WorkspaceManager::end_gesture_swipe(bool cancelled) noexcept {
 
     m_in_gesture = false;
     double vw = effective_viewport_width();
-    uint32_t target_ws = m_gesture_start_ws;
-    double start_offset = static_cast<double>(m_gesture_start_ws - 1) * vw;
-    double total_travel = m_slide_spring.value - start_offset; // positive = towards higher workspace
+    uint32_t target_slot = m_gesture_start_slot;
+    uint32_t max_slot = m_workspaces.empty() ? 0 : static_cast<uint32_t>(m_workspaces.size() - 1);
+    double start_offset = static_cast<double>(m_gesture_start_slot) * vw;
+    double total_travel = m_slide_spring.value - start_offset;
 
     if (!cancelled) {
-        // 1. Flick velocity detection (macOS flick)
-        constexpr double FLICK_VELOCITY_THRESHOLD = 500.0; // px/sec
+        constexpr double FLICK_VELOCITY_THRESHOLD = 500.0;
         if (std::abs(m_gesture_velocity) > FLICK_VELOCITY_THRESHOLD) {
-            if (m_gesture_velocity > FLICK_VELOCITY_THRESHOLD && m_gesture_start_ws < m_workspaces.size()) {
-                target_ws = m_gesture_start_ws + 1;
-            } else if (m_gesture_velocity < -FLICK_VELOCITY_THRESHOLD && m_gesture_start_ws > 1) {
-                target_ws = m_gesture_start_ws - 1;
+            if (m_gesture_velocity > FLICK_VELOCITY_THRESHOLD && m_gesture_start_slot < max_slot) {
+                target_slot = m_gesture_start_slot + 1;
+            } else if (m_gesture_velocity < -FLICK_VELOCITY_THRESHOLD && m_gesture_start_slot > 0) {
+                target_slot = m_gesture_start_slot - 1;
             }
         } else {
-            // 2. Distance travel threshold (25% of viewport width)
             double dist_threshold = vw * 0.25;
-            if (total_travel > dist_threshold && m_gesture_start_ws < m_workspaces.size()) {
-                target_ws = m_gesture_start_ws + 1;
-            } else if (total_travel < -dist_threshold && m_gesture_start_ws > 1) {
-                target_ws = m_gesture_start_ws - 1;
+            if (total_travel > dist_threshold && m_gesture_start_slot < max_slot) {
+                target_slot = m_gesture_start_slot + 1;
+            } else if (total_travel < -dist_threshold && m_gesture_start_slot > 0) {
+                target_slot = m_gesture_start_slot - 1;
             }
         }
     }
 
-    // Hand-off to spring animation with release momentum
+    uint32_t target_ws = m_workspaces[target_slot].id;
     m_active_id = target_ws;
     for (auto& ws : m_workspaces) {
         ws.is_active = (ws.id == target_ws);
     }
 
-    double target_offset = static_cast<double>(target_ws - 1) * vw;
+    double target_offset = static_cast<double>(target_slot) * vw;
     m_slide_spring.target = target_offset;
-    // Clamp inherited release velocity to prevent overshooting wildly
     m_slide_spring.velocity = std::clamp(m_gesture_velocity, -2500.0, 2500.0);
     m_is_sliding = true;
 
     if (m_frame_scheduler) {
         m_frame_scheduler();
     }
+    notify_state_changed();
 
-    log::info("[Gesture] WorkspaceManager: Swipe end (target_ws={}, velocity={:.1f}, travel={:.1f})",
-              target_ws, m_gesture_velocity, total_travel);
+    log::info("[Gesture] WorkspaceManager: Swipe end (target_ws={}, slot={}, velocity={:.1f}, travel={:.1f})",
+              target_ws, target_slot + 1, m_gesture_velocity, total_travel);
 }
 
 void WorkspaceManager::set_workspace_scene_tree(uint32_t workspace_id, struct wlr_scene_tree* tree) noexcept {
-    for (auto& ws : m_workspaces) {
+    for (size_t i = 0; i < m_workspaces.size(); ++i) {
+        auto& ws = m_workspaces[i];
         if (ws.id == workspace_id) {
             ws.scene_tree = tree;
             if (tree && m_viewport_width > 0) {
-                int32_t initial_x = static_cast<int32_t>(ws.id - 1) * static_cast<int32_t>(m_viewport_width);
+                int32_t initial_x = static_cast<int32_t>(i) * static_cast<int32_t>(m_viewport_width);
                 wlr_scene_node_set_position(&tree->node, initial_x, 0);
             }
             return;
@@ -277,14 +508,10 @@ void WorkspaceManager::set_viewport_width(uint32_t width) noexcept {
     m_viewport_width = width;
 
     if (!m_is_sliding) {
-        m_slide_spring.reset(static_cast<double>(m_active_id - 1) * static_cast<double>(m_viewport_width),
-                             static_cast<double>(m_active_id - 1) * static_cast<double>(m_viewport_width));
-        for (auto& ws : m_workspaces) {
-            if (!ws.scene_tree) continue;
-            double base_x = static_cast<double>(ws.id - 1) * static_cast<double>(m_viewport_width);
-            int32_t cur_x = static_cast<int32_t>(std::round(base_x - m_slide_spring.value));
-            wlr_scene_node_set_position(&ws.scene_tree->node, cur_x, 0);
-        }
+        int32_t active_slot = std::max(0, workspace_slot(m_active_id));
+        m_slide_spring.reset(static_cast<double>(active_slot) * static_cast<double>(m_viewport_width),
+                             static_cast<double>(active_slot) * static_cast<double>(m_viewport_width));
+        reposition_all_workspace_trees();
     }
 }
 

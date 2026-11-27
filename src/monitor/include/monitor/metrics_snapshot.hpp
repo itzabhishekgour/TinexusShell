@@ -59,7 +59,10 @@ struct ProcessInfo {
     int32_t pid{0};
     int32_t ppid{0};
     uint32_t uid{0};
+    uint32_t threads{1};
     std::string name;
+    std::string cmdline;
+    std::string icon_name;
     std::string user;
     uint64_t rss_bytes{0};
     float cpu_percent{0.0f};
@@ -81,7 +84,7 @@ struct SystemSnapshot {
     PowerMetrics power;
     GpuMetrics gpu;
     std::vector<ProcessInfo> processes;
-    float cpu_temperature_c{45.0f};
+    float cpu_temperature_c{-1.0f}; // -1.0f if unavailable from sysfs
     std::chrono::system_clock::time_point timestamp{std::chrono::system_clock::now()};
 };
 

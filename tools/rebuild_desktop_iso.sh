@@ -480,7 +480,7 @@ BUILD_START_MON=$(date +%s)
 chroot /mnt/rootfs "$MOC_BIN" $QT6_INC $COMMON_INC -I/workspace/src/monitor /workspace/src/monitor/MonitorBridge.hpp -o /tmp/build_apps/moc_MonitorBridge.cpp
 MON_SRC="/workspace/src/monitor"
 chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
-  $QT6_INC $COMMON_INC -I/workspace/src/monitor -I/workspace/src/monitor/include \
+  $QT6_INC $COMMON_INC -I/workspace/build/protocols -I/workspace/src/monitor -I/workspace/src/monitor/include \
   $MON_SRC/main.cpp \
   $MON_SRC/MonitorBridge.cpp \
   $MON_SRC/metrics_snapshot.cpp \
@@ -493,8 +493,9 @@ chroot /mnt/rootfs /usr/bin/g++ -std=c++20 -O2 \
   $MON_SRC/process_tree.cpp \
   $MON_SRC/process_controller.cpp \
   $MON_SRC/resource_monitor.cpp \
+  /tmp/build_apps/org-kde-kwin-blur-protocol.o \
   /tmp/build_apps/moc_MonitorBridge.cpp \
-  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network \
+  -L/workspace/build/lib -L/usr/lib/x86_64-linux-gnu -ltinexus_common -lQt6Core -lQt6Gui -lQt6Quick -lQt6Qml -lQt6Svg -lQt6Network -lQt6WaylandClient -lwayland-client \
   -o /workspace/build/bin/tinexus-monitor
 [ -f /workspace/build/bin/tinexus-monitor ] || fatal "tinexus-monitor compilation FAILED!"
 [ "$(stat -c %Y /workspace/build/bin/tinexus-monitor)" -ge "$BUILD_START_MON" ] || fatal "tinexus-monitor mtime is older than build start! Stale binary."

@@ -86,7 +86,8 @@ void dispatch_message(int sender_fd,
     using DSM = protocol::DisplayMessageType;
     if ((hdr.msg_type >= static_cast<uint16_t>(DM::DOCK_QUERY_ICON_POSITION) &&
          hdr.msg_type <= static_cast<uint16_t>(DM::DOCK_BLUR_REGION)) ||
-        hdr.msg_type == static_cast<uint16_t>(DSM::DISPLAY_SET_CONFIG)) {
+        (hdr.msg_type >= static_cast<uint16_t>(DSM::DISPLAY_SET_CONFIG) &&
+         hdr.msg_type <= static_cast<uint16_t>(DSM::WORKSPACE_SWITCH_REQUEST))) {
         auto subscribers = broker::PubSubBroker::instance().get_subscribers(hdr.msg_type);
         for (int sub_fd : subscribers) {
             if (sub_fd == sender_fd) continue;
@@ -252,7 +253,7 @@ void dispatch_message(int sender_fd,
     }
 
     // -----------------------------------------------------------------------
-    // CONFIG_CHANGED / THEME_CHANGED — broadcast to all topic subscribers
+    // CONFIG_CHANGED / THEME_CHANGED / DISPLAY_SET_CONFIG / WORKSPACE_*
     // -----------------------------------------------------------------------
     case MT::CONFIG_CHANGED:
     case MT::THEME_CHANGED: {
