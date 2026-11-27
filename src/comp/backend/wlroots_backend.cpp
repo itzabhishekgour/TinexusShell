@@ -3643,7 +3643,7 @@ private:
         wrapper->foreign_handle = nullptr;
     }
 
-    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize) {
+    void toplevel_set_maximized(ToplevelWrapper* wrapper, bool maximize, bool animate = true) {
         if (!wrapper || !wrapper->toplevel || !wrapper->toplevel->base || !wrapper->toplevel->base->initialized || !wrapper->scene_tree) return;
 
         if (maximize) {
@@ -3712,32 +3712,37 @@ private:
 
             WindowBox target_box{work_area.x, work_area.y, work_area.width, work_area.height};
             uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
-            AnimationManager::instance().start_animation({
-                .window_id = anim_id,
-                .target_handle = wrapper,
-                .type = WindowAnimationType::Maximize,
-                .curve = AnimationCurve::EaseDecelerate,
-                .duration_sec = 0.240,
-                .start_geom = start_box,
-                .target_geom = target_box,
-                .start_opacity = 1.0,
-                .target_opacity = 1.0,
-                .start_scale = 1.0,
-                .target_scale = 1.0,
-                .use_spring = true,
-                .spring_stiffness = 440.0,
-                .spring_damping = 36.0,
-                .on_step = [wrapper](const WindowAnimation& a) {
-                    if (wrapper && wrapper->scene_tree) {
-                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+            if (animate) {
+                AnimationManager::instance().start_animation({
+                    .window_id = anim_id,
+                    .target_handle = wrapper,
+                    .type = WindowAnimationType::Maximize,
+                    .curve = AnimationCurve::EaseDecelerate,
+                    .duration_sec = 0.240,
+                    .start_geom = start_box,
+                    .target_geom = target_box,
+                    .start_opacity = 1.0,
+                    .target_opacity = 1.0,
+                    .start_scale = 1.0,
+                    .target_scale = 1.0,
+                    .use_spring = true,
+                    .spring_stiffness = 440.0,
+                    .spring_damping = 36.0,
+                    .on_step = [wrapper](const WindowAnimation& a) {
+                        if (wrapper && wrapper->scene_tree) {
+                            wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                        }
+                    },
+                    .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                        if (wrapper && wrapper->scene_tree) {
+                            wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                        }
                     }
-                },
-                .on_complete = [wrapper, target_box](const WindowAnimation&) {
-                    if (wrapper && wrapper->scene_tree) {
-                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
-                    }
-                }
-            });
+                });
+            } else {
+                AnimationManager::instance().cancel_animation(anim_id);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+            }
         } else {
             if (wrapper->state_machine.state() != WindowState::Maximized) {
                 wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
@@ -3777,37 +3782,42 @@ private:
 
             WindowBox target_box = norm;
             uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
-            AnimationManager::instance().start_animation({
-                .window_id = anim_id,
-                .target_handle = wrapper,
-                .type = WindowAnimationType::Unmaximize,
-                .curve = AnimationCurve::EaseDecelerate,
-                .duration_sec = 0.240,
-                .start_geom = start_box,
-                .target_geom = target_box,
-                .start_opacity = 1.0,
-                .target_opacity = 1.0,
-                .start_scale = 1.0,
-                .target_scale = 1.0,
-                .use_spring = true,
-                .spring_stiffness = 440.0,
-                .spring_damping = 36.0,
-                .on_step = [wrapper](const WindowAnimation& a) {
-                    if (wrapper && wrapper->scene_tree) {
-                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+            if (animate) {
+                AnimationManager::instance().start_animation({
+                    .window_id = anim_id,
+                    .target_handle = wrapper,
+                    .type = WindowAnimationType::Unmaximize,
+                    .curve = AnimationCurve::EaseDecelerate,
+                    .duration_sec = 0.240,
+                    .start_geom = start_box,
+                    .target_geom = target_box,
+                    .start_opacity = 1.0,
+                    .target_opacity = 1.0,
+                    .start_scale = 1.0,
+                    .target_scale = 1.0,
+                    .use_spring = true,
+                    .spring_stiffness = 440.0,
+                    .spring_damping = 36.0,
+                    .on_step = [wrapper](const WindowAnimation& a) {
+                        if (wrapper && wrapper->scene_tree) {
+                            wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                        }
+                    },
+                    .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                        if (wrapper && wrapper->scene_tree) {
+                            wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                        }
                     }
-                },
-                .on_complete = [wrapper, target_box](const WindowAnimation&) {
-                    if (wrapper && wrapper->scene_tree) {
-                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
-                    }
-                }
-            });
+                });
+            } else {
+                AnimationManager::instance().cancel_animation(anim_id);
+                wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+            }
         }
         wlr_xdg_surface_schedule_configure(wrapper->toplevel->base);
     }
 
-    void xwayland_set_maximized(XwaylandWrapper* wrapper, bool maximize) {
+    void xwayland_set_maximized(XwaylandWrapper* wrapper, bool maximize, bool animate = true) {
         if (!wrapper || !wrapper->xsurface) return;
         if (maximize) {
             if (wrapper->is_maximized) return;
@@ -3838,26 +3848,32 @@ private:
                     if (wrapper->scene_tree) {
                         WindowBox start_box{wrapper->saved_x, wrapper->saved_y, wrapper->saved_width, wrapper->saved_height};
                         WindowBox target_box{wa.x, wa.y, wa.width, wa.height};
-                        AnimationManager::instance().start_animation({
-                            .window_id = reinterpret_cast<uint64_t>(wrapper),
-                            .target_handle = wrapper,
-                            .type = WindowAnimationType::Maximize,
-                            .start_geom = start_box,
-                            .target_geom = target_box,
-                            .use_spring = true,
-                            .spring_stiffness = 440.0,
-                            .spring_damping = 36.0,
-                            .on_step = [wrapper](const WindowAnimation& a) {
-                                if (wrapper && wrapper->scene_tree) {
-                                    wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                        uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+                        if (animate) {
+                            AnimationManager::instance().start_animation({
+                                .window_id = anim_id,
+                                .target_handle = wrapper,
+                                .type = WindowAnimationType::Maximize,
+                                .start_geom = start_box,
+                                .target_geom = target_box,
+                                .use_spring = true,
+                                .spring_stiffness = 440.0,
+                                .spring_damping = 36.0,
+                                .on_step = [wrapper](const WindowAnimation& a) {
+                                    if (wrapper && wrapper->scene_tree) {
+                                        wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                                    }
+                                },
+                                .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                                    if (wrapper && wrapper->scene_tree) {
+                                        wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                                    }
                                 }
-                            },
-                            .on_complete = [wrapper, target_box](const WindowAnimation&) {
-                                if (wrapper && wrapper->scene_tree) {
-                                    wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
-                                }
-                            }
-                        });
+                            });
+                        } else {
+                            AnimationManager::instance().cancel_animation(anim_id);
+                            wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                        }
                     }
                     log::info("[XWayland] Maximized window to {}x{} at ({}, {})", wa.width, wa.height, wa.x, wa.y);
                 }
@@ -3883,26 +3899,32 @@ private:
                                     wrapper->xsurface->width > 0 ? wrapper->xsurface->width : 800,
                                     wrapper->xsurface->height > 0 ? wrapper->xsurface->height : 600};
                 WindowBox target_box{rx, ry, rw, rh};
-                AnimationManager::instance().start_animation({
-                    .window_id = reinterpret_cast<uint64_t>(wrapper),
-                    .target_handle = wrapper,
-                    .type = WindowAnimationType::Unmaximize,
-                    .start_geom = start_box,
-                    .target_geom = target_box,
-                    .use_spring = true,
-                    .spring_stiffness = 440.0,
-                    .spring_damping = 36.0,
-                    .on_step = [wrapper](const WindowAnimation& a) {
-                        if (wrapper && wrapper->scene_tree) {
-                            wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                uint64_t anim_id = reinterpret_cast<uint64_t>(wrapper);
+                if (animate) {
+                    AnimationManager::instance().start_animation({
+                        .window_id = anim_id,
+                        .target_handle = wrapper,
+                        .type = WindowAnimationType::Unmaximize,
+                        .start_geom = start_box,
+                        .target_geom = target_box,
+                        .use_spring = true,
+                        .spring_stiffness = 440.0,
+                        .spring_damping = 36.0,
+                        .on_step = [wrapper](const WindowAnimation& a) {
+                            if (wrapper && wrapper->scene_tree) {
+                                wlr_scene_node_set_position(&wrapper->scene_tree->node, a.current_geom.x, a.current_geom.y);
+                            }
+                        },
+                        .on_complete = [wrapper, target_box](const WindowAnimation&) {
+                            if (wrapper && wrapper->scene_tree) {
+                                wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                            }
                         }
-                    },
-                    .on_complete = [wrapper, target_box](const WindowAnimation&) {
-                        if (wrapper && wrapper->scene_tree) {
-                            wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
-                        }
-                    }
-                });
+                    });
+                } else {
+                    AnimationManager::instance().cancel_animation(anim_id);
+                    wlr_scene_node_set_position(&wrapper->scene_tree->node, target_box.x, target_box.y);
+                }
             }
             log::info("[XWayland] Restored window to {}x{} at ({}, {})", rw, rh, rx, ry);
         }
@@ -3995,7 +4017,7 @@ private:
             wrapper->was_maximized_before_fullscreen = false;
             if (restore_max) {
                 wrapper->is_maximized = false;
-                xwayland_set_maximized(wrapper, true);
+                xwayland_set_maximized(wrapper, true, false);
             } else {
                 wrapper->state_machine.request_restore();
                 int32_t rx = wrapper->saved_x;
@@ -4630,7 +4652,7 @@ private:
             wrapper->was_maximized_before_fullscreen = false;
             if (restore_max) {
                 wrapper->is_maximized = false;
-                toplevel_set_maximized(wrapper, true);
+                toplevel_set_maximized(wrapper, true, false);
             } else {
                 wrapper->state_machine.request_restore();
                 auto norm = wrapper->state_machine.geometry().normal_geom;

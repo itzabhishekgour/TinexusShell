@@ -171,6 +171,9 @@ bool WorkspaceManager::switch_workspace(uint32_t workspace_id) {
 
     m_active_id = workspace_id;
 
+    if (!m_is_sliding) {
+        m_slide_spring.velocity = 0.0;
+    }
     double target_offset = static_cast<double>(to_slot) * static_cast<double>(m_viewport_width);
     m_slide_spring.target = target_offset;
     m_is_sliding = true;
@@ -323,8 +326,9 @@ uint32_t WorkspaceManager::demote_fullscreen_space(uint64_t window_id, bool imme
 void WorkspaceManager::tick_animation(double dt) noexcept {
     if (!m_is_sliding) return;
 
-    // Critically damped spring step: stiffness=380.0, damping=28.0
-    bool settled = m_slide_spring.step(dt, 380.0, 28.0);
+    // Critically damped zero-overshoot glide: stiffness=280.0, damping=34.2 (zeta ~ 1.022)
+    // with pixel-appropriate settle thresholds (0.25 px, 2.5 px/s) for clean handoff.
+    bool settled = m_slide_spring.step(dt, 280.0, 34.2, 0.25, 2.5);
 
     reposition_all_workspace_trees();
 
@@ -457,7 +461,7 @@ void WorkspaceManager::end_gesture_swipe(bool cancelled) noexcept {
 
     double target_offset = static_cast<double>(target_slot) * vw;
     m_slide_spring.target = target_offset;
-    m_slide_spring.velocity = std::clamp(m_gesture_velocity, -2500.0, 2500.0);
+    m_slide_spring.velocity = std::clamp(m_gesture_velocity, -1600.0, 1600.0);
     m_is_sliding = true;
 
     if (m_frame_scheduler) {
